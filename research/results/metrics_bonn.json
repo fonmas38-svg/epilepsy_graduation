@@ -1,0 +1,39 @@
+{
+  "dataset_tag": "bonn",
+  "loss": "focal",
+  "epochs": 10,
+  "fs": 256,
+  "window_sec": 1.0234375,
+  "val_tuned_threshold": {
+    "threshold": 0.9,
+    "sensitivity": 0.8299,
+    "specificity": 0.9915,
+    "fpr_per_hour": 29.793,
+    "tp": 439,
+    "fn": 90,
+    "fp": 15,
+    "tn": 1756
+  },
+  "test_at_0.5": {
+    "threshold": 0.5,
+    "sensitivity": 0.9515,
+    "specificity": 0.9266,
+    "fpr_per_hour": 258.34,
+    "tp": 569,
+    "fn": 29,
+    "fp": 125,
+    "tn": 1577
+  },
+  "test_at_tuned_threshold": {
+    "threshold": 0.9,
+    "sensitivity": 0.7977,
+    "specificity": 0.9906,
+    "fpr_per_hour": 33.0675,
+    "tp": 477,
+    "fn": 121,
+    "fp": 16,
+    "tn": 1686
+  },
+  "note": "Sensitivity + FPR/h are the reported metrics; accuracy omitted by design.",
+  "caveat": "FPR/hour is only physically meaningful on CONTINUOUS recordings (CHB-MIT/Siena). Bonn windows are isolated ~1s segments, so its FPR/h is not a real alarm rate -- use specificity for Bonn instead."
+}

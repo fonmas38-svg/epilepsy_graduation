@@ -1,0 +1,15 @@
+للفريق - كيف تستخدمون هذا المجلد
+================================
+
+1) فك الضغط (إن وصلكم ZIP) وضعوا المجلد على جهازكم.
+2) اقرأوا README.md أولا.
+3) كل واحد يشتغل على جزئيته بدون تشتيت الملفات خارج هذا المجلد.
+4) قبل الدمج: اختبروا backend ثم mobile.
+
+تشغيل سريع:
+- backend:  uvicorn app.main:app --port 8000
+- mobile:   flutter run
+- محاكي جهاز الرأس: python device_gateway_sim.py --patient-id patient-demo
+
+معرّف المريض التجريبي في التطبيق: patient-demo
+رمز الجهاز: headband-demo-token

@@ -1,0 +1,19 @@
+# Research pipeline dependencies (separate from backend/requirements.txt).
+# Install into a dedicated venv:  python -m venv .venv-research && pip install -r requirements-research.txt
+
+numpy>=2.0.0
+scipy>=1.13.0
+pandas>=2.2.0
+scikit-learn>=1.5.0
+h5py>=3.11.0
+mne>=1.7.0            # EDF reading + filtering for CHB-MIT / Siena
+wfdb>=4.1.2          # PhysioNet record/annotation access
+tqdm>=4.66.0
+
+# Model. CPU wheels are fine for a graduation MVP.
+# Torch is intentionally NOT pinned to a CUDA build; install the CPU wheel:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2.0
+
+# Optional (nicer plots for the report)
+matplotlib>=3.8.0

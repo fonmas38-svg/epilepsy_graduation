@@ -1,0 +1,44 @@
+name: epilepsy_monitor
+description: Smart epileptic patient monitoring and early seizure prediction
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.2.2
+  sqflite: ^2.4.1
+  sqflite_sqlcipher: ^3.1.0+1
+  sqflite_common_ffi: ^2.3.3
+  flutter_secure_storage: ^9.2.2
+  path: ^1.9.0
+  path_provider: ^2.1.5
+  shared_preferences: ^2.3.3
+  fl_chart: ^0.69.2
+  intl: ^0.19.0
+  uuid: ^4.5.1
+  provider: ^6.1.2
+  connectivity_plus: ^6.1.0
+  # Best-effort GPS for the SOS feature. Isolated behind LocationService and
+  # fully optional-by-behavior: if the plugin/permission is unavailable the SOS
+  # alert still fires without coordinates, so no core path depends on it.
+  geolocator: ^13.0.1
+  csv: ^6.0.0
+  pdf: ^3.11.1
+  printing: ^5.13.4
+  firebase_core: ^3.8.1
+  firebase_auth: ^5.3.4
+  cloud_firestore: ^5.5.1
+  firebase_messaging: ^15.1.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

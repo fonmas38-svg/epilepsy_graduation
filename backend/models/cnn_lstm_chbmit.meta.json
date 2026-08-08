@@ -1,0 +1,18 @@
+{
+  "arch": "CNN1D_LSTM",
+  "in_ch": 16,
+  "n_classes": 2,
+  "hidden": 64,
+  "input_len": 1280,
+  "fs": 256,
+  "window_sec": 5.0,
+  "channels": ["FP1", "FP2", "F3", "F4", "C3", "C4", "P3", "P4", "F7", "F8", "T7", "T8", "P7", "P8", "FZ", "CZ"],
+  "task": "prediction(preictal_vs_interictal)",
+  "dataset": "chbmit",
+  "subject": "chb01",
+  "decision_threshold": 0.5,
+  "preictal_min": 30,
+  "safety_gap_min": 5,
+  "interictal_guard_h": 4,
+  "notes": "Multichannel CHB-MIT preictal-vs-interictal PREDICTION model (offline thesis artifact + optional backend engine). Expects an in_ch-channel montage window, per-channel z-scored and resampled to input_len at fs Hz; P(class 1)=P(preictal). safety_gap_min is the SPH (seizure prediction horizon); preictal_min is the labeling window before onset. IMPORTANT: in_ch/channels/input_len here MUST match the trained cnn_lstm_chbmit.pt -- reconcile them with train.py's printed 'in_ch=' and window_sec*fs before dropping the weights into backend/models/. Set decision_threshold from metrics_chbmit.json val_tuned_threshold (min_sens>=0.8). The live single-channel VitalWindow does NOT match in_ch, so predict_proba returns None on it and the transparent heuristic drives the live demo; this model is exercised on genuine multichannel windows offline."
+}

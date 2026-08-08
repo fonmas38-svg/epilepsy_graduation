@@ -1,0 +1,39 @@
+{
+  "users": {
+    "uid": "string",
+    "name": "string",
+    "role": "patient|caregiver|doctor",
+    "phone": "string?",
+    "linkedPatientIds": ["string"],
+    "fcmToken": "string?"
+  },
+  "patients": {
+    "patientId": "string",
+    "diagnosis": "string",
+    "medications": ["string"],
+    "caregivers": ["string"],
+    "doctors": ["string"],
+    "currentStatus": "stable|watch|high_risk",
+    "lastUpdated": "ISO-8601"
+  },
+  "vitalReading": {
+    "timestamp": "ISO-8601",
+    "eeg": ["number"],
+    "ecg": ["number"],
+    "motion": ["number"],
+    "hr": "number"
+  },
+  "riskAssessment": {
+    "timestamp": "ISO-8601",
+    "label": "stable|watch|high_risk",
+    "confidence": "number",
+    "features": "object"
+  },
+  "alert": {
+    "timestamp": "ISO-8601",
+    "severity": "info|warning|critical",
+    "message": "string",
+    "recipients": ["string"],
+    "acknowledged": "boolean"
+  }
+}

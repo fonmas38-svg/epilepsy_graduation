@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+*.joblib
+!backend/models/.gitkeep
+
+# Runtime data stores — NEVER commit. These are generated at runtime and hold
+# sensitive data: users_store.json contains hashed account passwords, and
+# cloud_store.json contains patient monitoring data. They are recreated on first
+# run (an admin is auto-seeded), so excluding them is safe.
+backend/data/cloud_store.json
+backend/data/users_store.json
+backend/data/*_store.json
+
+# Large / regenerable dataset binaries (rebuild via research edf_prep / build_dataset)
+*.h5
+
+# Node (admin-dashboard) — also covered by admin-dashboard/.gitignore
+node_modules/
+dist/
+.vite/
+
+# Flutter
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/.packages
+mobile/build/
+mobile/.pub-cache/
+mobile/.pub-preload-cache/
+mobile/.idea/
+mobile/*.iml
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/ios/Pods/
+mobile/ios/.symlinks/
+mobile/.firebase/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Secrets
+**/google-services.json
+**/GoogleService-Info.plist
+**/serviceAccountKey.json
+firebase_options.dart
+!mobile/lib/firebase_options.dart.example
+
+# Misc
+*.log
+.coverage
+htmlcov/
+.pytest_cache/
+**/__pycache__/
+

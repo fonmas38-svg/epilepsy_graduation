@@ -1,0 +1,6 @@
+// EXAMPLE ONLY — replace with `flutterfire configure` output.
+// Copy to lib/firebase_options.dart when connecting a real Firebase project.
+
+class DefaultFirebaseOptions {
+  // static FirebaseOptions get currentPlatform { ... }
+}

@@ -1,0 +1,14 @@
+{
+  "arch": "CNN1D_LSTM",
+  "in_ch": 1,
+  "n_classes": 2,
+  "hidden": 64,
+  "input_len": 262,
+  "fs": 256,
+  "channel": "eeg",
+  "task": "detection(ictal_vs_nonictal)",
+  "dataset": "bonn",
+  "decision_threshold": 0.5,
+  "watch_threshold": 0.35,
+  "notes": "Trained on Bonn single-channel EEG. Expects a z-scored EEG window resampled to input_len at fs Hz. Bridge maps P(ictal) to stable/watch/high_risk."
+}

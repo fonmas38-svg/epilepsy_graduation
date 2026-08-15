@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.device_hub import DeviceHub
+from app.settings import settings, validate_production_settings
+from app.middleware import RequestGuardMiddleware
 from app.ml.classifier import RiskClassifier
 from app.routers import (
     accounts,
@@ -27,6 +29,7 @@ async def lifespan(app: FastAPI):
         level=os.getenv("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    validate_production_settings()
     app.state.classifier = RiskClassifier.load()
     app.state.device_hub = DeviceHub(window_size=128)
     logging.getLogger("epilepsy").info(
@@ -63,11 +66,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=list(settings.cors_origins),
+    allow_credentials=("*" not in settings.cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestGuardMiddleware)
 
 app.include_router(health.router)
 app.include_router(auth.router)

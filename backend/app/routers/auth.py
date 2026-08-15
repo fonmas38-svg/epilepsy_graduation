@@ -12,6 +12,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.auth import Role, create_token
+from app import users_store
+from app.settings import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -28,6 +30,7 @@ class TokenRequest(BaseModel):
     subject: str = Field(..., min_length=1, description="device_id or user_id")
     role: Role = "device"
     enrollment_secret: str = Field(..., min_length=1)
+    patient_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -44,7 +47,19 @@ def _verify_credentials(role: str, secret: str) -> bool:
 @router.post("/token", response_model=TokenResponse)
 def issue_token(body: TokenRequest):
     """Exchange an enrollment secret for a signed, expiring JWT."""
+    if body.role != "device" and settings.is_production:
+        raise HTTPException(
+            status_code=400,
+            detail="Human accounts must authenticate with /auth/login",
+        )
+    if body.role != "device" and settings.require_patient_auth:
+        user = users_store.get_user(body.subject)
+        if not user or user.get("role") != body.role or user.get("disabled"):
+            raise HTTPException(status_code=401, detail="active account not found")
+    if body.role == "device" and settings.is_production and not body.patient_id:
+        raise HTTPException(status_code=400, detail="patient_id is required for device enrollment")
     if not _verify_credentials(body.role, body.enrollment_secret):
         raise HTTPException(status_code=401, detail="Invalid enrollment secret")
-    token = create_token(body.subject, body.role)
+    extra = {"patient_id": body.patient_id} if body.role == "device" and body.patient_id else None
+    token = create_token(body.subject, body.role, extra=extra)
     return TokenResponse(access_token=token, role=body.role)

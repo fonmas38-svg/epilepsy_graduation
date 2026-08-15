@@ -1,13 +1,19 @@
 """Head-worn device ingestion API (EEG/ECG/Motion gateway)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Header, HTTPException, Request, Depends
+from pydantic import BaseModel, Field, model_validator
 
 from app.device_hub import DeviceHub, DeviceSample
 from app.preprocessing import extract_features
-from app.schemas import VitalWindow
-from app.auth import get_current_principal, AuthError
+from app.schemas import VitalWindow, validate_utc_timestamp
+from app.auth import (
+    get_current_principal,
+    get_optional_principal,
+    AuthError,
+    authorize_patient_access,
+)
+from app.settings import settings
 
 router = APIRouter(prefix="/device", tags=["device"])
 
@@ -23,23 +29,53 @@ class SampleIn(BaseModel):
     hr: float | None = None
     ts: str | None = None
 
+    @model_validator(mode="after")
+    def validate_values(self):
+        import math
+        values = (self.eeg, self.ecg, self.motion)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("sample values must be finite")
+        if self.hr is not None and (not math.isfinite(self.hr) or not 20 <= self.hr <= 240):
+            raise ValueError("hr must be finite and between 20 and 240 bpm")
+        validate_utc_timestamp(self.ts, "ts", enforce_max_age=True)
+        return self
+
 
 class IngestRequest(BaseModel):
     patient_id: str = Field(..., min_length=1)
     device_id: str = Field(default="headband-01")
     samples: list[SampleIn] = Field(..., min_length=1, max_length=512)
+    batch_id: str | None = Field(default=None, min_length=1, max_length=128)
+    sequence_number: int | None = Field(default=None, ge=0)
 
 
 class BatchWindowRequest(BaseModel):
     patient_id: str
     device_id: str = "headband-01"
-    eeg: list[float] = Field(..., min_length=8)
-    ecg: list[float] = Field(..., min_length=8)
-    motion: list[float] = Field(..., min_length=8)
+    eeg: list[float] = Field(..., min_length=8, max_length=4096)
+    ecg: list[float] = Field(..., min_length=8, max_length=4096)
+    motion: list[float] = Field(..., min_length=8, max_length=4096)
     hr: float | None = None
+    timestamp: str | None = None
+    batch_id: str | None = Field(default=None, min_length=1, max_length=128)
+    sequence_number: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_window(self):
+        VitalWindow(
+            timestamp=self.timestamp,
+            eeg=self.eeg,
+            ecg=self.ecg,
+            motion=self.motion,
+            hr=self.hr,
+        )
+        validate_utc_timestamp(
+            self.timestamp, "timestamp", enforce_max_age=True
+        )
+        return self
 
 
-def _check_token(authorization: str | None) -> dict:
+def _check_token(authorization: str | None, patient_id: str, device_id: str) -> dict:
     """Authenticate an ingest call. Prefers JWT; falls back to the legacy static
     token only while AUTH_ALLOW_LEGACY_TOKEN is enabled (default on for the demo).
     Returns the decoded principal so callers can log who ingested."""
@@ -50,6 +86,17 @@ def _check_token(authorization: str | None) -> dict:
         raise HTTPException(status_code=403, detail=e.detail)
     if principal.get("role") not in ("device", "admin"):
         raise HTTPException(status_code=403, detail="Role not permitted to ingest")
+    if principal.get("legacy") and settings.require_patient_auth:
+        raise HTTPException(
+            status_code=403,
+            detail="Legacy device token is disabled when patient authorization is required",
+        )
+    if principal.get("role") == "device" and not principal.get("legacy"):
+        if principal.get("sub") != device_id:
+            raise HTTPException(status_code=403, detail="device_id does not match token")
+        authorize_patient_access(patient_id, principal)
+    elif principal.get("role") == "admin":
+        authorize_patient_access(patient_id, principal)
     return principal
 
 
@@ -64,7 +111,7 @@ def ingest_samples(
     authorization: str | None = Header(default=None),
 ):
     """Receive streaming samples from the head device over WiFi/HTTP."""
-    _check_token(authorization)
+    principal = _check_token(authorization, body.patient_id, body.device_id)
     hub = get_hub(request)
     samples = []
     for s in body.samples:
@@ -78,6 +125,8 @@ def ingest_samples(
         device_id=body.device_id,
         samples=samples,
         classifier=request.app.state.classifier,
+        batch_id=body.batch_id,
+        sequence_number=body.sequence_number,
     )
     return {"ok": True, **result}
 
@@ -89,12 +138,13 @@ def ingest_window(
     authorization: str | None = Header(default=None),
 ):
     """Accept a full analysis window from the device firmware or PC gateway."""
-    _check_token(authorization)
+    _check_token(authorization, body.patient_id, body.device_id)
     window = VitalWindow(
         eeg=body.eeg,
         ecg=body.ecg,
         motion=body.motion,
         hr=body.hr,
+        timestamp=body.timestamp,
         patient_id=body.patient_id,
     )
     features = extract_features(window)
@@ -105,7 +155,11 @@ def ingest_window(
         DeviceSample(eeg=body.eeg[i], ecg=body.ecg[i], motion=body.motion[i], hr=body.hr)
         for i in range(len(body.eeg))
     ]
-    hub.ingest(body.patient_id, body.device_id, samples, request.app.state.classifier)
+    hub.ingest(
+        body.patient_id, body.device_id, samples, request.app.state.classifier,
+        batch_id=body.batch_id,
+        sequence_number=body.sequence_number,
+    )
 
     return {
         "ok": True,
@@ -118,7 +172,12 @@ def ingest_window(
 
 
 @router.get("/status/{patient_id}")
-def device_status(patient_id: str, request: Request):
+def device_status(
+    patient_id: str,
+    request: Request,
+    principal: dict = Depends(get_optional_principal),
+):
+    authorize_patient_access(patient_id, principal)
     hub = get_hub(request)
     status = hub.status(patient_id)
     if status is None:
@@ -161,12 +220,14 @@ def device_status(patient_id: str, request: Request):
 
 @router.get("/token-info")
 def token_info():
-    return {
+    info = {
         "header": "Authorization: Bearer <token>",
-        "demo_token": DEVICE_TOKEN,
         "endpoints": [
             "/device/ingest",
             "/device/ingest-window",
             "/device/status/{patient_id}",
         ],
     }
+    if not settings.is_production and settings.allow_legacy_token:
+        info["demo_token"] = DEVICE_TOKEN
+    return info

@@ -56,6 +56,8 @@ class DeviceHub:
         self._trajectories: dict[str, Deque[float]] = defaultdict(
             lambda: deque(maxlen=60)
         )
+        self._seen_batches: dict[str, Deque[str]] = defaultdict(lambda: deque(maxlen=256))
+        self._last_sequences: dict[str, dict[str, int]] = defaultdict(dict)
         self._lock = Lock()
 
     def ingest(
@@ -64,9 +66,35 @@ class DeviceHub:
         device_id: str,
         samples: list[DeviceSample],
         classifier,
+        batch_id: str | None = None,
+        sequence_number: int | None = None,
     ) -> dict:
         with self._lock:
             key = patient_id
+            batch_key = f"{device_id}:{batch_id}" if batch_id else None
+            last_sequence = self._last_sequences[key].get(device_id)
+            if sequence_number is not None and last_sequence is not None and sequence_number <= last_sequence:
+                return {
+                    "accepted": 0,
+                    "buffered": len(self._buffers[key]),
+                    "window_ready": len(self._buffers[key]) >= self.window_size,
+                    "assessment": None,
+                    "duplicate": sequence_number == last_sequence,
+                    "out_of_order": sequence_number < last_sequence,
+                }
+            if batch_key and batch_key in self._seen_batches[key]:
+                return {
+                    "accepted": 0,
+                    "buffered": len(self._buffers[key]),
+                    "window_ready": len(self._buffers[key]) >= self.window_size,
+                    "assessment": None,
+                    "duplicate": True,
+                    "out_of_order": False,
+                }
+            if batch_key:
+                self._seen_batches[key].append(batch_key)
+            if sequence_number is not None:
+                self._last_sequences[key][device_id] = sequence_number
             buf = self._buffers[key]
             for s in samples:
                 buf.append(s)
@@ -80,6 +108,8 @@ class DeviceHub:
                 "buffered": len(buf),
                 "window_ready": len(buf) >= self.window_size,
                 "assessment": None,
+                "duplicate": False,
+                "out_of_order": False,
             }
 
             if len(buf) >= self.window_size:

@@ -5,13 +5,15 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app import cloud_store
 from app.device_hub import DeviceSample
 from app.preprocessing import extract_features
 from app.schemas import VitalWindow
+from app.auth import authorize_patient_access, get_optional_principal
+from app.settings import settings
 
 router = APIRouter(tags=["cloud-dataset"])
 
@@ -63,12 +65,23 @@ def _row_to_window(row: pd.Series, patient_id: str) -> VitalWindow:
 
 
 @router.get("/cloud/patients")
-def cloud_patients():
-    return {"patients": cloud_store.list_patients()}
+def cloud_patients(principal: dict = Depends(get_optional_principal)):
+    patients = cloud_store.list_patients()
+    if principal.get("role") == "admin" or not settings.require_patient_auth:
+        return {"patients": patients}
+    allowed = []
+    for patient in patients:
+        try:
+            authorize_patient_access(patient.get("patientId", ""), principal)
+            allowed.append(patient)
+        except HTTPException:
+            continue
+    return {"patients": allowed}
 
 
 @router.get("/cloud/patients/{patient_id}")
-def cloud_patient(patient_id: str):
+def cloud_patient(patient_id: str, principal: dict = Depends(get_optional_principal)):
+    authorize_patient_access(patient_id, principal)
     p = cloud_store.get_patient(patient_id)
     if not p:
         # default demo patient
@@ -85,7 +98,8 @@ def cloud_patient(patient_id: str):
 
 
 @router.post("/cloud/sync")
-def cloud_sync(body: CloudReadingIn):
+def cloud_sync(body: CloudReadingIn, principal: dict = Depends(get_optional_principal)):
+    authorize_patient_access(body.patient_id, principal)
     cloud_store.upsert_patient(body.patient_id, {"name": body.patient_id})
     reading = cloud_store.add_reading(body.patient_id, body.reading)
     assessment = None
@@ -98,8 +112,13 @@ def cloud_sync(body: CloudReadingIn):
 
 
 @router.post("/cloud/alerts/{patient_id}/{alert_id}/ack")
-def cloud_ack(patient_id: str, alert_id: str, by: str = "user"):
-    a = cloud_store.ack_alert(patient_id, alert_id, by)
+def cloud_ack(
+    patient_id: str,
+    alert_id: str,
+    principal: dict = Depends(get_optional_principal),
+):
+    authorize_patient_access(patient_id, principal)
+    a = cloud_store.ack_alert(patient_id, alert_id, str(principal.get("sub")))
     if not a:
         raise HTTPException(404, "alert not found")
     return a
@@ -118,8 +137,13 @@ def dataset_info():
 
 
 @router.post("/dataset/next")
-def dataset_next(body: DatasetNextRequest, request: Request):
+def dataset_next(
+    body: DatasetNextRequest,
+    request: Request,
+    principal: dict = Depends(get_optional_principal),
+):
     """Fetch next labeled window from dataset, analyze, optionally publish to device hub/cloud."""
+    authorize_patient_access(body.patient_id, principal)
     path = _ensure_dataset()
     df = pd.read_csv(path)
     if body.prefer_label:

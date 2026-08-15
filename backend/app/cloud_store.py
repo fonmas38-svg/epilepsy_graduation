@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -28,7 +30,16 @@ def _load() -> dict:
 
 def _save(data: dict) -> None:
     STORE.parent.mkdir(parents=True, exist_ok=True)
-    STORE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    fd, temp_path = tempfile.mkstemp(prefix=f".{STORE.name}.", suffix=".tmp", dir=STORE.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, STORE)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def upsert_patient(patient_id: str, profile: dict[str, Any]) -> dict:

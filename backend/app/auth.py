@@ -17,11 +17,12 @@ Environment:
 """
 from __future__ import annotations
 
-import os
 import time
 from typing import Literal
 
 from fastapi import Depends, Header, HTTPException, status
+
+from app.settings import settings
 
 try:
     import jwt  # PyJWT
@@ -30,14 +31,14 @@ except ImportError:  # pragma: no cover
 
 Role = Literal["device", "patient", "caregiver", "doctor", "admin"]
 
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-change-me-in-production")
+JWT_SECRET = settings.jwt_secret
 JWT_ALG = "HS256"
-JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
+JWT_EXPIRE_MINUTES = settings.jwt_expire_minutes
 LEGACY_TOKEN = "headband-demo-token"
 # Defaults ON so the demo gateway + existing tests keep working out of the box.
 # !!! SECURITY: set AUTH_ALLOW_LEGACY_TOKEN=0 in any real deployment. A static
 #     shared token is not real authentication.
-ALLOW_LEGACY = os.getenv("AUTH_ALLOW_LEGACY_TOKEN", "1") == "1"
+ALLOW_LEGACY = settings.allow_legacy_token
 
 
 class AuthError(HTTPException):
@@ -56,6 +57,14 @@ def create_token(subject: str, role: Role, extra: dict | None = None) -> str:
         "iat": now,
         "exp": now + JWT_EXPIRE_MINUTES * 60,
     }
+    if role in ("patient", "caregiver", "doctor", "admin"):
+        # The account version makes password resets and administrative disable
+        # operations invalidate already issued tokens.
+        from app import users_store
+
+        user = users_store.get_user(subject)
+        if user:
+            payload["session_version"] = int(user.get("sessionVersion", 0))
     if extra:
         payload.update(extra)
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
@@ -86,8 +95,31 @@ def get_current_principal(authorization: str | None = Header(default=None)) -> d
     """FastAPI dependency: returns the decoded principal ({sub, role, ...})."""
     token = _extract_bearer(authorization)
     if ALLOW_LEGACY and token == LEGACY_TOKEN:
+        if settings.require_patient_auth:
+            raise AuthError("Legacy device token is not allowed for patient-scoped access")
         return {"sub": "legacy-device", "role": "device", "legacy": True}
-    return decode_token(token)
+    principal = decode_token(token)
+    role = principal.get("role")
+    if role in ("patient", "caregiver", "doctor", "admin"):
+        from app import users_store
+
+        user = users_store.get_user(str(principal.get("sub", "")))
+        if not user or user.get("disabled"):
+            raise AuthError("Account is inactive")
+        if int(principal.get("session_version", 0)) != int(user.get("sessionVersion", 0)):
+            raise AuthError("Session has been revoked")
+    return principal
+
+
+def get_optional_principal(authorization: str | None = Header(default=None)) -> dict:
+    """Return a principal for patient routes with demo-only compatibility.
+
+    This exists for the local simulator and old clients that only read demo
+    data. It is deliberately impossible to use anonymously in production.
+    """
+    if not authorization and not settings.require_patient_auth:
+        return {"sub": "demo-user", "role": "admin", "demo": True}
+    return get_current_principal(authorization)
 
 
 def require_role(*allowed: Role):
@@ -102,6 +134,42 @@ def require_role(*allowed: Role):
         return principal
 
     return _dep
+
+
+def authorize_patient_access(patient_id: str, principal: dict) -> None:
+    """Authorize access to a patient-scoped resource.
+
+    The demo profile intentionally keeps anonymous compatibility for the local
+    presentation.  Production and ``REQUIRE_PATIENT_AUTH=1`` always use this
+    policy, so a valid token alone is not enough to read another patient.
+    """
+    if not settings.require_patient_auth:
+        return
+    role = principal.get("role")
+    subject = str(principal.get("sub", ""))
+    if role == "admin":
+        return
+    if role == "patient" and subject == patient_id:
+        return
+    if role == "device":
+        bound_patient = principal.get("patient_id")
+        if bound_patient == patient_id:
+            return
+    if role in ("doctor", "caregiver"):
+        from app import users_store
+
+        if role == "doctor" and users_store.is_assigned(patient_id, subject):
+            return
+        user = users_store.get_user(subject)
+        linked = (user or {}).get("meta", {}).get("linkedPatientIds", [])
+        if patient_id in linked:
+            return
+    raise AuthError("Not authorized for this patient", code=status.HTTP_403_FORBIDDEN)
+
+
+def require_patient_access(patient_id: str, principal: dict = Depends(get_current_principal)) -> dict:
+    authorize_patient_access(patient_id, principal)
+    return principal
 
 
 # convenience dependencies

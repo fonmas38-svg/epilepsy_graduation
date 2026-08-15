@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.preprocessing import extract_features
 from app.schemas import AnalyzeResponse, RiskLabel, VitalWindow
+from app.auth import authorize_patient_access, get_optional_principal
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -24,8 +25,13 @@ class AlertPayload(BaseModel):
 
 
 @router.post("/evaluate", response_model=AlertPayload)
-def evaluate_alert(body: AlertTriggerRequest, request: Request):
+def evaluate_alert(
+    body: AlertTriggerRequest,
+    request: Request,
+    principal: dict = Depends(get_optional_principal),
+):
     """Analyze a window and build an alert payload when high_risk is detected."""
+    authorize_patient_access(body.patient_id, principal)
     features = extract_features(body.window)
     classifier = request.app.state.classifier
     label, confidence = classifier.predict(features)
@@ -48,13 +54,17 @@ def evaluate_alert(body: AlertTriggerRequest, request: Request):
 
 
 @router.post("/fcm-stub")
-def fcm_stub(alert: AlertPayload):
+def fcm_stub(
+    alert: AlertPayload,
+    principal: dict = Depends(get_optional_principal),
+):
     """
     Stub for FCM dispatch. In production, call Firebase Admin SDK here.
     Mobile app still receives Firestore-written alerts + local FCM tokens.
     """
     if not alert.should_notify:
         raise HTTPException(status_code=400, detail="Alert is not marked for notification")
+    authorize_patient_access(alert.patient_id, principal)
     return {
         "status": "queued",
         "channel": "fcm_stub",

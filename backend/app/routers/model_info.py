@@ -16,12 +16,13 @@ from pathlib import Path
 from threading import Lock
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app import cloud_store
 from app.device_hub import DeviceSample
 from app.schemas import VitalWindow
+from app.auth import authorize_patient_access, get_optional_principal
 
 log = logging.getLogger("epilepsy.model_info")
 router = APIRouter(tags=["model"])
@@ -116,8 +117,13 @@ class BonnNextRequest(BaseModel):
 
 
 @router.post("/dataset/bonn/next")
-def bonn_next(body: BonnNextRequest, request: Request):
+def bonn_next(
+    body: BonnNextRequest,
+    request: Request,
+    principal: dict = Depends(get_optional_principal),
+):
     """Fetch the next REAL Bonn EEG window, classify with the deep model, publish."""
+    authorize_patient_access(body.patient_id, principal)
     data = _load_bonn()
     if data is None:
         raise HTTPException(503, "Bonn dataset not available on server (data/bonn.h5 missing)")

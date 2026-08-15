@@ -1,18 +1,66 @@
-from pydantic import BaseModel, Field
+import math
+from datetime import datetime, timezone
+from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 
+from app.settings import settings
+
 RiskLabel = Literal["stable", "watch", "high_risk"]
+
+
+def validate_utc_timestamp(
+    value: str | None,
+    field_name: str = "timestamp",
+    *,
+    enforce_max_age: bool = False,
+) -> str | None:
+    """Validate ISO-8601/UTC clock bounds and keep the original API string.
+
+    Historical windows remain valid for research and replay. Live device
+    ingestion opts into the maximum-age check explicitly.
+    """
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a valid ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field_name} must include a timezone")
+    parsed_utc = parsed.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    age = (now - parsed_utc).total_seconds()
+    if age < -settings.timestamp_max_future_seconds:
+        raise ValueError(f"{field_name} is too far in the future")
+    if enforce_max_age and age > settings.timestamp_max_age_seconds:
+        raise ValueError(f"{field_name} is too old")
+    return value
 
 
 class VitalWindow(BaseModel):
     """One analysis window of vital signals."""
 
     timestamp: str | None = None
-    eeg: list[float] = Field(..., min_length=8)
-    ecg: list[float] = Field(..., min_length=8)
-    motion: list[float] = Field(..., min_length=8)
+    eeg: list[float] = Field(..., min_length=8, max_length=4096)
+    ecg: list[float] = Field(..., min_length=8, max_length=4096)
+    motion: list[float] = Field(..., min_length=8, max_length=4096)
     hr: float | None = None
     patient_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_signals(self):
+        validate_utc_timestamp(self.timestamp)
+        lengths = (len(self.eeg), len(self.ecg), len(self.motion))
+        if len(set(lengths)) != 1:
+            raise ValueError("eeg, ecg and motion must have the same length")
+        for channel_name, channel in (
+            ("eeg", self.eeg), ("ecg", self.ecg), ("motion", self.motion)
+        ):
+            if not all(math.isfinite(value) for value in channel):
+                raise ValueError(f"{channel_name} values must be finite")
+        if self.hr is not None and (not math.isfinite(self.hr) or not 20 <= self.hr <= 240):
+            raise ValueError("hr must be finite and between 20 and 240 bpm")
+        return self
 
 
 class FeatureVector(BaseModel):

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -79,7 +80,21 @@ def _load() -> dict:
 def _save(data: dict) -> None:
     path = _store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_json(path, data)
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Persist a complete replacement, never a partially-written JSON file."""
+    fd, temp_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def public_user(u: dict | None) -> dict | None:
@@ -150,6 +165,7 @@ def create_user(
             "role": role,
             "passwordHash": password_hash,
             "disabled": False,
+            "sessionVersion": 0,
             "primaryDoctorId": primary_doctor_id if role == "patient" else None,
             "patientId": uid if role == "patient" else None,
             "createdBy": created_by,
@@ -192,6 +208,7 @@ def set_password(user_id: str, password_hash: str) -> dict | None:
         if not u:
             return None
         u["passwordHash"] = password_hash
+        u["sessionVersion"] = int(u.get("sessionVersion", 0)) + 1
         u["updatedAt"] = _now()
         _save(db)
         return u
@@ -204,6 +221,7 @@ def set_disabled(user_id: str, disabled: bool) -> dict | None:
         if not u:
             return None
         u["disabled"] = bool(disabled)
+        u["sessionVersion"] = int(u.get("sessionVersion", 0)) + 1
         u["updatedAt"] = _now()
         _save(db)
         return u

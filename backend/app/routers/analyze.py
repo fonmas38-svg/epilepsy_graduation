@@ -2,6 +2,7 @@ import time
 
 from fastapi import APIRouter, Request
 
+from app.metrics import metrics
 from app.schemas import AnalyzeResponse, VitalWindow
 
 router = APIRouter(tags=["analyze"])
@@ -13,6 +14,11 @@ def analyze_window(window: VitalWindow, request: Request):
     classifier = request.app.state.classifier
     result = classifier.predict_window(window)
     elapsed_ms = (time.perf_counter() - started) * 1000
+    # Reuse the measurement already taken for the response; /metrics then
+    # reports p50/p95 inference latency and per-label volumes.
+    metrics.observe("inference", elapsed_ms)
+    metrics.increment("inference_total")
+    metrics.increment(f"inference_label_{result.label}")
     return AnalyzeResponse(
         label=result.label,
         confidence=result.confidence,

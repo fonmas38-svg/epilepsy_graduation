@@ -27,7 +27,13 @@ def test_health_live_and_ready(client):
     ready = client.get("/health/ready")
     assert ready.status_code == 200
     assert ready.json()["status"] == "ready"
-    assert ready.json()["checks"] == {"classifier": True, "device_hub": True}
+    # Assert on required checks instead of an exact dict, so adding a new
+    # dependency check (e.g. database) does not break this test.
+    checks = ready.json()["checks"]
+    assert checks["classifier"] is True
+    assert checks["device_hub"] is True
+    assert checks["database"] is True
+    assert all(checks.values())
 
 
 def test_analyze_stable(client):

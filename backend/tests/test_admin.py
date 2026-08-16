@@ -35,6 +35,54 @@ def test_admin_login_and_me(client):
     assert me.status_code == 200
     assert me.json()["user"]["role"] == "admin"
     assert "passwordHash" not in me.json()["user"]
+    assert me.json()["patients"] == []
+
+
+def test_me_returns_only_patients_accessible_to_account(client):
+    admin = _login(client, TEST_ADMIN_USERNAME, TEST_ADMIN_PASSWORD)["access_token"]
+    doctor_body = client.post(
+        "/admin/doctors",
+        json={"username": "dr_context", "name": "Context Doctor"},
+        headers=_auth(admin),
+    ).json()
+    doctor_id = doctor_body["user"]["id"]
+    doctor = _login(client, "dr_context", doctor_body["generatedPassword"])["access_token"]
+
+    assigned = client.post(
+        "/doctor/patients",
+        json={"username": "context_patient", "name": "Assigned", "password": "secret123"},
+        headers=_auth(doctor),
+    ).json()["user"]
+    unassigned = client.post(
+        "/admin/patients",
+        json={"username": "other_patient", "name": "Other", "password": "secret123"},
+        headers=_auth(admin),
+    ).json()["user"]
+    caregiver = client.post(
+        "/admin/users",
+        json={"username": "context_carer", "name": "Carer", "role": "caregiver",
+              "password": "secret123"},
+        headers=_auth(admin),
+    ).json()["user"]
+    client.post(
+        "/admin/caregiver-links",
+        json={"patient_id": assigned["id"], "caregiver_id": caregiver["id"]},
+        headers=_auth(admin),
+    )
+
+    doctor_me = client.get("/auth/me", headers=_auth(doctor)).json()
+    assert [p["id"] for p in doctor_me["patients"]] == [assigned["id"]]
+    assert doctor_me["patients"][0]["doctorIds"] == [doctor_id]
+    assert doctor_me["patients"][0]["caregiverIds"] == [caregiver["id"]]
+    assert unassigned["id"] not in {p["id"] for p in doctor_me["patients"]}
+
+    caregiver_token = _login(client, "context_carer", "secret123")["access_token"]
+    caregiver_me = client.get("/auth/me", headers=_auth(caregiver_token)).json()
+    assert [p["id"] for p in caregiver_me["patients"]] == [assigned["id"]]
+
+    patient_token = _login(client, "context_patient", "secret123")["access_token"]
+    patient_me = client.get("/auth/me", headers=_auth(patient_token)).json()
+    assert [p["id"] for p in patient_me["patients"]] == [assigned["id"]]
 
 
 def test_admin_bad_password_rejected(client):

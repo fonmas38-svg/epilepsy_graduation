@@ -7,14 +7,21 @@ shared store such as Redis.
 from __future__ import annotations
 
 import json
+import logging
 import time
+import uuid
 from collections import defaultdict, deque
 from threading import Lock
 from typing import Awaitable, Callable
 
+from app.metrics import metrics
 from app.settings import settings
 
 ASGIApp = Callable[[dict, Callable, Callable], Awaitable[None]]
+access_log = logging.getLogger("epilepsy.access")
+
+# Never log these paths' bodies or spam the log with probe traffic.
+_QUIET_PATHS = {"/health", "/health/live", "/health/ready", "/metrics"}
 
 
 class RequestGuardMiddleware:
@@ -117,4 +124,44 @@ class RequestGuardMiddleware:
             delivered = True
             return {"type": "http.request", "body": b"".join(chunks), "more_body": False}
 
-        await self.app(scope, replay_receive, send)
+        # Correlate every log line and response with one id so a report of
+        # "my alert failed at 10:42" can be traced to a single request.
+        incoming = next(
+            (v for name, v in scope.get("headers", []) if name.lower() == b"x-request-id"),
+            None,
+        )
+        request_id = (incoming.decode("latin-1")[:64] if incoming else uuid.uuid4().hex[:16])
+        scope["state"] = {**(scope.get("state") or {}), "request_id": request_id}
+
+        method = scope.get("method", "GET")
+        started = time.perf_counter()
+        status_code = 500
+
+        async def send_with_id(message: dict):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                headers = list(message.get("headers") or [])
+                headers.append((b"x-request-id", request_id.encode("ascii", "ignore")))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        try:
+            await self.app(scope, replay_receive, send_with_id)
+        finally:
+            duration_ms = (time.perf_counter() - started) * 1000
+            if path not in _QUIET_PATHS:
+                metrics.increment("http_requests_total")
+                metrics.increment(f"http_status_{status_code // 100}xx")
+                metrics.observe("http_request", duration_ms)
+                access_log.info(
+                    "request",
+                    extra={
+                        "request_id": request_id,
+                        "method": method,
+                        "path": path,
+                        "status": status_code,
+                        "duration_ms": round(duration_ms, 2),
+                        "client": client[0],
+                    },
+                )

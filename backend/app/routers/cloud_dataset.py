@@ -100,15 +100,21 @@ def cloud_patient(patient_id: str, principal: dict = Depends(get_optional_princi
 @router.post("/cloud/sync")
 def cloud_sync(body: CloudReadingIn, principal: dict = Depends(get_optional_principal)):
     authorize_patient_access(body.patient_id, principal)
-    cloud_store.upsert_patient(body.patient_id, {"name": body.patient_id})
-    reading = cloud_store.add_reading(body.patient_id, body.reading)
-    assessment = None
-    alert = None
-    if body.assessment:
-        assessment = cloud_store.add_assessment(body.patient_id, body.assessment)
-    if body.alert:
-        alert = cloud_store.add_alert(body.patient_id, body.alert)
-    return {"ok": True, "reading": reading, "assessment": assessment, "alert": alert}
+    # One transaction: a client never ends up with a reading whose derived
+    # assessment/alert failed to persist.
+    saved = cloud_store.save_monitoring_bundle(
+        body.patient_id,
+        body.reading,
+        assessment=body.assessment or None,
+        alert=body.alert or None,
+        patient_profile={"name": body.patient_id},
+    )
+    return {
+        "ok": True,
+        "reading": saved["reading"],
+        "assessment": saved["assessment"],
+        "alert": saved["alert"],
+    }
 
 
 @router.post("/cloud/alerts/{patient_id}/{alert_id}/ack")
@@ -185,20 +191,18 @@ def dataset_next(
         "hr": window.hr,
         "source": "dataset",
     }
-    cloud_store.add_reading(body.patient_id, reading)
-    cloud_store.add_assessment(body.patient_id, assessment)
-
-    alert = None
+    alert_payload = None
     if label == "high_risk":
-        alert = cloud_store.add_alert(
-            body.patient_id,
-            {
-                "timestamp": window.timestamp,
-                "severity": "critical",
-                "message": "High seizure risk detected from dataset stream",
-                "recipients": ["patient", "caregiver", "doctor"],
-            },
-        )
+        alert_payload = {
+            "timestamp": window.timestamp,
+            "severity": "critical",
+            "message": "High seizure risk detected from dataset stream",
+            "recipients": ["patient", "caregiver", "doctor"],
+        }
+    saved = cloud_store.save_monitoring_bundle(
+        body.patient_id, reading, assessment=assessment, alert=alert_payload
+    )
+    alert = saved["alert"]
 
     return {
         "window": window.model_dump(),

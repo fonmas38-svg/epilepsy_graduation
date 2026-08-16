@@ -58,8 +58,21 @@ def issue_token(body: TokenRequest):
             raise HTTPException(status_code=401, detail="active account not found")
     if body.role == "device" and settings.is_production and not body.patient_id:
         raise HTTPException(status_code=400, detail="patient_id is required for device enrollment")
-    if not _verify_credentials(body.role, body.enrollment_secret):
-        raise HTTPException(status_code=401, detail="Invalid enrollment secret")
-    extra = {"patient_id": body.patient_id} if body.role == "device" and body.patient_id else None
+    if body.role == "device" and settings.is_production:
+        from app import device_store
+
+        device = device_store.verify_enrollment(
+            body.subject, str(body.patient_id), body.enrollment_secret
+        )
+        if not device:
+            raise HTTPException(status_code=401, detail="Invalid or inactive device enrollment")
+        extra = {
+            "patient_id": device["patientId"],
+            "credential_version": device["credentialVersion"],
+        }
+    else:
+        if not _verify_credentials(body.role, body.enrollment_secret):
+            raise HTTPException(status_code=401, detail="Invalid enrollment secret")
+        extra = {"patient_id": body.patient_id} if body.role == "device" and body.patient_id else None
     token = create_token(body.subject, body.role, extra=extra)
     return TokenResponse(access_token=token, role=body.role)

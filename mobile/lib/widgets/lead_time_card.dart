@@ -24,7 +24,6 @@ class _LeadTimeCardState extends State<LeadTimeCard> {
   Timer? _timer;
   // Lead-time in seconds, interpolated locally between polls.
   double? _remainingSec;
-  DateTime _lastSync = DateTime.now();
 
   @override
   void initState() {
@@ -45,8 +44,9 @@ class _LeadTimeCardState extends State<LeadTimeCard> {
 
   void _syncFrom(PredictionState p) {
     final min = p.leadTimeMin;
-    _remainingSec = min == null ? null : (min * 60).clamp(0, 24 * 3600).toDouble();
-    _lastSync = DateTime.now();
+    _remainingSec = min == null
+        ? null
+        : (min * 60).clamp(0, 24 * 3600).toDouble();
   }
 
   void _decay() {
@@ -77,7 +77,9 @@ class _LeadTimeCardState extends State<LeadTimeCard> {
   Widget build(BuildContext context) {
     final p = widget.prediction;
     final predicted = p.predicted;
-    final accent = predicted ? const Color(0xFFB42318) : const Color(0xFF1B4965);
+    final accent = predicted
+        ? const Color(0xFFB42318)
+        : const Color(0xFF1B4965);
 
     return Card(
       elevation: 0,
@@ -90,16 +92,23 @@ class _LeadTimeCardState extends State<LeadTimeCard> {
           children: [
             Row(
               children: [
-                Icon(predicted ? Icons.notification_important : Icons.timer_outlined,
-                    size: 18, color: accent),
+                Icon(
+                  predicted
+                      ? Icons.notification_important
+                      : Icons.timer_outlined,
+                  size: 18,
+                  color: accent,
+                ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    predicted ? 'تنبيه مبكر: نوبة محتملة' : 'زمن الاستباق المتوقع',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(color: accent, fontWeight: FontWeight.w700),
+                    predicted
+                        ? 'تنبيه مبكر: نوبة محتملة'
+                        : 'زمن الاستباق المتوقع',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: accent,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ],
@@ -109,22 +118,26 @@ class _LeadTimeCardState extends State<LeadTimeCard> {
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
               children: [
-                Text('نوبة محتملة خلال',
-                    style: Theme.of(context).textTheme.bodyMedium),
+                Text(
+                  'نوبة محتملة خلال',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   _countdownAr,
-                  style: Theme.of(context)
-                      .textTheme
-                      .headlineSmall
-                      ?.copyWith(color: accent, fontWeight: FontWeight.bold),
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    color: accent,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
             ),
             if (p.horizonMin != null) ...[
               const SizedBox(height: 4),
-              Text('أفق التنبؤ: ${p.horizonMin!.toStringAsFixed(0)} دقيقة',
-                  style: Theme.of(context).textTheme.bodySmall),
+              Text(
+                'أفق التنبؤ: ${p.horizonMin!.toStringAsFixed(0)} دقيقة',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ],
             const SizedBox(height: 10),
             _SourceChip(prediction: p),
@@ -164,7 +177,10 @@ class _SourceChip extends StatelessWidget {
             Text(
               'مصدر التنبؤ: ${prediction.sourceLabelAr}',
               style: TextStyle(
-                  color: color, fontSize: 12, fontWeight: FontWeight.w600),
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ],
         ),

@@ -108,6 +108,14 @@ def get_current_principal(authorization: str | None = Header(default=None)) -> d
             raise AuthError("Account is inactive")
         if int(principal.get("session_version", 0)) != int(user.get("sessionVersion", 0)):
             raise AuthError("Session has been revoked")
+    elif role == "device" and (settings.is_production or "credential_version" in principal):
+        from app import device_store
+
+        if not device_store.token_is_active(
+            str(principal.get("sub", "")), principal.get("patient_id"),
+            int(principal.get("credential_version", -1)),
+        ):
+            raise AuthError("Device credential has been revoked")
     return principal
 
 
@@ -160,9 +168,12 @@ def authorize_patient_access(patient_id: str, principal: dict) -> None:
 
         if role == "doctor" and users_store.is_assigned(patient_id, subject):
             return
+        if role == "caregiver" and users_store.is_caregiver_linked(patient_id, subject):
+            return
+        # Compatibility for legacy imported accounts. New links are always
+        # persisted in caregiver_links and managed through explicit endpoints.
         user = users_store.get_user(subject)
-        linked = (user or {}).get("meta", {}).get("linkedPatientIds", [])
-        if patient_id in linked:
+        if patient_id in (user or {}).get("meta", {}).get("linkedPatientIds", []):
             return
     raise AuthError("Not authorized for this patient", code=status.HTTP_403_FORBIDDEN)
 

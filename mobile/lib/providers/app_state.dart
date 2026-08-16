@@ -142,16 +142,18 @@ class AppState extends ChangeNotifier {
     final p = _preAlertPrediction;
     if (reading == null || p == null) return;
     try {
-      await db.insertPredictionEvent(PredictionEvent(
-        id: auth.newId(),
-        patientId: reading.patientId,
-        firedAt: DateTime.now(),
-        preictalProb: p.preictalProb,
-        leadTimeMin: p.leadTimeMin,
-        horizonMin: p.horizonMin,
-        source: p.source,
-        outcome: outcome,
-      ));
+      await db.insertPredictionEvent(
+        PredictionEvent(
+          id: auth.newId(),
+          patientId: reading.patientId,
+          firedAt: DateTime.now(),
+          preictalProb: p.preictalProb,
+          leadTimeMin: p.leadTimeMin,
+          horizonMin: p.horizonMin,
+          source: p.source,
+          outcome: outcome,
+        ),
+      );
     } catch (_) {
       // Best-effort logging — never let it disrupt the alert flow.
     }
@@ -183,9 +185,17 @@ class AppState extends ChangeNotifier {
     // Secure storage / token restore must never block startup.
     try {
       await api.tokens.init();
-      final restored = auth.currentUser;
-      if (restored != null) {
-        await api.tokens.authenticate(role: restored.role, subject: restored.uid);
+      if (auth.currentUser != null && api.tokens.hasSession) {
+        final context = await api.sessionContext();
+        await auth.applyBackendSession(context);
+      }
+    } on ApiException catch (e) {
+      if (e.isUnauthorized) {
+        await api.tokens.clear();
+        await auth.signOut();
+        error = 'انتهت جلسة الدخول. سجّل الدخول مرة أخرى.';
+      } else {
+        error = 'تعذّر استرجاع جلسة الدخول: $e';
       }
     } catch (e) {
       error = 'تعذّر استرجاع جلسة الدخول: $e';
@@ -218,7 +228,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> signIn({
+  Future<void> signInDemo({
     required String name,
     required String email,
     required UserRole role,
@@ -233,7 +243,8 @@ class AppState extends ChangeNotifier {
       try {
         final ok = await api.tokens.authenticate(role: role, subject: user.uid);
         if (!ok) {
-          error = 'تعذّر الحصول على رمز الدخول من الخادم — يعمل التطبيق دون اتصال.';
+          error =
+              'تعذّر الحصول على رمز الدخول من الخادم — يعمل التطبيق دون اتصال.';
         }
       } catch (e) {
         error = 'تعذّر الاتصال بالخادم ($e) — يعمل التطبيق دون اتصال.';
@@ -245,6 +256,28 @@ class AppState extends ChangeNotifier {
       error = 'تم الدخول، لكن تعذّر بدء المراقبة: $e';
     }
     notifyListeners();
+  }
+
+  Future<void> signInWithPassword({
+    required String username,
+    required String password,
+  }) async {
+    error = null;
+    await monitoring.stop();
+    await api.tokens.clear();
+    try {
+      await api.login(username, password);
+      final context = await api.sessionContext();
+      await auth.applyBackendSession(context);
+      await _startForUser();
+      apiOnline = true;
+    } catch (e) {
+      await api.tokens.clear();
+      await auth.signOut();
+      rethrow;
+    } finally {
+      notifyListeners();
+    }
   }
 
   Future<void> signOut() async {
@@ -263,7 +296,9 @@ class AppState extends ChangeNotifier {
     if (user == null) return;
     final patients = auth.accessiblePatients();
     if (patients.isEmpty) return;
-    final patientId = user.role == UserRole.patient ? user.uid : patients.first.patientId;
+    final patientId = user.role == UserRole.patient
+        ? user.uid
+        : patients.first.patientId;
     // Seed the medication plan from the patient profile (idempotent).
     try {
       final profile = auth.patientById(patientId);
@@ -319,16 +354,21 @@ class AppState extends ChangeNotifier {
       final assessments = body['assessments'] as List? ?? [];
       if (assessments.isNotEmpty) {
         final latest = Map<String, dynamic>.from(assessments.first as Map);
-        await db.insertAssessment(RiskAssessment.fromMap({
-          ...latest,
-          'id': latest['id'] ?? 'cloud-${DateTime.now().millisecondsSinceEpoch}',
-          'patientId': patientId,
-          'timestamp': latest['timestamp'] ?? DateTime.now().toIso8601String(),
-          'label': latest['label'] ?? 'stable',
-          'confidence': latest['confidence'] ?? 0.5,
-          'features': latest['features'] ?? {},
-          'processingMs': latest['processingMs'] ?? 0,
-        }));
+        await db.insertAssessment(
+          RiskAssessment.fromMap({
+            ...latest,
+            'id':
+                latest['id'] ??
+                'cloud-${DateTime.now().millisecondsSinceEpoch}',
+            'patientId': patientId,
+            'timestamp':
+                latest['timestamp'] ?? DateTime.now().toIso8601String(),
+            'label': latest['label'] ?? 'stable',
+            'confidence': latest['confidence'] ?? 0.5,
+            'features': latest['features'] ?? {},
+            'processingMs': latest['processingMs'] ?? 0,
+          }),
+        );
         await monitoring.refresh(patientId);
       }
     } catch (_) {}

@@ -35,12 +35,18 @@ class MonitoringService {
   int _tick = 0;
   AlertCallback? onAlert;
   void Function()? onUpdate;
+
   /// Fired when a forecast crosses the pre-alert threshold (prediction layer).
-  void Function(VitalReading reading, RiskAssessment assessment, AlertItem preAlert)?
-      onPreAlert;
+  void Function(
+    VitalReading reading,
+    RiskAssessment assessment,
+    AlertItem preAlert,
+  )?
+  onPreAlert;
 
   VitalReading? latestReading;
   RiskAssessment? latestAssessment;
+
   /// Latest seizure-forecast state (additive, null until a forecast arrives).
   PredictionState? latestPrediction;
   List<VitalReading> chartReadings = [];
@@ -81,7 +87,8 @@ class MonitoringService {
     _timer?.cancel();
     await tick();
     final interval = switch (source) {
-      SignalSource.headDevice || SignalSource.dataset => AppConfig.devicePollInterval,
+      SignalSource.headDevice ||
+      SignalSource.dataset => AppConfig.devicePollInterval,
       _ => AppConfig.simulationInterval,
     };
     _timer = Timer.periodic(interval, (_) => tick());
@@ -114,7 +121,8 @@ class MonitoringService {
     // rather than appending again.
     final recovered = PredictionState.fromMap(latestAssessment?.features);
     if (recovered != null) {
-      latestPrediction = recovered.trajectory.isEmpty && _localTrajectory.isNotEmpty
+      latestPrediction =
+          recovered.trajectory.isEmpty && _localTrajectory.isNotEmpty
           ? recovered.copyWith(trajectory: List<double>.from(_localTrajectory))
           : recovered;
     }
@@ -155,7 +163,10 @@ class MonitoringService {
     if (pre != null) onPreAlert?.call(r, a, pre);
   }
 
-  Future<void> _tickFromDataset(String patientId, {RiskLabel? forcePattern}) async {
+  Future<void> _tickFromDataset(
+    String patientId, {
+    RiskLabel? forcePattern,
+  }) async {
     try {
       final prefer = forcePattern?.apiValue;
       final body = await api.datasetNext(patientId, preferLabel: prefer);
@@ -164,17 +175,27 @@ class MonitoringService {
       final reading = VitalReading(
         id: _uuid.v4(),
         patientId: patientId,
-        timestamp: DateTime.tryParse(window['timestamp'] as String? ?? '') ?? DateTime.now(),
-        eeg: List<double>.from((window['eeg'] as List).map((e) => (e as num).toDouble())),
-        ecg: List<double>.from((window['ecg'] as List).map((e) => (e as num).toDouble())),
-        motion: List<double>.from((window['motion'] as List).map((e) => (e as num).toDouble())),
+        timestamp:
+            DateTime.tryParse(window['timestamp'] as String? ?? '') ??
+            DateTime.now(),
+        eeg: List<double>.from(
+          (window['eeg'] as List).map((e) => (e as num).toDouble()),
+        ),
+        ecg: List<double>.from(
+          (window['ecg'] as List).map((e) => (e as num).toDouble()),
+        ),
+        motion: List<double>.from(
+          (window['motion'] as List).map((e) => (e as num).toDouble()),
+        ),
         hr: (window['hr'] as num?)?.toDouble() ?? 0,
         synced: true,
       );
       await db.insertReading(reading);
       latestReading = reading;
 
-      final features = Map<String, dynamic>.from(assessmentMap['features'] as Map? ?? {});
+      final features = Map<String, dynamic>.from(
+        assessmentMap['features'] as Map? ?? {},
+      );
       // If the dataset player surfaced a forecast at top level, ride it inside
       // features so it persists and drives the gauge like the other paths.
       for (final k in const [
@@ -217,7 +238,10 @@ class MonitoringService {
     }
   }
 
-  Future<void> _tickFromSimulator(String patientId, {RiskLabel? forcePattern}) async {
+  Future<void> _tickFromSimulator(
+    String patientId, {
+    RiskLabel? forcePattern,
+  }) async {
     final pattern = forcePattern ?? simulator.patternForTick(_tick++);
     final reading = simulator.generate(patientId: patientId, pattern: pattern);
     await db.insertReading(reading);
@@ -284,6 +308,7 @@ class MonitoringService {
   Future<void> acknowledge(String alertId) async {
     final user = auth.currentUser;
     if (user == null || activePatientId == null) return;
+    await api.acknowledgeAlert(patientId: activePatientId!, alertId: alertId);
     await db.acknowledgeAlert(alertId, user.uid);
     await refresh(activePatientId!);
   }

@@ -6,10 +6,8 @@ import '../core/config.dart';
 import '../core/enums.dart';
 import 'secure_store.dart';
 
-/// Obtains and caches a signed JWT from the backend (POST /auth/token) by
-/// exchanging the role's enrollment secret, then hands out `Bearer` tokens to
-/// [ApiClient]. Tokens are cached in secure storage with their `exp` so the app
-/// survives restarts, and are refreshed automatically shortly before expiry.
+/// Stores the backend JWT used by [ApiClient]. Human users authenticate through
+/// `/auth/login`; demo/device enrollment can still use `/auth/token`.
 class TokenProvider {
   TokenProvider({http.Client? client, String? baseUrl})
       : _client = client ?? http.Client(),
@@ -23,11 +21,13 @@ class TokenProvider {
   static const _kExpiry = 'jwt_expiry_epoch_ms';
   static const _kRole = 'jwt_role';
   static const _kSubject = 'jwt_subject';
+  static const _kRefreshMode = 'jwt_refresh_mode';
 
   String? _token;
   DateTime? _expiry;
   String? _role; // backend role: device/patient/caregiver/doctor
   String? _subject;
+  String? _refreshMode;
 
   static String secretForRole(String role) => switch (role) {
         'device' => AppConfig.enrollDeviceSecret,
@@ -48,6 +48,7 @@ class TokenProvider {
     _token = await _store.read(_kToken);
     _role = await _store.read(_kRole);
     _subject = await _store.read(_kSubject);
+    _refreshMode = await _store.read(_kRefreshMode);
     final expMs = await _store.read(_kExpiry);
     if (expMs != null) {
       final ms = int.tryParse(expMs);
@@ -61,6 +62,19 @@ class TokenProvider {
     required String subject,
   }) =>
       _authenticateRaw(role: backendRole(role), subject: subject);
+
+  Future<void> useLoginToken({
+    required String token,
+    required String role,
+    required String subject,
+  }) async {
+    _token = token;
+    _role = role;
+    _subject = subject;
+    _refreshMode = 'login';
+    _expiry = _expiryOf(token);
+    await _persist();
+  }
 
   Future<bool> _authenticateRaw({
     required String role,
@@ -85,6 +99,7 @@ class TokenProvider {
       _token = token;
       _role = role;
       _subject = subject;
+      _refreshMode = 'enrollment';
       _expiry = _expiryOf(token);
       await _persist();
       return true;
@@ -101,7 +116,9 @@ class TokenProvider {
         _expiry == null ||
         DateTime.now().add(AppConfig.tokenRefreshLeeway).isAfter(_expiry!);
     if (needsRefresh) {
-      if (_role == null || _subject == null) return _token; // nothing to refresh with
+      if (_refreshMode != 'enrollment' || _role == null || _subject == null) {
+        return _token;
+      }
       final ok = await _authenticateRaw(role: _role!, subject: _subject!);
       if (!ok) return _token; // fall back to stale token; caller handles 401
     }
@@ -115,16 +132,19 @@ class TokenProvider {
     _expiry = null;
     _role = null;
     _subject = null;
+    _refreshMode = null;
     await _store.delete(_kToken);
     await _store.delete(_kExpiry);
     await _store.delete(_kRole);
     await _store.delete(_kSubject);
+    await _store.delete(_kRefreshMode);
   }
 
   Future<void> _persist() async {
     if (_token != null) await _store.write(_kToken, _token!);
     if (_role != null) await _store.write(_kRole, _role!);
     if (_subject != null) await _store.write(_kSubject, _subject!);
+    if (_refreshMode != null) await _store.write(_kRefreshMode, _refreshMode!);
     if (_expiry != null) {
       await _store.write(_kExpiry, _expiry!.millisecondsSinceEpoch.toString());
     }

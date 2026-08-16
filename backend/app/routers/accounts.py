@@ -24,7 +24,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app import cloud_store, security, users_store
+from app import cloud_store, device_store, security, users_store
 from app.auth import (
     Role,
     create_token,
@@ -89,6 +89,22 @@ class AssignmentRequest(BaseModel):
     doctor_id: str
 
 
+class CaregiverLinkRequest(BaseModel):
+    patient_id: str
+    caregiver_id: str
+
+
+class CreateDeviceRequest(BaseModel):
+    device_id: str = Field(..., min_length=3, max_length=128)
+    patient_id: str
+    name: str = Field(default="Headband device", min_length=1, max_length=120)
+    enrollment_secret: str | None = Field(default=None, min_length=12, max_length=128)
+
+
+class RotateDeviceSecretRequest(BaseModel):
+    enrollment_secret: str | None = Field(default=None, min_length=12, max_length=128)
+
+
 # ---------------------------------------------------------------------------- helpers
 
 
@@ -113,10 +129,35 @@ def _patient_view(user: dict) -> dict:
     """Public patient dict enriched with live monitoring status from cloud_store."""
     pub = users_store.public_user(user) or {}
     cloud = cloud_store.get_patient(user["id"]) or {}
-    pub["currentStatus"] = cloud.get("currentStatus")
-    pub["lastUpdated"] = cloud.get("lastUpdated")
+    for key in ("diagnosis", "medications"):
+        if cloud.get(key) is not None:
+            pub[key] = cloud[key]
+    pub["currentStatus"] = cloud.get("currentStatus") or "stable"
+    pub["lastUpdated"] = cloud.get("lastUpdated") or cloud.get("updatedAt")
     pub["doctorIds"] = users_store.doctors_for_patient(user["id"])
+    pub["caregiverIds"] = users_store.caregivers_for_patient(user["id"])
     return pub
+
+
+def _accessible_patient_views(user: dict) -> list[dict]:
+    """Patient profiles the account may access under the same policy as API routes."""
+    role = user.get("role")
+    user_id = user.get("id")
+    if role == "patient":
+        patient_ids = {user_id}
+    elif role == "doctor":
+        patient_ids = set(users_store.patients_for_doctor(user_id))
+    elif role == "caregiver":
+        patient_ids = set(users_store.patients_for_caregiver(user_id))
+    elif role == "admin":
+        patient_ids = {u["id"] for u in users_store.list_users(role="patient")}
+    else:
+        patient_ids = set()
+    patients = [
+        candidate for candidate in users_store.list_users(role="patient")
+        if candidate["id"] in patient_ids and not candidate.get("disabled")
+    ]
+    return [_patient_view(patient) for patient in patients]
 
 
 # ------------------------------------------------------------------------------ auth
@@ -141,11 +182,13 @@ def login(body: LoginRequest):
 
 @router.get("/auth/me")
 def me(principal: dict = Depends(get_current_principal)):
-    """Return the current principal's account (or the raw token claims if the
-    subject is not a stored user, e.g. a device or legacy token)."""
+    """Return the account plus patient profiles authorized for this session."""
     user = users_store.get_user(principal.get("sub", ""))
     if user:
-        return {"user": users_store.public_user(user)}
+        return {
+            "user": users_store.public_user(user),
+            "patients": _accessible_patient_views(user),
+        }
     return {"user": None, "principal": principal}
 
 
@@ -180,8 +223,11 @@ def admin_get_user(user_id: str, _: dict = Depends(require_admin)):
     out = users_store.public_user(user)
     if user.get("role") == "patient":
         out["doctorIds"] = users_store.doctors_for_patient(user_id)
+        out["caregiverIds"] = users_store.caregivers_for_patient(user_id)
     elif user.get("role") == "doctor":
         out["patientIds"] = users_store.patients_for_doctor(user_id)
+    elif user.get("role") == "caregiver":
+        out["patientIds"] = users_store.patients_for_caregiver(user_id)
     return {"user": out}
 
 
@@ -347,6 +393,95 @@ def admin_unassign(body: AssignmentRequest, actor: dict = Depends(require_admin)
 @router.get("/admin/audit")
 def admin_audit(_: dict = Depends(require_admin), limit: int = Query(200, ge=1, le=1000)):
     return {"audit": users_store.list_audit(limit=limit)}
+
+
+@router.get("/admin/caregiver-links")
+def admin_list_caregiver_links(_: dict = Depends(require_admin)):
+    return {"links": users_store.list_caregiver_links()}
+
+
+@router.post("/admin/caregiver-links", status_code=201)
+def admin_link_caregiver(body: CaregiverLinkRequest, actor: dict = Depends(require_admin)):
+    patient = users_store.get_user(body.patient_id)
+    caregiver = users_store.get_user(body.caregiver_id)
+    if not patient or patient.get("role") != "patient":
+        raise HTTPException(status_code=404, detail="patient not found")
+    if not caregiver or caregiver.get("role") != "caregiver":
+        raise HTTPException(status_code=404, detail="caregiver not found")
+    link = users_store.link_caregiver(body.patient_id, body.caregiver_id, actor.get("sub"))
+    users_store.log(actor.get("sub"), "admin", "link_caregiver", body.patient_id,
+                    {"caregiverId": body.caregiver_id})
+    return {"link": link}
+
+
+@router.delete("/admin/caregiver-links")
+def admin_unlink_caregiver(body: CaregiverLinkRequest, actor: dict = Depends(require_admin)):
+    if not users_store.unlink_caregiver(body.patient_id, body.caregiver_id):
+        raise HTTPException(status_code=404, detail="caregiver link not found")
+    users_store.log(actor.get("sub"), "admin", "unlink_caregiver", body.patient_id,
+                    {"caregiverId": body.caregiver_id})
+    return {"ok": True}
+
+
+def _device_secret(explicit: str | None) -> tuple[str, str | None]:
+    generated = explicit or security.generate_password(length=24)
+    return generated, None if explicit else generated
+
+
+@router.get("/admin/devices")
+def admin_list_devices(
+    patient_id: str | None = None, _: dict = Depends(require_admin)
+):
+    return {"devices": device_store.list_devices(patient_id)}
+
+
+@router.post("/admin/devices", status_code=201)
+def admin_create_device(body: CreateDeviceRequest, actor: dict = Depends(require_admin)):
+    patient = users_store.get_user(body.patient_id)
+    if not patient or patient.get("role") != "patient":
+        raise HTTPException(status_code=404, detail="patient not found")
+    secret, generated = _device_secret(body.enrollment_secret)
+    try:
+        device = device_store.create_device(
+            device_id=body.device_id, patient_id=body.patient_id, name=body.name,
+            secret=secret, created_by=actor.get("sub"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    users_store.log(actor.get("sub"), "admin", "create_device", body.device_id,
+                    {"patientId": body.patient_id})
+    return {"device": device, "generatedEnrollmentSecret": generated}
+
+
+@router.post("/admin/devices/{device_id}/secret")
+def admin_rotate_device_secret(
+    device_id: str, body: RotateDeviceSecretRequest,
+    actor: dict = Depends(require_admin),
+):
+    secret, generated = _device_secret(body.enrollment_secret)
+    device = device_store.rotate_secret(device_id, secret)
+    if not device:
+        raise HTTPException(status_code=404, detail="device not found")
+    users_store.log(actor.get("sub"), "admin", "rotate_device_secret", device_id)
+    return {"device": device, "generatedEnrollmentSecret": generated}
+
+
+@router.post("/admin/devices/{device_id}/disable")
+def admin_disable_device(device_id: str, actor: dict = Depends(require_admin)):
+    device = device_store.set_disabled(device_id, True)
+    if not device:
+        raise HTTPException(status_code=404, detail="device not found")
+    users_store.log(actor.get("sub"), "admin", "disable_device", device_id)
+    return {"device": device}
+
+
+@router.post("/admin/devices/{device_id}/enable")
+def admin_enable_device(device_id: str, actor: dict = Depends(require_admin)):
+    device = device_store.set_disabled(device_id, False)
+    if not device:
+        raise HTTPException(status_code=404, detail="device not found")
+    users_store.log(actor.get("sub"), "admin", "enable_device", device_id)
+    return {"device": device}
 
 
 # ---------------------------------------------------------------------------- doctor

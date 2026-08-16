@@ -13,6 +13,10 @@ service cloud.firestore {
       return userDoc().role;
     }
 
+    function isAdmin() {
+      return signedIn() && role() == 'admin';
+    }
+
     function isPatient(patientId) {
       return signedIn() && request.auth.uid == patientId;
     }
@@ -30,37 +34,50 @@ service cloud.firestore {
     }
 
     function canAccessPatient(patientId) {
-      return isPatient(patientId)
+      return isAdmin()
+        || isPatient(patientId)
         || isLinkedCaregiver(patientId)
         || isLinkedDoctor(patientId);
     }
 
+    function isSafeSelfProfileUpdate(userId) {
+      return signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'phone', 'fcmToken']);
+    }
+
     match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || role() == 'doctor');
-      allow create: if signedIn() && request.auth.uid == userId;
-      allow update: if signedIn() && request.auth.uid == userId;
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+      // Identity, role, status, and patient links are server-owned. Firebase
+      // Admin SDK bypasses rules; untrusted clients may only edit profile fields.
+      allow create, delete: if false;
+      allow update: if isSafeSelfProfileUpdate(userId);
     }
 
     match /patients/{patientId} {
       allow read: if canAccessPatient(patientId);
-      allow write: if isPatient(patientId) || isLinkedDoctor(patientId);
+      allow write: if false;
     }
 
     match /patients/{patientId}/readings/{readingId} {
       allow read: if canAccessPatient(patientId);
-      allow create: if isPatient(patientId);
-      allow update, delete: if isPatient(patientId) || isLinkedDoctor(patientId);
+      allow write: if false;
     }
 
     match /patients/{patientId}/assessments/{assessmentId} {
       allow read: if canAccessPatient(patientId);
-      allow create: if isPatient(patientId) || isLinkedDoctor(patientId);
+      allow write: if false;
     }
 
     match /patients/{patientId}/alerts/{alertId} {
       allow read: if canAccessPatient(patientId);
-      allow create: if isPatient(patientId) || isLinkedDoctor(patientId);
-      allow update: if canAccessPatient(patientId);
+      allow write: if false;
+    }
+
+    // Deny any collection not explicitly covered above.
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app import alert_outbox
 from app.preprocessing import extract_features
 from app.schemas import AnalyzeResponse, RiskLabel, VitalWindow
-from app.auth import authorize_patient_access, get_optional_principal
+from app.auth import authorize_patient_access, get_optional_principal, require_role
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -58,17 +59,38 @@ def fcm_stub(
     alert: AlertPayload,
     principal: dict = Depends(get_optional_principal),
 ):
-    """
-    Stub for FCM dispatch. In production, call Firebase Admin SDK here.
-    Mobile app still receives Firestore-written alerts + local FCM tokens.
+    """Durably queue an alert for delivery.
+
+    The notification is written to the transactional outbox instead of being
+    "sent" and forgotten, so a delivery failure is retried and never lost. A
+    background worker performs the actual dispatch (Firebase Admin SDK in
+    production).
     """
     if not alert.should_notify:
         raise HTTPException(status_code=400, detail="Alert is not marked for notification")
     authorize_patient_access(alert.patient_id, principal)
+    entry = alert_outbox.enqueue_standalone(alert.patient_id, alert.model_dump())
     return {
+        # Unchanged for backwards compatibility with the Flutter client; the
+        # authoritative delivery state is `delivery_status`/`outbox_id`.
         "status": "queued",
         "channel": "fcm_stub",
         "patient_id": alert.patient_id,
         "recipients": alert.recipients,
         "message": alert.message,
+        "outbox_id": entry["id"],
+        "delivery_status": entry["status"],
+    }
+
+
+@router.get("/outbox")
+def outbox_status(
+    status: str | None = None,
+    limit: int = 50,
+    principal: dict = Depends(require_role("admin")),
+):
+    """Admin view of pending/failed notifications — makes losses visible."""
+    return {
+        "stats": alert_outbox.stats(),
+        "entries": alert_outbox.list_entries(status=status, limit=max(1, min(limit, 200))),
     }

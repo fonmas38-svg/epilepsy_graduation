@@ -7,9 +7,8 @@ import '../core/config.dart';
 import '../core/enums.dart';
 import '../models/models.dart';
 
-/// Auth + profile store.
-/// Demo mode uses SharedPreferences (no Firebase project required).
-/// When DEMO_MODE=false, wire Firebase Auth/Firestore in the TODO hooks below.
+/// Local session/profile cache. Real account authentication is performed by the
+/// backend through ApiClient; demo identities remain available for offline demos.
 class AuthService {
   AuthService();
 
@@ -30,7 +29,9 @@ class AuthService {
     if (patientsRaw != null) {
       final map = jsonDecode(patientsRaw) as Map<String, dynamic>;
       for (final e in map.entries) {
-        _patients[e.key] = PatientProfile.fromMap(e.value as Map<String, dynamic>);
+        _patients[e.key] = PatientProfile.fromMap(
+          e.value as Map<String, dynamic>,
+        );
       }
     }
     if (_patients.isEmpty) {
@@ -61,7 +62,9 @@ class AuthService {
       UserRole.caregiver => 'caregiver-demo',
       UserRole.doctor => 'doctor-demo',
     };
-    final linked = role == UserRole.patient ? <String>[] : <String>['patient-demo'];
+    final linked = role == UserRole.patient
+        ? <String>[]
+        : <String>['patient-demo'];
     final user = AppUser(
       uid: uid,
       name: name,
@@ -92,6 +95,42 @@ class AuthService {
   }) async {
     // TODO(firebase): createUserWithEmailAndPassword + Firestore users/{uid}
     return signInDemo(name: name, email: email, role: role);
+  }
+
+  Future<AppUser> applyBackendSession(Map<String, dynamic> body) async {
+    final rawUser = Map<String, dynamic>.from(body['user'] as Map);
+    final role = UserRoleX.fromString(rawUser['role'] as String? ?? 'patient');
+    if (rawUser['role'] == 'admin') {
+      throw UnsupportedError(
+        'حساب المدير يستخدم لوحة الإدارة وليس تطبيق الهاتف.',
+      );
+    }
+    final rawPatients = body['patients'] as List? ?? const [];
+    _patients.clear();
+    for (final item in rawPatients) {
+      final raw = Map<String, dynamic>.from(item as Map);
+      final normalized = <String, dynamic>{
+        ...raw,
+        'patientId': raw['patientId'] ?? raw['id'],
+        'doctors': raw['doctors'] ?? raw['doctorIds'] ?? const [],
+        'caregivers': raw['caregivers'] ?? raw['caregiverIds'] ?? const [],
+      };
+      final profile = PatientProfile.fromMap(normalized);
+      _patients[profile.patientId] = profile;
+    }
+    final linked = role == UserRole.patient
+        ? <String>[]
+        : _patients.keys.toList(growable: false);
+    currentUser = AppUser(
+      uid: rawUser['id'] as String,
+      name: rawUser['name'] as String? ?? rawUser['username'] as String? ?? '',
+      email: rawUser['username'] as String? ?? '',
+      role: role,
+      linkedPatientIds: linked,
+    );
+    await _persistUser();
+    await _persistPatients();
+    return currentUser!;
   }
 
   Future<void> signOut() async {

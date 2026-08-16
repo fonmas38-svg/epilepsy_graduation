@@ -1,5 +1,5 @@
 # النظام الذكي لمراقبة مرضى الصرع والتنبؤ المبكر بالنوبات
-## مشروع تخرج — MVP بدون جهاز (V2.1)
+## مشروع تخرج — MVP بدون جهاز (V2.3)
 
 ## أين أكواد Flutter؟
 `mobile/` — راجع أيضاً `mobile/README.md`
@@ -19,8 +19,10 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+alembic upgrade head
 python data/build_dataset.py
 python train_from_dataset.py
+python startup_check.py
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -39,3 +41,6 @@ flutter run
 - `docs/mvp_without_hardware.md`
 - `docs/hardware_integration.md`
 - `docs/graduation_project.md`
+- `docs/api.md`
+- `docs/backend-runbook.md`
+- `docs/BACKEND_ANALYSIS_REPORT_AR.md`

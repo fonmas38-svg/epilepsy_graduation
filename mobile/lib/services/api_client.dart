@@ -50,6 +50,18 @@ class DeviceStatusResult {
   final Map<String, dynamic> prediction;
 }
 
+class ApiException implements Exception {
+  ApiException(this.message, {this.statusCode});
+
+  final String message;
+  final int? statusCode;
+
+  bool get isUnauthorized => statusCode == 401 || statusCode == 403;
+
+  @override
+  String toString() => message;
+}
+
 class ApiClient {
   ApiClient({http.Client? client, String? baseUrl, TokenProvider? tokens})
       : _client = client ?? http.Client(),
@@ -88,7 +100,7 @@ class ApiClient {
     var r = await _client
         .post(_u(path), headers: await _headers(), body: payload)
         .timeout(timeout);
-    if (r.statusCode == 401 || r.statusCode == 403) {
+    if (r.statusCode == 401) {
       final token = await tokens.bearer(forceRefresh: true);
       if (token != null && token.isNotEmpty) {
         r = await _client
@@ -97,6 +109,68 @@ class ApiClient {
       }
     }
     return r;
+  }
+
+  String _detail(http.Response response, String fallback) {
+    try {
+      final body = jsonDecode(response.body);
+      if (body is Map && body['detail'] != null) return body['detail'].toString();
+    } catch (_) {}
+    return fallback;
+  }
+
+  Future<Map<String, dynamic>> login(String username, String password) async {
+    final r = await _client
+        .post(
+          _u('/auth/login'),
+          headers: await _headers(auth: false),
+          body: jsonEncode({'username': username, 'password': password}),
+        )
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر تسجيل الدخول'),
+        statusCode: r.statusCode,
+      );
+    }
+    final body = jsonDecode(r.body) as Map<String, dynamic>;
+    final user = Map<String, dynamic>.from(body['user'] as Map);
+    await tokens.useLoginToken(
+      token: body['access_token'] as String,
+      role: body['role'] as String,
+      subject: user['id'] as String,
+    );
+    return body;
+  }
+
+  Future<Map<String, dynamic>> sessionContext() async {
+    final r = await _client
+        .get(_u('/auth/me'), headers: await _headers())
+        .timeout(const Duration(seconds: 8));
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر استرجاع بيانات الجلسة'),
+        statusCode: r.statusCode,
+      );
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  Future<void> acknowledgeAlert({
+    required String patientId,
+    required String alertId,
+    String? note,
+  }) async {
+    final r = await _postAuthed(
+      '/clinical/$patientId/alerts/$alertId/acknowledgments',
+      {'note': note},
+    );
+    if (r.statusCode != 201) {
+      throw ApiException(
+        _detail(r, 'تعذّر تأكيد استلام التنبيه'),
+        statusCode: r.statusCode,
+      );
+    }
   }
 
   Future<bool> health() async {

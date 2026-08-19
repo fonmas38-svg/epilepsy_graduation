@@ -6,7 +6,6 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import delete, insert, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from app.database import (
@@ -19,6 +18,7 @@ from app.database import (
     patients,
     readings,
     transaction,
+    upsert,
 )
 
 
@@ -64,8 +64,7 @@ def _upsert_patient(conn: Connection, patient_id: str, profile: dict[str, Any]) 
     # Atomic upsert: a plain SELECT-then-INSERT loses the race when several
     # devices report for the same (possibly new) patient at once.
     conn.execute(
-        sqlite_insert(patients)
-        .values(patient_id=patient_id, **values)
+        upsert(patients, {"patient_id": patient_id, **values})
         .on_conflict_do_update(index_elements=[patients.c.patient_id], set_=values)
     )
     return current
@@ -79,9 +78,10 @@ def upsert_patient(patient_id: str, profile: dict[str, Any]) -> dict:
 def _ensure_patient(conn: Connection, patient_id: str) -> None:
     """Create the patient row if absent, without racing concurrent writers."""
     conn.execute(
-        sqlite_insert(patients)
-        .values(patient_id=patient_id, current_status=None, last_updated=None,
-                updated_at=_now(), profile_json=dump_json({}))
+        upsert(patients, {
+            "patient_id": patient_id, "current_status": None, "last_updated": None,
+            "updated_at": _now(), "profile_json": dump_json({}),
+        })
         .on_conflict_do_nothing(index_elements=[patients.c.patient_id])
     )
 
@@ -240,11 +240,16 @@ def ack_alert(patient_id: str, alert_id: str, by: str,
         if row is None:
             return None
         acknowledged_at = _now()
-        conn.execute(sqlite_insert(alert_acknowledgments).values(
-            id=str(uuid4()), alert_id=alert_id, patient_id=patient_id,
-            actor_id=by, actor_role=actor_role, acknowledged_at=acknowledged_at,
-            note=note,
-        ).on_conflict_do_nothing())
+        # Naming the conflict target keeps this idempotent on PostgreSQL, where a
+        # bare DO NOTHING would also swallow unrelated constraint violations.
+        conn.execute(upsert(alert_acknowledgments, {
+            "id": str(uuid4()), "alert_id": alert_id, "patient_id": patient_id,
+            "actor_id": by, "actor_role": actor_role,
+            "acknowledged_at": acknowledged_at, "note": note,
+        }).on_conflict_do_nothing(index_elements=[
+            alert_acknowledgments.c.alert_id, alert_acknowledgments.c.actor_id,
+        ]))
+
         payload = _payload(row)
         payload.update({
             "acknowledged": True,

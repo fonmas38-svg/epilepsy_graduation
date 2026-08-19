@@ -78,7 +78,7 @@ def get_by_username(username: str) -> dict | None:
         return None
     with connection() as conn:
         return _user(conn.execute(
-            select(users).where(users.c.username == username.strip())
+            select(users).where(func.lower(users.c.username) == username.strip().lower())
         ).first())
 
 

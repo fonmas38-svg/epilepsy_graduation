@@ -12,11 +12,7 @@ import 'location_service.dart';
 
 /// Syncs local SQLite readings/assessments/alerts to cloud store (Firestore when configured).
 class SyncService {
-  SyncService({
-    required this.db,
-    required this.api,
-    required this.auth,
-  });
+  SyncService({required this.db, required this.api, required this.auth});
 
   final LocalDatabase db;
   final ApiClient api;
@@ -103,7 +99,8 @@ class SyncService {
       patientId: reading.patientId,
       timestamp: DateTime.now(),
       severity: 'pre_alert',
-      message: 'نوبة محتملة$leadAr — يمكن الإلغاء خلال 30 ثانية إذا كان إنذاراً كاذباً.',
+      message:
+          'نوبة محتملة$leadAr — يمكن الإلغاء خلال 30 ثانية إذا كان إنذاراً كاذباً.',
       recipients: const ['patient'],
     );
   }
@@ -111,13 +108,17 @@ class SyncService {
   /// Escalate a pre-alert that was NOT cancelled within the window: persist it
   /// and route through the same cloud path caregivers/doctors already read via
   /// `refreshFromCloud`. Reuses the existing alert plumbing — no new endpoint.
-  Future<AlertItem> escalatePreAlert(VitalReading reading, AlertItem preAlert) async {
+  Future<AlertItem> escalatePreAlert(
+    VitalReading reading,
+    AlertItem preAlert,
+  ) async {
     final escalated = AlertItem(
       id: preAlert.id,
       patientId: preAlert.patientId,
       timestamp: DateTime.now(),
       severity: 'critical',
-      message: 'لم يتم إلغاء التنبيه المبكر — يُرجى الاطمئنان على المريض. ${preAlert.message}',
+      message:
+          'لم يتم إلغاء التنبيه المبكر — يُرجى الاطمئنان على المريض. ${preAlert.message}',
       recipients: const ['patient', 'caregiver', 'doctor'],
     );
     await db.insertAlert(escalated);
@@ -147,7 +148,9 @@ class SyncService {
     GpsFix? fix,
     String? patientName,
   }) async {
-    final who = (patientName == null || patientName.isEmpty) ? 'المريض' : patientName;
+    final who = (patientName == null || patientName.isEmpty)
+        ? 'المريض'
+        : patientName;
     final location = fix == null
         ? 'تعذّر تحديد الموقع (بدون إحداثيات).'
         : 'الموقع: ${fix.mapsUrl}';
@@ -179,17 +182,20 @@ class SyncService {
   /// `/cloud/sync` requires a reading payload; SOS has no vitals window, so send
   /// a minimal zero-signal beacon carrying just the patient id and timestamp.
   VitalReading _sosBeaconReading(String patientId) => VitalReading(
-        id: _uuid.v4(),
-        patientId: patientId,
-        timestamp: DateTime.now(),
-        eeg: const [],
-        ecg: const [],
-        motion: const [],
-        hr: 0,
-        synced: true,
-      );
+    id: _uuid.v4(),
+    patientId: patientId,
+    timestamp: DateTime.now(),
+    eeg: const [],
+    ecg: const [],
+    motion: const [],
+    hr: 0,
+    synced: true,
+  );
 
-  Future<AlertItem?> maybeCreateAlert(VitalReading reading, RiskAssessment assessment) async {
+  Future<AlertItem?> maybeCreateAlert(
+    VitalReading reading,
+    RiskAssessment assessment,
+  ) async {
     if (assessment.label != RiskLabel.highRisk) return null;
 
     Map<String, dynamic>? remote;
@@ -209,10 +215,12 @@ class SyncService {
       patientId: reading.patientId,
       timestamp: DateTime.now(),
       severity: remote?['severity'] as String? ?? 'critical',
-      message: remote?['message'] as String? ??
+      message:
+          remote?['message'] as String? ??
           'تم اكتشاف خطر مرتفع لحدوث نوبة. يرجى التحقق من المريض فوراً.',
       recipients: List<String>.from(
-        remote?['recipients'] as List? ?? const ['patient', 'caregiver', 'doctor'],
+        remote?['recipients'] as List? ??
+            const ['patient', 'caregiver', 'doctor'],
       ),
     );
     await db.insertAlert(alert);
@@ -238,15 +246,22 @@ class SyncService {
     final pending = await db.unsyncedReadings(patientId);
     if (pending.isEmpty) return;
     cloudReadings.putIfAbsent(patientId, () => []);
+    final synchronizedIds = <String>[];
     for (final r in pending) {
-      cloudReadings[patientId]!.add(r.toMap());
       try {
         if (await api.health()) {
           await api.cloudSync(patientId: patientId, reading: r.toMap());
+          cloudReadings[patientId]!.add(r.toMap());
+          synchronizedIds.add(r.id);
         }
-      } catch (_) {}
+      } catch (_) {
+        // Keep this row unsynchronized. A later connectivity tick retries it;
+        // marking the whole batch here used to lose rows after HTTP failures.
+      }
     }
-    await db.markSynced(pending.map((e) => e.id).toList());
+    if (synchronizedIds.isNotEmpty) {
+      await db.markSynced(synchronizedIds);
+    }
   }
 
   /// Pull shared alerts/status for caregiver/doctor from backend cloud store.
@@ -271,16 +286,19 @@ class SyncService {
       score += 0.15;
     }
     final motionEnergy =
-        reading.motion.map((e) => e * e).fold<double>(0, (a, b) => a + b) / reading.motion.length;
+        reading.motion.map((e) => e * e).fold<double>(0, (a, b) => a + b) /
+        reading.motion.length;
     if (motionEnergy > 0.6) score += 0.35;
-    final eegPeak = reading.eeg.map((e) => e.abs()).fold<double>(0, (a, b) => a > b ? a : b);
+    final eegPeak = reading.eeg
+        .map((e) => e.abs())
+        .fold<double>(0, (a, b) => a > b ? a : b);
     if (eegPeak > 1.5) score += 0.3;
 
     final label = score >= 0.65
         ? RiskLabel.highRisk
         : score >= 0.3
-            ? RiskLabel.watch
-            : RiskLabel.stable;
+        ? RiskLabel.watch
+        : RiskLabel.stable;
 
     // Forecasting layer, offline. Mirror the backend heuristic so the gauge and
     // pre-alert work with no server: a smooth preictal probability, a lead-time

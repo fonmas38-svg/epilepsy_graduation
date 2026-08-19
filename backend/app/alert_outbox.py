@@ -23,10 +23,17 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
-from app.database import alert_outbox, connection, dump_json, load_json, transaction
+from app.database import (
+    alert_outbox,
+    connection,
+    dump_json,
+    load_json,
+    transaction,
+    upsert,
+)
+
 
 log = logging.getLogger("epilepsy.outbox")
 
@@ -73,8 +80,10 @@ def enqueue(conn: Connection, patient_id: str, alert: dict[str, Any]) -> dict:
         "created_at": _iso(now),
         "updated_at": _iso(now),
     }
-    statement = sqlite_insert(alert_outbox).values(**values)
-    conn.execute(statement.on_conflict_do_nothing(index_elements=["alert_id"]))
+    conn.execute(
+        upsert(alert_outbox, values).on_conflict_do_nothing(index_elements=["alert_id"])
+    )
+
     row = conn.execute(
         select(alert_outbox).where(alert_outbox.c.alert_id == alert_id)
     ).first()

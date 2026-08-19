@@ -64,9 +64,9 @@ class ApiException implements Exception {
 
 class ApiClient {
   ApiClient({http.Client? client, String? baseUrl, TokenProvider? tokens})
-      : _client = client ?? http.Client(),
-        baseUrl = baseUrl ?? AppConfig.apiBaseUrl,
-        tokens = tokens ?? TokenProvider(baseUrl: baseUrl);
+    : _client = client ?? http.Client(),
+      baseUrl = baseUrl ?? AppConfig.apiBaseUrl,
+      tokens = tokens ?? TokenProvider(baseUrl: baseUrl);
 
   final http.Client _client;
   final String baseUrl;
@@ -114,7 +114,9 @@ class ApiClient {
   String _detail(http.Response response, String fallback) {
     try {
       final body = jsonDecode(response.body);
-      if (body is Map && body['detail'] != null) return body['detail'].toString();
+      if (body is Map && body['detail'] != null) {
+        return body['detail'].toString();
+      }
     } catch (_) {}
     return fallback;
   }
@@ -156,13 +158,51 @@ class ApiClient {
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
+  Future<void> registerPushToken({
+    required String token,
+    required String platform,
+  }) async {
+    final r = await _postAuthed('/notifications/device-token', {
+      'token': token,
+      'platform': platform,
+    });
+    if (r.statusCode != 201) {
+      throw ApiException(
+        _detail(r, 'تعذّر تسجيل الجهاز لاستقبال التنبيهات'),
+        statusCode: r.statusCode,
+      );
+    }
+  }
+
+  Future<void> unregisterPushToken({
+    required String token,
+    required String platform,
+  }) async {
+    final r = await _client
+        .delete(
+          _u('/notifications/device-token'),
+          headers: await _headers(),
+          body: jsonEncode({'token': token, 'platform': platform}),
+        )
+        .timeout(const Duration(seconds: 8));
+    if (r.statusCode != 200 && r.statusCode != 401) {
+      throw ApiException(
+        _detail(r, 'تعذّر إلغاء تسجيل جهاز التنبيهات'),
+        statusCode: r.statusCode,
+      );
+    }
+  }
+
   Future<void> acknowledgeAlert({
     required String patientId,
     required String alertId,
     String? note,
   }) async {
+    // Backend clinical resources are patient-scoped under `/patients`. Keep this
+    // path aligned with backend/app/routers/clinical.py; `/clinical/...` was an
+    // old client-only prefix and returned 404 during alert acknowledgement.
     final r = await _postAuthed(
-      '/clinical/$patientId/alerts/$alertId/acknowledgments',
+      '/patients/$patientId/alerts/$alertId/acknowledgments',
       {'note': note},
     );
     if (r.statusCode != 201) {
@@ -175,7 +215,9 @@ class ApiClient {
 
   Future<bool> health() async {
     try {
-      final r = await _client.get(_u('/health')).timeout(const Duration(seconds: 3));
+      final r = await _client
+          .get(_u('/health'))
+          .timeout(const Duration(seconds: 3));
       return r.statusCode == 200;
     } catch (_) {
       return false;
@@ -223,7 +265,13 @@ class ApiClient {
   }
 
   Future<void> queueFcmStub(Map<String, dynamic> alertPayload) async {
-    await _postAuthed('/alerts/fcm-stub', alertPayload);
+    final r = await _postAuthed('/alerts/fcm-stub', alertPayload);
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر وضع التنبيه في قائمة الإرسال'),
+        statusCode: r.statusCode,
+      );
+    }
   }
 
   Future<DeviceStatusResult> deviceStatus(String patientId) async {
@@ -241,10 +289,18 @@ class ApiClient {
       window = VitalReading(
         id: 'device-${DateTime.now().millisecondsSinceEpoch}',
         patientId: patientId,
-        timestamp: DateTime.tryParse(m['timestamp'] as String? ?? '') ?? DateTime.now(),
-        eeg: List<double>.from((m['eeg'] as List).map((e) => (e as num).toDouble())),
-        ecg: List<double>.from((m['ecg'] as List).map((e) => (e as num).toDouble())),
-        motion: List<double>.from((m['motion'] as List).map((e) => (e as num).toDouble())),
+        timestamp:
+            DateTime.tryParse(m['timestamp'] as String? ?? '') ??
+            DateTime.now(),
+        eeg: List<double>.from(
+          (m['eeg'] as List).map((e) => (e as num).toDouble()),
+        ),
+        ecg: List<double>.from(
+          (m['ecg'] as List).map((e) => (e as num).toDouble()),
+        ),
+        motion: List<double>.from(
+          (m['motion'] as List).map((e) => (e as num).toDouble()),
+        ),
         hr: (m['hr'] as num?)?.toDouble() ?? 0,
         synced: true,
       );
@@ -272,16 +328,15 @@ class ApiClient {
     );
   }
 
-  Future<Map<String, dynamic>> datasetNext(String patientId, {String? preferLabel}) async {
-    final r = await _postAuthed(
-      '/dataset/next',
-      {
-        'patient_id': patientId,
-        'prefer_label': preferLabel,
-        'push_to_device_hub': true,
-      },
-      timeout: const Duration(seconds: 20),
-    );
+  Future<Map<String, dynamic>> datasetNext(
+    String patientId, {
+    String? preferLabel,
+  }) async {
+    final r = await _postAuthed('/dataset/next', {
+      'patient_id': patientId,
+      'prefer_label': preferLabel,
+      'push_to_device_hub': true,
+    }, timeout: const Duration(seconds: 20));
     if (r.statusCode != 200) {
       throw Exception('dataset next failed: ${r.statusCode}');
     }
@@ -304,12 +359,21 @@ class ApiClient {
     Map<String, dynamic>? assessment,
     Map<String, dynamic>? alert,
   }) async {
-    await _postAuthed('/cloud/sync', {
+    final r = await _postAuthed('/cloud/sync', {
       'patient_id': patientId,
       'reading': reading,
       'assessment': assessment,
       'alert': alert,
     });
+    // SyncService may mark local rows as synchronized only after this method
+    // returns. Treat every non-2xx response as a failure so offline data remains
+    // pending and can be retried instead of being silently discarded.
+    if (r.statusCode < 200 || r.statusCode >= 300) {
+      throw ApiException(
+        _detail(r, 'تعذّرت مزامنة بيانات المريض'),
+        statusCode: r.statusCode,
+      );
+    }
   }
 
   /// The active inference engine reported by the backend (cnn_lstm_fusion /

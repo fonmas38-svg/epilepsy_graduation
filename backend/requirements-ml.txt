@@ -1,0 +1,4 @@
+# Optional inference profile. The API remains functional with sklearn/rules
+# when this file is not installed.
+-r requirements.txt
+torch>=2.2.0

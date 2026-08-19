@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/config.dart';
 import '../core/enums.dart';
 import '../models/models.dart';
 import '../models/prediction_state.dart';
@@ -213,6 +214,9 @@ class AppState extends ChangeNotifier {
           );
           notifyListeners();
         },
+        onToken: (token) {
+          _registerPushToken(token);
+        },
       );
     } catch (_) {
       // notifications are best-effort in demo mode
@@ -269,6 +273,7 @@ class AppState extends ChangeNotifier {
       await api.login(username, password);
       final context = await api.sessionContext();
       await auth.applyBackendSession(context);
+      await _registerCurrentPushToken();
       await _startForUser();
       apiOnline = true;
     } catch (e) {
@@ -285,6 +290,18 @@ class AppState extends ChangeNotifier {
     await preAlerts.cancel();
     _preAlertReading = null;
     _preAlertPrediction = null;
+    final pushToken = notifications.token;
+    if (!AppConfig.demoMode && pushToken != null && api.tokens.hasSession) {
+      try {
+        await api.unregisterPushToken(
+          token: pushToken,
+          platform: NotificationService.platformName,
+        );
+      } catch (_) {
+        // Sign-out still proceeds while offline. A future registration transfers
+        // this token to the next authenticated account on this installation.
+      }
+    }
     await api.tokens.clear();
     await auth.signOut();
     lastAlert = null;
@@ -306,6 +323,27 @@ class AppState extends ChangeNotifier {
     } catch (_) {}
     await monitoring.start(patientId);
     apiOnline = await api.health();
+  }
+
+  Future<void> _registerCurrentPushToken() async {
+    final pushToken = notifications.token;
+    if (pushToken != null) await _registerPushToken(pushToken);
+  }
+
+  Future<void> _registerPushToken(String pushToken) async {
+    if (AppConfig.demoMode ||
+        auth.currentUser == null ||
+        !api.tokens.hasSession) {
+      return;
+    }
+    try {
+      await api.registerPushToken(
+        token: pushToken,
+        platform: NotificationService.platformName,
+      );
+    } catch (_) {
+      // Best effort: token refresh or the next login retries registration.
+    }
   }
 
   Future<void> forceHighRiskDemo() async {

@@ -5,13 +5,26 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app.database import metadata
+from app.database import configured_database_url, database_url, metadata
 
 config = context.config
 if config.config_file_name is not None:
     # disable_existing_loggers=False: migrations run inside the API process at
     # startup, and the default (True) would silence the app's own JSON logging.
     fileConfig(config.config_file_name, disable_existing_loggers=False)
+
+if configured_database_url() and not config.attributes.get("explicit_url"):
+    # `alembic upgrade head` run by hand must target the same database as the
+    # API. Without this the hardcoded sqlite URL in alembic.ini would silently
+    # migrate a local file while production PostgreSQL stays on an old revision.
+    #
+    # `explicit_url` is set by callers that already chose a database on purpose
+    # (the app's own migration step, and the migration tests that must stay on a
+    # throwaway SQLite file even when the suite runs against PostgreSQL — those
+    # tests downgrade to base, i.e. drop every table).
+    config.set_main_option("sqlalchemy.url", database_url())
+
+
 
 target_metadata = metadata
 

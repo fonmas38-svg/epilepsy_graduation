@@ -5,6 +5,12 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Keep offline/demo Android builds working without committing Firebase secrets.
+// Adding google-services.json enables the plugin automatically for real FCM builds.
+if (file("google-services.json").isFile) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.epilepsy.monitor.epilepsy_monitor"
     compileSdk = flutter.compileSdkVersion

@@ -11,7 +11,10 @@ pyjwt>=2.9.0
 h5py>=3.11.0
 SQLAlchemy>=2.0,<3.0
 Alembic>=1.13,<2.0
-# Deep model (CPU). Optional at runtime: the API degrades gracefully to the
-# sklearn/rule engine when torch is absent. Install the CPU wheel:
-#   pip install torch --index-url https://download.pytorch.org/whl/cpu
-torch>=2.2.0
+# PostgreSQL driver, used only when DATABASE_URL points at a hosted database
+# (e.g. Supabase). SQLite needs no driver, so local demos are unaffected.
+psycopg[binary]>=3.1,<4.0
+
+# Loaded lazily only when NOTIFICATION_CHANNEL=fcm. Keeping it in the backend
+# environment makes the production adapter available without changing code.
+firebase-admin>=6.5,<7.0

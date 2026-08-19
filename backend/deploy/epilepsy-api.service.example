@@ -1,0 +1,23 @@
+[Unit]
+Description=Epilepsy Monitoring FastAPI API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=epilepsy
+Group=epilepsy
+WorkingDirectory=/opt/epilepsy/backend
+EnvironmentFile=/etc/epilepsy-api/backend.env
+ExecStart=/opt/epilepsy/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/epilepsy/backend/data
+
+[Install]
+WantedBy=multi-user.target

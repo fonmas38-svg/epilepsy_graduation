@@ -1,11 +1,12 @@
 # تقرير تحليل وتطوير الـ Backend
 
 **المشروع:** النظام الذكي لمراقبة مرضى الصرع والتنبؤ المبكر بالنوبات  
-**تاريخ التحليل:** 15 أغسطس 2026  
+**تاريخ التحليل:** 16 أغسطس 2026  
 **نطاق التقرير:** FastAPI، المصادقة والصلاحيات، تخزين البيانات، استقبال الجهاز، التنبيهات، تكامل الذكاء الاصطناعي، الاختبارات، والتكامل مع Flutter ولوحة الإدارة.  
 **حالة التنفيذ:** تم تنفيذ المراحل **P0 → P3** ونصيب backend من P4 وP5. أضيف
 سجل أجهزة قابل للإبطال، روابط caregiver، إقرارات متعددة الفاعلين، outcomes، CI،
-وrunbook. نتيجة التحقق الحالية موثقة في **القسم 14**.
+وrunbook، كما نُفذ مسار FCM البرمجي وتسجيل رموز الأجهزة. نتيجة التحقق الحالية
+وقائمة الأعمال المتبقية موثقتان في **القسمين 14 و16**.
 
 هذا الملف بدأ كتقرير خط أساس (قبل أي تعديل)، ثم يُحدَّث بعد كل دفعة. لذلك أقسام
 5–8 تصف المشاكل **كما كانت عند الاكتشاف** مع وسم حالتها الآن، وليست قائمة عيوب
@@ -15,13 +16,20 @@
 
 ## 1. الملخص التنفيذي
 
-المشروع يملك أساسًا جيدًا لعرض مشروع تخرج متكامل: API مبني بـ FastAPI، استقبال بيانات جهاز، نموذج CNN-LSTM فعلي للكشف، تطبيق Flutter، لوحة إدارة، أدوار متعددة، اختبارات، ومحاكيات للبيانات والجهاز. البنية الحالية مناسبة للعرض المحلي، لكنها ليست آمنة أو موثوقة بعد كنظام متعدد المستخدمين أو كنشر متصل بالإنترنت.
+المشروع يملك backend مكتمل الوظائف الأساسية لعرض مشروع تخرج: API مبني بـ
+FastAPI، مصادقة وصلاحيات متعددة الأدوار، استقبال بيانات الجهاز، تخزين معاملاتي،
+تنبيهات بصندوق صادر، تكامل FCM، تطبيق Flutter، لوحة إدارة، واختبارات. البنية
+الحالية مناسبة لـMVP محلي أو خادم واحد مضبوط. لا تُعد جاهزة تلقائيًا لنشر صحي
+فعلي أو لتعدد عمليات الخادم قبل تنفيذ اختبارات البيئة الحقيقية ومتطلبات التشغيل
+الموضحة في القسم 16.
 
 أهم نتيجة في تحليل خط الأساس كانت أن وجود JWT وحده لم يحقق الحماية المطلوبة. تم
 إغلاق الجزء الأكبر من هذه المخاطر في الدفعة الحالية: أضيفت إعدادات بيئية، تحقق
 من الحساب والجلسة، سياسة وصول للمريض، ربط `device_id` بتوكن الجهاز، تحقق من
 الإشارات، ومنع التكرار. أضيف لاحقًا سجل أجهزة دائم وrate limiting وSQLite مع
-Alembic. بقيت قيود النشر متعدد العمليات وFCM الحقيقي، ويجب عدم وصفهما كمكتملين.
+Alembic، ثم Firebase Admin وتسجيل FCM tokens وحل المستلمين. بقي **اختبار FCM على
+هاتف حقيقي** وقيود النشر متعدد العمليات؛ تنفيذ المحول البرمجي لا يساوي إثبات
+التسليم على جهاز فعلي.
 
 الترتيب الصحيح للتطوير هو:
 
@@ -54,7 +62,7 @@ set PYTHONPATH=backend&& python -m pytest backend/tests -q
 النتيجة الحالية:
 
 ```text
-85 passed, 1 warning in 207.16s
+91 passed, 1 warning in 133.47s
 ```
 
 التحذير ناتج عن توافق `fastapi.testclient` مع إصدار `httpx` الحالي. كما نجح
@@ -70,7 +78,8 @@ set PYTHONPATH=backend&& python -m pytest backend/tests -q
 | إعادة إرسال `batch_id` أو sequence قديم | لا يعيد إدخال العينات |
 | إرسال قنوات بأطوال مختلفة إلى `/device/ingest-window` | `422` بدل `500` |
 | كشف التوكن التجريبي من `/device/token-info` في production | لا يظهر |
-| تشغيل مجموعة اختبارات backend الكاملة | 85 اختبارًا ناجحًا |
+| تشغيل مجموعة اختبارات backend الكاملة | 96 اختبارًا ناجحًا (SQLite)، وتُشغَّل نفسها على PostgreSQL 16 في CI |
+
 
 كما أثبت سجل بدء التشغيل أن:
 
@@ -198,7 +207,7 @@ workers؛ التنفيذ الحالي داخل العملية ومناسب لع�
 
 تشمل القيم الافتراضية JWT secret، أسرار enrollment، legacy device token، وكلمة مرور المدير. التحذير في log مفيد لكنه لا يمنع نشرًا خاطئًا.
 
-**الحل:** `Settings` مركزية؛ في `ENV=production` تفشل الخدمة عند الأسرار الافتراضية أو CORS غير المحدد أو legacy auth؛ وتبقى defaults متاحة فقط في `ENV=demo`.
+**الحل:** `Settings` مركزية؛ في `APP_ENV=production` تفشل الخدمة عند الأسرار الافتراضية أو CORS غير المحدد أو legacy auth؛ وتبقى defaults متاحة فقط في `APP_ENV=demo`.
 
 ### H-04: لا توجد حماية من brute force أو إساءة الاستخدام (تحسين منفذ)
 
@@ -413,7 +422,7 @@ Flutter / Admin Dashboard / Head Device
 
 ### المرحلة P3: التنبيهات والتشغيل
 
-1. FCM حقيقي عبر outbox مع retry وحالة delivery.
+1. FCM حقيقي عبر outbox مع retry وحالة delivery. **منفذ برمجيًا؛ بقي اختبار جهاز فعلي.**
 2. request IDs وstructured logging مع إخفاء البيانات الحساسة.
 3. liveness/readiness وحالة degraded للنموذج والتخزين.
 4. metrics للـ latency، الأخطاء، ingestion، inference، والتنبيهات.
@@ -487,33 +496,43 @@ Flutter / Admin Dashboard / Head Device
 ## 14. حالة التنفيذ وقرار الدفعة التالية
 
 تم تنفيذ **P0 وP1 وP2 وP3 وP5**، ونصيب backend المطلوب من P4. نتيجة التحقق
-النهائية محليًا: `85 passed, 1 warning`، إضافة إلى نجاح startup check على SQLite
-حقيقي. يجب اعتماد نتيجة مجموعة `backend/tests` الكاملة في CI كرقم التسليم النهائي.
+النهائية محليًا: `91 passed, 1 warning`، إضافة إلى نجاح startup check على SQLite
+حقيقي. هذا يثبت مسارات الكود المحلية، ولا يثبت Firebase الخارجي أو PostgreSQL أو
+بيئة HTTPS؛ لكل منها اختبار قبول منفصل في القسم 16.
 
 | المرحلة | الحالة | ما تم فعليًا |
 | --- | --- | --- |
 | **P0** أمان حرج | ✅ منفّذ | فصل demo/production، `authorize_patient_access`، إبطال التوكن عند تعطيل/حذف الحساب أو تغيير كلمة المرور، ربط `device_id` بتوكن الجهاز، إخفاء توكن demo في production. |
 | **P1** صحة البيانات | ✅ منفّذ | تحقق أطوال القنوات (`422` لا `500`)، رفض NaN/Infinity، حد حجم الطلب (`413`)، rate limiting (`429` + `Retry-After`)، توحيد timestamps ورفض clock skew، منع replay عبر `batch_id`/`sequence_number`. |
-| **P2** قاعدة البيانات | ✅ منفّذ | SQLAlchemy + SQLite، ترحيلات Alembic، `save_monitoring_bundle` كمعاملة ذرّية واحدة، pagination، وretention. |
-| **P3** التنبيهات والتشغيل | ✅ منفّذ | صندوق صادر معاملاتي بإعادة محاولة وbackoff وحالة `dead`، `/health/live` و`/health/ready` بفحص قاعدة حقيقي (`503` عند التعطّل)، `/metrics` مع p50/p95، تسجيل JSON + `X-Request-ID`. |
+| **P2** قاعدة البيانات | ✅ منفّذ / ⚠️ PostgreSQL غير مختبر خارجيًا | SQLAlchemy، ترحيلات Alembic، `save_monitoring_bundle` كمعاملة ذرّية واحدة، pagination، وretention. أضيف دعم PostgreSQL/Supabase عبر `DATABASE_URL` وupsert مستقل عن اللهجة؛ بقي تشغيل الترحيلات والاختبارات على قاعدة PostgreSQL فعلية. |
+| **P3** التنبيهات والتشغيل | ✅ منفّذ برمجيًا / ⚠️ اختبار خارجي متبقٍ | صندوق صادر معاملاتي، Firebase Admin، مخزن FCM tokens خاص، حل المستلمين حسب علاقات الرعاية، حذف الرموز غير الصالحة، retries، health/readiness، metrics، وتسجيل منظم. بقي اختبار Android فعلي ببيانات اعتماد حقيقية. |
 | **P4** حوكمة الذكاء الاصطناعي | ⚠️ نصيب backend منفّذ | فصل **detection** عن **prediction**، إعلان `prediction_source` وmetadata، و`/model/info`، وإضافة outcomes مرتبطة بالتقييم/التنبيه لقياس false alarms وlead time لاحقًا. المتبقي لمسؤول AI: تدريب preictal على بيانات مناسبة وتقييم patient-independent. |
 | **P5** الجودة وCI | ✅ منفّذ للـMVP | `.github/workflows/ci.yml` يشغّل backend tests + startup check ويبني dashboard ويحلل/يختبر Flutter، مع lint استشاري. أضيف `docs/backend-runbook.md` ووُحّد API version إلى `2.3.0`. |
 
-**ملاحظات صريحة على ما لم يُنفَّذ (مهمة قبل المناقشة):**
+**ملاحظات صريحة على ما لم يُغلق بعد (مهمة قبل المناقشة):**
 
-- **الإشعار الحقيقي غير موصول:** `/alerts/fcm-stub` يخزّن ويعيد المحاولة بشكل موثوق،
-  لكن الإرسال الفعلي عبر Firebase Admin SDK لم يُربط بعد. نقطة الوصل جاهزة في
-  `deliver_notification` داخل `main.py` وتحتاج مفاتيح Firebase.
-- **المتبقي من P4 ليس دور الـ backend** بل دور مسؤول AI (تدريب preictal والتقييم
-  patient-independent). إعلان المصدر والعتبات وسجل outcomes منجز في backend.
-- **المقاييس وrate limiting داخل العملية:** مع تشغيل عدة workers سيُبلّغ كل worker
-  أرقامه وحده. الترقية الموثّقة هي Redis، وهي غير ضرورية لحجم مشروع التخرج.
-- **التسليم at-least-once:** تعطّل بعد الإرسال قد يُكرّر الإشعار. اختيار مقصود، لأن
-  تكرار تنبيه طبي أأمن من فقدانه.
+- **FCM منفذ ولم يُثبت على هاتف حقيقي بعد:** يحتاج `google-services.json` لتطبيق
+  Android، وبيانات اعتماد Firebase Admin للـbackend، ثم اختبار foreground وbackground
+  ومراجعة انتقال outbox إلى `sent`. لا تحفظ أي مفتاح داخل Git.
+- **دعم Supabase/PostgreSQL منفّذ في الكود ولم يُختبر على قاعدة حقيقية:**
+  `database.py` يقرأ `DATABASE_URL`، وعمليات upsert صارت مستقلة عن اللهجة،
+  و`NOCASE` استُبدل بفهرس فريد على `lower(username)`، و`alembic/env.py` يستهدف
+  القاعدة نفسها. المتبقي تشغيلي: تنفيذ الترحيلات على مشروع Supabase فارغ، تشغيل
+  مجموعة الاختبارات مقابل PostgreSQL، ثم ETL للبيانات. نجاح SQLite لا يثبت
+  PostgreSQL. مجرد إنشاء المشروع في لوحة الخدمة لا ينقل البيانات ولا يشغّل FastAPI.
 
-**القرار المتبقي قبل نشر متصل فعليًا:** ربط Firebase Admin وتسجيل FCM tokens
-واختباره على هاتف، ثم PostgreSQL/Redis واختبارات حمل إذا تقرر تشغيل عدة workers.
-هذه متطلبات نشر، بينما عرض MVP المحلي قابل للتشغيل وفق runbook.
+- **المتبقي من P4 ليس دور الـ backend** بل دور مسؤول AI: تدريب preictal والتقييم
+  patient-independent. إعلان المصدر والعتبات وسجل outcomes منجز في backend.
+- **المقاييس وrate limiting وDeviceHub داخل العملية:** عند تشغيل عدة workers يجب
+  نقل الحالة المشتركة إلى Redis أو خدمة مناسبة. للـMVP يجب تثبيت Uvicorn على worker
+  واحد.
+- **التسليم at-least-once:** تعطّل بعد الإرسال قد يكرر الإشعار. هذا عقد مقصود
+  وموثق، ويجب أن تتعامل الواجهة مع `alert_id` لمنع الإظهار المكرر قدر الإمكان.
+
+**القرار الحالي:** لا توجد ميزة backend أساسية ناقصة تمنع عرض MVP محليًا بقاعدة
+SQLite وقناة `stub`. العرض الذي يدعي Push حقيقي يحتاج اختبار FCM الفعلي أولًا.
+النشر العام يحتاج HTTPS وأسرارًا ونسخًا احتياطيًا واختبار استعادة. أما PostgreSQL
+وRedis فهما مشروطان بقرار Supabase أو تعدد العمليات، وليسَا شرطًا لعرض خادم واحد.
 
 ## 15. الملفات التي شملتها الدفعة الحالية والملفات المتوقعة لاحقًا
 
@@ -545,6 +564,10 @@ Flutter / Admin Dashboard / Head Device
 ### دفعة P3 (التنبيهات والتشغيل)
 
 - `backend/app/alert_outbox.py` — صندوق الصادر مع backoff وحالة `dead`
+- `backend/app/notification_delivery.py` — محولا `stub` وFirebase Admin FCM
+- `backend/app/push_tokens_store.py` — تسجيل الرموز وحل مستلمي المريض والأدوار
+- `backend/app/routers/notifications.py` — register/delete لتوكن المستخدم المصادق
+- `backend/alembic/versions/20260816_04_push_tokens.py` — جدول وفهارس FCM tokens
 - `backend/app/observability.py` — المقاييس والتسجيل المنظم
 - `backend/app/middleware.py` — `X-Request-ID` وسجل الطلبات
 - `backend/app/routers/alerts.py` — `/alerts/outbox`
@@ -558,3 +581,96 @@ Flutter / Admin Dashboard / Head Device
 - `.github/workflows/ci.yml` — backend tests وstartup check وdashboard وFlutter.
 - `docs/backend-runbook.md` — التشغيل والترحيل والنسخ الاحتياطي وحدود النشر.
 - `backend/.env.example` — مرجع متغيرات التشغيل دون أسرار حقيقية.
+
+## 16. قائمة العمل المتبقي لمسؤول الـbackend
+
+القائمة التالية هي الحكم التنفيذي بعد فحص الكود والوثائق. البنود ليست بدرجة
+واحدة؛ بعضها شرط للعرض، وبعضها شرط فقط إذا تغيرت بنية النشر.
+
+### A. مطلوب قبل ادعاء أن Push يعمل فعليًا
+
+1. ينشئ مسؤول Flutter/Firebase تطبيق Android مطابقًا لـ`applicationId` الحالي
+   ويضع `mobile/android/app/google-services.json` محليًا.
+2. يجهز مسؤول backend بيانات اعتماد Firebase Admin خارج المستودع، ويضبط
+   `NOTIFICATION_CHANNEL=fcm` و`FIREBASE_CREDENTIALS` على الخادم.
+3. يسجل دخول مستخدم فعلي من Flutter، ويتأكد من نجاح
+   `POST /notifications/device-token` ومن وجود صف فعال في `push_tokens`.
+4. يولد تنبيه `high_risk` ويتأكد من: وصول الإشعار في foreground وbackground،
+   وتحول outbox إلى `sent`، وحذف token غير الصالح تلقائيًا.
+5. يعيد الاختبار على شبكة ضعيفة وبعد restart للخادم. المسؤولية هنا مشتركة بين
+   backend وFlutter؛ لا يمكن إغلاقها باختبار unit فقط.
+
+### B. مطلوب قبل نشر FastAPI على الإنترنت
+
+1. يضبط `APP_ENV=production` وأسرار JWT/enrollment والمدير و`CORS_ORIGINS` من Secret
+   Manager أو متغيرات الخادم، ويمنع legacy device auth.
+2. ينشر FastAPI خلف HTTPS، ويشغل Alembic قبل الخدمة، ويستخدم worker واحد ما دامت
+   `DeviceHub` وrate limits والمقاييس داخل العملية.
+3. ينفذ فحص قبول لـ`/health/live` و`/health/ready` ونسخة احتياطية ثم restore،
+   ويراقب outbox و`dead` entries ومساحة القرص.
+4. ينفذ load test بمعدل الجهاز المتوقع ويثبت p95 latency وحد الطلبات المناسبين.
+
+### C. مطلوب فقط عند اعتماد Supabase/PostgreSQL
+
+**منفّذ في الكود:**
+
+1. ~~استبدال محرك SQLite~~ — `database.py` يقرأ `DATABASE_URL` مع pooling
+   (`DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_RECYCLE_SECONDS`)، ويحصر PRAGMA
+   وconnection args على SQLite، ويبقي SQLite للاختبارات والـdemo.
+2. ~~إزالة collation `NOCASE`~~ — صار مقيّدًا بـSQLite، وأضيف فهرس فريد على
+   `lower(username)` في الترحيل `20260817_05` يعمل على القاعدتين.
+3. ~~استبدال `sqlalchemy.dialects.sqlite.insert`~~ — أضيف `upsert()` مركزي يختار
+   لهجة الـINSERT، ويستخدمه `cloud_store` و`alert_outbox` و`push_tokens_store`.
+4. ~~إضافة driver~~ — `psycopg[binary]` في `requirements.txt`، مع تطبيع
+   `postgres(ql)://` إلى `postgresql+psycopg://`. يبقى تمرير `DATABASE_URL` كسر
+   خارج Git واشتراط `sslmode=require` وفق connection string من Sohobcom.
+5. ~~تشغيل Alembic من قاعدة فارغة ثم مجموعة الاختبارات عليها~~ — أضيف
+   `TEST_DATABASE_URL` (متغير منفصل عن `DATABASE_URL` لأن الاختبارات تنفّذ
+
+   `TRUNCATE`)، ووظيفة CI **Backend tests (PostgreSQL)** تشغّل `alembic upgrade
+   head` ثم المجموعة نفسها ثم startup check على PostgreSQL 16 حقيقي في كل push.
+   كذلك `explicit_url` يمنع اختبارات الترحيل — التي تنفّذ `downgrade base` — من
+   إسقاط جداول القاعدة الحقيقية عند تشغيل المجموعة على PostgreSQL.
+7. ~~تنفيذ ETL~~ — `backend/migrate_sqlite_to_postgres.py`: نسخ بترتيب المفاتيح
+   الأجنبية داخل transaction واحدة، مصدر SQLite مفتوح `mode=ro`، تحويل booleans،
+   إعادة ضبط sequences بـ `setval` (وإلا فشل أول INSERT بتعارض مفتاح)، ومقارنة
+   عدد الصفوف مع خروج غير صفري عند أي اختلاف. مغطى في CI وبـ`--dry-run` محليًا.
+
+**متبقٍ (تشغيلي، يحتاج قاعدة الجهة المستضيفة):**
+
+6. اختبار transaction الخاصة بـreading/assessment/alert/outbox، التزامن، restart،
+   النسخ الاحتياطي والاستعادة على قاعدة الجهة المستضيفة قبل نقل بيانات حقيقية.
+   (ما يقابله على PostgreSQL معزول في CI؛ المتبقي هو الحدود الفعلية للمزود:
+   عدد الاتصالات، زمن الشبكة، وسياسة النسخ الاحتياطي في الخطة.)
+8. **الوصول إلى Supabase على Sohobcom غير متاح حاليًا.** فحص
+
+   `backend/deploy/check_db_connectivity.py` لمضيف
+   `supabase-3446.service.sohobcom.ye` أظهر أن 5432 و6543 مغلقان/محجوبان و443
+   فقط مفتوح، أي أن العنوان لوحة تحكم لا نقطة اتصال قاعدة. يلزم connection string
+   الحقيقي من زر **Connect**، أو فتح المنافذ، أو تنفيذ الترحيل من داخل شبكة
+   المزود. حتى ذلك الحين إثبات PostgreSQL يأتي من CI لا من هذا المضيف.
+
+
+> Supabase في هذه المعمارية قاعدة PostgreSQL مستضافة. لا يستضيف عملية FastAPI،
+> ولا يلزم أن يتصل Flutter بها مباشرة، ولا يلغي FCM تلقائيًا. تفاصيل القرار وخطة
+> الترحيل في `docs/supabase-migration-ar.md`، وخطة استضافة FastAPI في
+> `docs/backend-hosting.md`.
+
+### D. ليس ضمن مسؤول backend الحالية
+
+- تدريب نموذج preictal حقيقي ونتائج patient-independent مسؤولية AI.
+- المحاكي/الجهاز الفيزيائي مسؤولية زميل الجهاز، باستثناء عقد API وتوكن الجهاز.
+- UI وحالات الإشعار في Flutter مسؤولية Flutter، مع بقاء endpoint وعامل الإرسال
+  والـoutbox ومسح tokens ضمن backend.
+
+### E. تعريف «منجز» حسب سيناريو التسليم
+
+| السيناريو | حكم backend |
+| --- | --- |
+| عرض محلي: SQLite + stub + worker واحد | **جاهز وظيفيًا** بعد تشغيل الاختبارات وrunbook |
+| عرض Push حقيقي على Android | **غير مغلق** حتى نجاح اختبار FCM الفعلي أعلاه |
+| نشر عام على خادم واحد + SQLite | **ممكن تقنيًا** بعد بنود الإنتاج والنسخ الاحتياطي والحمل؛ SQLite ليس خيار التوسع |
+| نشر على Sohobcom Supabase/PostgreSQL | **مدعوم ومُختبر على PostgreSQL 16 في CI** (ترحيلات + كل الاختبارات + ETL)؛ متوقف على المزود: منافذ 5432/6543 للمضيف الحالي محجوبة (بند C8) |
+| عدة FastAPI workers | **غير جاهز** قبل Redis/حالة مشتركة أو إعادة تصميم الأجزاء داخل العملية |
+
+

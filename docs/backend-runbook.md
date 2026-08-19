@@ -90,19 +90,25 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 العملية؛ النشر متعدد workers يحتاج Redis، وقاعدة PostgreSQL هي الترقية المناسبة
 للنشر الفعلي متعدد العمليات.
 
+لخطة الاستضافة الكاملة، مقارنة VPS مع Firebase وXAMPP، تقدير الموارد، وقوالب
+`systemd` وNginx وربط Flutter ولوحة الإدارة، راجع `docs/backend-hosting.md`.
+
+متطلبات الخادم الأساسية في `requirements.txt`. ملف `requirements-ml.txt` يضيف
+PyTorch الاختياري فقط؛ إذا لم يثبت، يرجع المصنف تلقائيًا إلى `sklearn/rules`.
+
 ## 6. مراقبة التنبيهات
 
 `GET /alerts/outbox` و`GET /metrics` للمدير يعرضان pending/failed/dead. افحص
 السجلات التي تحمل `request_id` عند الخطأ. لا تحذف صفوف `dead` قبل توثيق السبب
 وإعادة الإرسال يدويًا.
 
-المسار الحالي يضمن التخزين وإعادة المحاولة، لكن `deliver_notification` ما زال
-موصلًا بمرسل `fcm_stub`. لا يُعد الإشعار واصلًا للهاتف حتى يتم تنفيذ واختبار:
-
-1. Firebase Admin credentials في secret manager.
-2. تسجيل FCM tokens وربطها بحسابات المستلمين.
-3. حل recipients إلى tokens وإرسال `messaging.send_each_for_multicast`.
-4. حذف tokens غير الصالحة واختبار فشل الشبكة والتكرار على جهاز فعلي.
+المسار الحالي يضمن التخزين وإعادة المحاولة، ويدعم مرسل Firebase Admin الفعلي عند
+ضبط `NOTIFICATION_CHANNEL=fcm`. يسجل تطبيق Android الرموز في مخزن خاص مرتبط
+بالحساب، ويحوّل backend المستلمين المصرح لهم إلى tokens، ويرسل من خلال
+`messaging.send_each_for_multicast`، ويحذف الرموز غير الصالحة. راجع
+`docs/firebase-setup.md` لإعداد بيانات الاعتماد واختبار جهاز فعلي. يبقى الاسم
+`POST /alerts/fcm-stub` للتوافق مع العملاء القدامى ولا يعني أن الإرسال Stub عند
+تفعيل قناة `fcm`.
 
 ## 7. حدود المسؤولية والحالة النهائية
 
@@ -110,6 +116,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 لقياس false alarms لاحقًا. تدريب وتقييم نموذج preictal ومحاكي الإشارات خارج نطاق
 الباكند. لا يجوز وصف heuristic الحالي كتنبؤ سريري مدرب أو النظام كجهاز طبي معتمد.
 
-المتبقي قبل نشر حقيقي: FCM فعلي، Firebase rules آمنة إن استُخدم Firestore، HTTPS
-وإدارة أسرار، PostgreSQL/Redis عند تعدد العمليات، واختبارات حمل واستعادة على بيئة
-النشر. هذه ليست عوائق لعرض MVP محلي مضبوط.
+المتبقي قبل نشر حقيقي: اختبار FCM على أجهزة Android فعلية، HTTPS وإدارة أسرار،
+PostgreSQL/Redis عند تعدد العمليات، واختبارات حمل واستعادة على بيئة النشر. تلزم
+Firebase rules آمنة فقط إذا استُخدم Firestore فعلًا؛ التخزين الحالي في SQLite.
+هذه ليست عوائق لعرض MVP محلي مضبوط.

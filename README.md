@@ -43,4 +43,8 @@ flutter run
 - `docs/graduation_project.md`
 - `docs/api.md`
 - `docs/backend-runbook.md`
+- `docs/backend-hosting.md`
+- `docs/firebase-setup.md`
+- `docs/supabase-migration-ar.md`
 - `docs/BACKEND_ANALYSIS_REPORT_AR.md`
+

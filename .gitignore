@@ -18,7 +18,7 @@ backend/data/*_store.json
 backend/data/*.db
 backend/data/*.db-shm
 backend/data/*.db-wal
-backend/data/*.sqlite
+backend/data/*.sqliten
 backend/data/*.sqlite3
 backend/data/*.pre-sqlite-*.bak
 
@@ -41,6 +41,7 @@ mobile/.pub-preload-cache/
 mobile/.idea/
 mobile/*.iml
 mobile/android/.gradle/
+mobile/android/.kotlin/
 mobile/android/local.properties
 mobile/ios/Pods/
 mobile/ios/.symlinks/
@@ -57,11 +58,24 @@ Thumbs.db
 **/google-services.json
 **/GoogleService-Info.plist
 **/serviceAccountKey.json
+**/*firebase-adminsdk*.json
+**/*firebase-service-account*.json
+**/*service-account-key*.json
 firebase_options.dart
 !mobile/lib/firebase_options.dart.example
 
+# Agent skills: `.agents/skills/` is the single committed copy. The per-tool
+# directories are junctions/symlinks to it created by `npx skills add`, so
+# committing them would duplicate every file (or break on other platforms).
+.claude/skills/
+.augment/
+.kiro/
+.qwen/
+.windsurf/
+
 # Misc
 *.log
+
 .coverage
 htmlcov/
 .pytest_cache/

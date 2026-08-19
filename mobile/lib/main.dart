@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart'
+    show debugPrint, defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:provider/provider.dart';
 
+import 'core/config.dart';
 import 'core/enums.dart';
 import 'features/auth/login_screen.dart';
 import 'features/caregiver/caregiver_home_screen.dart';
@@ -10,8 +14,20 @@ import 'providers/app_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Firebase is optional in demo mode. When DEMO_MODE=false, initialize Firebase here:
-  // await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // FCM is currently an Android-only integration. The Android native config
+  // comes from google-services.json, so no generated Dart options file is
+  // required for this target. Windows remains usable through backend polling.
+  if (!AppConfig.demoMode &&
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.android) {
+    try {
+      await Firebase.initializeApp();
+    } catch (error) {
+      // Keep the backend-driven app usable while Firebase client configuration
+      // is absent or invalid. NotificationService will skip token registration.
+      debugPrint('Firebase initialization skipped: $error');
+    }
+  }
   final appState = AppState();
   // init() guards its own risky steps, but never let an unexpected failure keep
   // the UI from launching — the login screen must always be reachable.
@@ -80,7 +96,9 @@ class RootShell extends StatelessWidget {
             child: Material(
               elevation: 6,
               borderRadius: BorderRadius.circular(12),
-              color: const Color(0xFFB7791F), // amber — forecast, not yet detected
+              color: const Color(
+                0xFFB7791F,
+              ), // amber — forecast, not yet detected
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
                 child: Row(
@@ -94,12 +112,17 @@ class RootShell extends StatelessWidget {
                           Text(
                             state.preAlert!.message,
                             style: const TextStyle(
-                                color: Colors.white, fontWeight: FontWeight.w600),
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             'إلغاء تلقائي خلال ${state.preAlertSecondsLeft} ثانية ثم إبلاغ المختصين',
-                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),

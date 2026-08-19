@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import alert_outbox
+from app import alert_outbox, notification_delivery
 from app.device_hub import DeviceHub
 from app.logging_setup import configure_logging
 from app.metrics import metrics
@@ -24,6 +24,7 @@ from app.routers import (
     device,
     health,
     model_info,
+    notifications,
     simulate,
 )
 
@@ -31,18 +32,10 @@ from app.routers import (
 def deliver_notification(payload: dict) -> None:
     """Deliver one queued alert.
 
-    Replace the body with the Firebase Admin SDK call in production. Raising is
-    the contract for "delivery failed": the outbox records the attempt and
-    retries with backoff, so failure is never silent.
+    The selected delivery adapter raises on failure; the outbox records the
+    attempt and retries with backoff, so failure is never silent.
     """
-    logging.getLogger("epilepsy.notify").info(
-        "dispatching alert",
-        extra={
-            "patient_id": payload.get("patient_id") or payload.get("patientId"),
-            "severity": payload.get("severity"),
-            "channel": "fcm_stub",
-        },
-    )
+    notification_delivery.deliver(payload)
     metrics.increment("notifications_delivered")
 
 
@@ -69,6 +62,8 @@ async def _drain_outbox_forever(interval: float) -> None:
 async def lifespan(app: FastAPI):
     configure_logging()
     validate_production_settings()
+    if settings.is_production:
+        notification_delivery.validate_configuration()
     app.state.classifier = RiskClassifier.load()
     app.state.device_hub = DeviceHub(window_size=128)
     logging.getLogger("epilepsy").info(
@@ -149,3 +144,4 @@ app.include_router(device.router)
 app.include_router(cloud_dataset.router)
 app.include_router(model_info.router)
 app.include_router(clinical.router)
+app.include_router(notifications.router)

@@ -14,11 +14,23 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _username_type() -> sa.String:
+    """`NOCASE` exists only in SQLite, so it is applied only there.
+
+    Case-insensitive uniqueness is enforced for every backend by the
+    `lower(username)` unique index added in revision 20260817_05.
+    """
+    if op.get_bind().dialect.name == "sqlite":
+        return sa.String(128, collation="NOCASE")
+    return sa.String(128)
+
+
 def upgrade() -> None:
     op.create_table(
         "users",
         sa.Column("id", sa.String(64), primary_key=True),
-        sa.Column("username", sa.String(128, collation="NOCASE"), nullable=False, unique=True),
+        sa.Column("username", _username_type(), nullable=False, unique=True),
+
         sa.Column("name", sa.String(256), nullable=False),
         sa.Column("role", sa.String(32), nullable=False),
         sa.Column("password_hash", sa.Text(), nullable=False),

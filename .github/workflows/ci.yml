@@ -62,8 +62,85 @@ jobs:
         # if any dependency is unhealthy.
         run: python startup_check.py
 
+  backend-postgres:
+    name: Backend tests (PostgreSQL)
+    # Deploying on Supabase means running on PostgreSQL, and a green SQLite run
+    # proves nothing about it: booleans, ON CONFLICT, sequences and the
+    # lower(username) unique index all behave differently. This job runs the
+    # exact same suite against a real server so those differences fail here
+    # instead of during the migration.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: epilepsy_test
+        ports: ['5432:5432']
+        # Without the health check the suite can start before the server accepts
+        # connections and fail for the wrong reason.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Apply migrations to PostgreSQL
+        # Run separately from the tests so a migration that is not
+        # PostgreSQL-compatible is reported as a migration failure.
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epilepsy_test
+        run: python -m alembic upgrade head
+
+      - name: Run the test suite against PostgreSQL
+        # TEST_DATABASE_URL (not DATABASE_URL) is the deliberate opt-in: the
+        # fixture TRUNCATEs between tests, so it must never be a real database.
+        env:
+          APP_ENV: demo
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epilepsy_test
+          OUTBOX_WORKER_ENABLED: '0'
+        run: python -m pytest tests -q
+
+      - name: Verify startup and readiness on PostgreSQL
+        env:
+          APP_ENV: demo
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epilepsy_test
+          OUTBOX_WORKER_ENABLED: '0'
+        run: python startup_check.py
+
+      - name: Verify the SQLite -> PostgreSQL migration script
+        # Proves the ETL path end to end: a fresh SQLite database is created by
+        # the app, copied over, and row counts are compared. --truncate is safe
+        # here because the target is this job's throwaway service container.
+        env:
+          APP_ENV: demo
+          OUTBOX_WORKER_ENABLED: '0'
+        run: |
+          SQLITE_DB_PATH=./etl-source.db python startup_check.py
+          SQLITE_DB_PATH=./etl-source.db \
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/epilepsy_test \
+            python migrate_sqlite_to_postgres.py --sqlite ./etl-source.db --truncate
+
   backend-quality:
     name: Backend lint
+
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

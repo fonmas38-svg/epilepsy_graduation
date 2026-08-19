@@ -1,4 +1,10 @@
-"""SQLAlchemy database boundary for accounts and monitoring data."""
+"""SQLAlchemy database boundary for accounts and monitoring data.
+
+Two backends are supported deliberately: SQLite for the local demo and the test
+suite, and PostgreSQL (e.g. a hosted Supabase project) for real deployments.
+`DATABASE_URL` selects PostgreSQL; without it the SQLite file path is used, so
+existing local workflows and `SQLITE_DB_PATH` isolation keep working unchanged.
+"""
 from __future__ import annotations
 
 import json
@@ -21,8 +27,11 @@ from sqlalchemy import (
     Text,
     create_engine,
     event,
+    func,
 )
 from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.sql.expression import Insert
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / "data" / "epilepsy.db"
@@ -33,7 +42,10 @@ users = Table(
     "users",
     metadata,
     Column("id", String(64), primary_key=True),
-    Column("username", String(128, collation="NOCASE"), nullable=False, unique=True),
+    # No column collation: `NOCASE` is SQLite-only. Case-insensitive usernames
+    # are enforced portably by the unique index on `lower(username)` below, and
+    # lookups must therefore compare on `lower(...)` as well.
+    Column("username", String(128), nullable=False, unique=True),
     Column("name", String(256), nullable=False),
     Column("role", String(32), nullable=False),
     Column("password_hash", Text, nullable=False),
@@ -69,6 +81,10 @@ assignments = Table(
     Column("assigned_by", String(64)),
     Column("assigned_at", String(64), nullable=False),
 )
+# Portable case-insensitive uniqueness: works on both SQLite and PostgreSQL,
+# unlike a NOCASE column collation.
+Index("ux_users_username_lower", func.lower(users.c.username), unique=True)
+
 Index("ix_assignments_doctor_id", assignments.c.doctor_id)
 
 caregiver_links = Table(
@@ -266,6 +282,25 @@ alert_outbox = Table(
 )
 Index("ix_alert_outbox_due", alert_outbox.c.status, alert_outbox.c.next_attempt_at)
 
+# FCM registration tokens are credentials-like routing data. Keep them outside
+# users.meta_json so /auth/me and admin profile responses can never expose them.
+push_tokens = Table(
+    "push_tokens",
+    metadata,
+    Column("id", String(64), primary_key=True),
+    Column(
+        "user_id",
+        String(64),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("token", Text, nullable=False, unique=True),
+    Column("platform", String(32), nullable=False, default="unknown"),
+    Column("created_at", String(64), nullable=False),
+    Column("updated_at", String(64), nullable=False),
+)
+Index("ix_push_tokens_user_id", push_tokens.c.user_id)
+
 store_imports = Table(
     "store_imports",
     metadata,
@@ -291,8 +326,40 @@ def database_path() -> Path:
     return DEFAULT_DB
 
 
+def configured_database_url() -> str | None:
+    """Return an explicit `DATABASE_URL` (PostgreSQL/Supabase) if configured."""
+    value = (os.getenv("DATABASE_URL") or "").strip()
+    return value or None
+
+
+def normalize_database_url(url: str) -> str:
+    """Accept the connection strings hosting panels hand out verbatim.
+
+    Supabase and similar dashboards show `postgres://` / `postgresql://`, which
+    SQLAlchemy maps to the psycopg2 driver. This project installs psycopg 3, so
+    the driver is pinned explicitly instead of failing at connect time.
+    """
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
 def database_url(path: Path | None = None) -> str:
+    configured = configured_database_url()
+    if configured:
+        return normalize_database_url(configured)
     return f"sqlite:///{(path or database_path()).as_posix()}"
+
+
+def is_sqlite_url(url: str) -> bool:
+    return url.startswith("sqlite")
+
+
+def _engine_key() -> str:
+    url = database_url()
+    return url if not is_sqlite_url(url) else str(database_path())
 
 
 def _configure_sqlite(dbapi_connection, _connection_record) -> None:
@@ -304,27 +371,68 @@ def _configure_sqlite(dbapi_connection, _connection_record) -> None:
     cursor.close()
 
 
+def _create_engine() -> Engine:
+    url = database_url()
+    if is_sqlite_url(url):
+        # Only SQLite needs a writable parent directory, thread-check opt-out,
+        # and the PRAGMA tuning applied on every new file handle.
+        database_path().parent.mkdir(parents=True, exist_ok=True)
+        engine = create_engine(
+            url,
+            future=True,
+            connect_args={"check_same_thread": False, "timeout": 5},
+            pool_pre_ping=True,
+        )
+        event.listen(engine, "connect", _configure_sqlite)
+        return engine
+    # PostgreSQL: a modest pool with recycling suits a single API process and
+    # stays well inside the connection limits of hosted plans and poolers.
+    return create_engine(
+        url,
+        future=True,
+        pool_pre_ping=True,
+        pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+        max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "5")),
+        pool_recycle=int(os.getenv("DB_POOL_RECYCLE_SECONDS", "1800")),
+    )
+
+
 def get_engine() -> Engine:
-    path = database_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    key = str(path)
+    key = _engine_key()
     with _engine_lock:
         engine = _engines.get(key)
         if engine is None:
-            engine = create_engine(
-                database_url(path),
-                future=True,
-                connect_args={"check_same_thread": False, "timeout": 5},
-                pool_pre_ping=True,
-            )
-            event.listen(engine, "connect", _configure_sqlite)
+            engine = _create_engine()
             _engines[key] = engine
         return engine
 
 
+def dialect_name() -> str:
+    return get_engine().dialect.name
+
+
+def upsert(table: Table, values: dict[str, object]) -> Insert:
+    """Dialect-aware INSERT that supports `on_conflict_*` clauses.
+
+    A SELECT-then-INSERT alternative would race whenever two devices report for
+    the same patient, so the conflict handling stays in the database.
+    """
+    if dialect_name() == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+
+        return postgresql_insert(table).values(**values)
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    return sqlite_insert(table).values(**values)
+
+
 def initialize_database() -> None:
     """Upgrade the selected database to the current Alembic revision once."""
-    key = str(database_path())
+    if os.getenv("RUN_MIGRATIONS_ON_STARTUP", "1") != "1":
+        # Production deployments run `alembic upgrade head` as a separate step so
+        # concurrent processes never race on schema changes.
+        return
+    key = _engine_key()
     with _engine_lock:
         if key in _initialized:
             return
@@ -333,7 +441,11 @@ def initialize_database() -> None:
 
         config = Config(str(ROOT / "alembic.ini"))
         config.set_main_option("sqlalchemy.url", database_url())
+        # The URL above is already the resolved one; tell env.py not to re-derive
+        # it, so its DATABASE_URL fallback stays reserved for the Alembic CLI.
+        config.attributes["explicit_url"] = True
         command.upgrade(config, "head")
+
         _initialized.add(key)
 
 

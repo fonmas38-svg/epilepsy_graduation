@@ -19,6 +19,7 @@ EXPECTED_TABLES = {
     "readings", "assessments", "alerts", "store_imports",
     "alert_outbox", "caregiver_links", "devices",
     "alert_acknowledgments", "outcomes",
+    "push_tokens",
 }
 
 
@@ -26,7 +27,12 @@ def _config(db_path) -> Config:
     cfg = Config(str(ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "alembic"))
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path.as_posix()}")
+    # These tests downgrade to `base`, i.e. drop every table. `explicit_url`
+    # stops env.py from redirecting them to DATABASE_URL when the suite is run
+    # against PostgreSQL (TEST_DATABASE_URL), which would wipe that database.
+    cfg.attributes["explicit_url"] = True
     return cfg
+
 
 
 @pytest.fixture

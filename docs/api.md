@@ -138,6 +138,19 @@ Demo token: `headband-demo-token`
 - `POST /admin/users` — create admin, doctor, patient, or caregiver.
 - `POST /admin/users/{id}/disable|enable` — account lifecycle; disabling revokes sessions.
 - `POST /admin/users/{id}/password` — reset password and revoke previous sessions.
+
+## Push notifications
+
+- `POST /notifications/device-token` — authenticated account registers its
+  current FCM token with `{ "token": "...", "platform": "android" }`.
+- `DELETE /notifications/device-token` — removes that token for the current
+  account; `GET /notifications/device-token/status` returns only a device count.
+
+Tokens are stored in a private SQL table and are never returned by `/auth/me` or
+admin user responses. The outbox resolves `patient`, `caregiver`, `doctor`, and
+explicit authorized user IDs against the patient's care graph before sending.
+Set `NOTIFICATION_CHANNEL=stub` for the local demo or `fcm` for Firebase Admin
+delivery. In production, startup rejects `stub`.
 - `POST /admin/assignments` / `DELETE /admin/assignments` — doctor-patient links.
 - `POST /admin/caregiver-links` / `DELETE /admin/caregiver-links` — caregiver-patient links.
 

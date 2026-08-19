@@ -1,0 +1,106 @@
+name: Path guard
+
+# يرفض أي Pull Request يخالف حدود المسارات المتفق عليها:
+#   1. لا ملفات جديدة في جذر المستودع (سبب مشكلة main.py/requirements.txt السابقة).
+#   2. المساهمون المحصورون في partners/** لا يعدّلون النواة (backend/mobile/...).
+#
+# هذا فحص برمجي وليس صلاحية. لا يمنع الدفع المباشر إلى فرع غير محمي؛ المنع الفعلي
+# يأتي من حماية الفرع + Fork/PR + Rulesets (راجع docs/repo-governance-ar.md).
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    name: Enforce path boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect changed files
+        id: changed
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          git diff --name-only "$BASE" "$HEAD" > changed.txt
+          echo "--- changed files ---"
+          cat changed.txt
+
+      # القائمة تُقرأ من متغير المستودع RESTRICTED_AUTHORS (أسماء مفصولة بمسافات).
+      # إن كان فارغًا يبقى الفحص الأول (منع ملفات الجذر) ساريًا على الجميع.
+      - name: Reject new files at repository root
+        run: |
+          # ملفات الجذر المسموح بها فقط (موجودة أصلًا ومقصودة).
+          ALLOWED_ROOT="README.md .gitignore previous_studies_software_focus.pdf software_architecture_plan.pdf"
+          FAIL=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              */*) continue ;;   # داخل مجلد — مسموح
+            esac
+            if ! printf '%s\n' $ALLOWED_ROOT | grep -qxF "$f"; then
+              echo "::error file=$f::ملف في جذر المستودع غير مسموح: $f — ضعه داخل المجلد المناسب (backend/ أو mobile/ أو partners/<your-folder>/)."
+              FAIL=1
+            fi
+          done < changed.txt
+          [ "$FAIL" -eq 0 ] || exit 1
+          echo "OK: لا ملفات جديدة في الجذر."
+
+      - name: Restrict scoped contributors to their own folder
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          RESTRICTED_AUTHORS: ${{ vars.RESTRICTED_AUTHORS }}
+          # المسارات المسموح بها للمساهمين المحصورين.
+          ALLOWED_PREFIXES: partners/
+        run: |
+          if [ -z "${RESTRICTED_AUTHORS:-}" ]; then
+            echo "RESTRICTED_AUTHORS غير مضبوط — تخطي هذا الفحص."
+            echo "لتفعيله: Settings > Secrets and variables > Actions > Variables > RESTRICTED_AUTHORS"
+            exit 0
+          fi
+          if ! printf '%s\n' $RESTRICTED_AUTHORS | grep -qxF "$AUTHOR"; then
+            echo "المساهم $AUTHOR غير محصور — تخطي."
+            exit 0
+          fi
+          echo "المساهم $AUTHOR محصور في: $ALLOWED_PREFIXES"
+          FAIL=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            OK=0
+            for p in $ALLOWED_PREFIXES; do
+              case "$f" in "$p"*) OK=1 ;; esac
+            done
+            if [ "$OK" -ne 1 ]; then
+              echo "::error file=$f::المسار خارج نطاقك المسموح: $f"
+              FAIL=1
+            fi
+          done < changed.txt
+          [ "$FAIL" -eq 0 ] || {
+            echo "هذا الـ PR يعدّل ملفات خارج $ALLOWED_PREFIXES. أعد التغييرات إلى مجلدك، أو اطلب مراجعة مالك المستودع."
+            exit 1
+          }
+          echo "OK: كل التغييرات داخل النطاق المسموح."
+
+      - name: Reject accidental secrets and build artifacts
+        run: |
+          FAIL=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              *google-services.json|*GoogleService-Info.plist|*serviceAccountKey.json|*firebase-adminsdk*.json|*service-account-key*.json|*.env)
+                echo "::error file=$f::ملف أسرار لا يجوز رفعه: $f"
+                FAIL=1 ;;
+              *node_modules/*|*/build/*|*.dart_tool/*|*.kotlin/*|*/__pycache__/*|*.pyc)
+                echo "::error file=$f::ملف ناتج بناء لا يُرفع: $f"
+                FAIL=1 ;;
+            esac
+          done < changed.txt
+          [ "$FAIL" -eq 0 ] || exit 1
+          echo "OK: لا أسرار ولا نواتج بناء."

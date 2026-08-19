@@ -1,0 +1,29 @@
+# CODEOWNERS — من يجب أن يوافق على تغيير كل مسار.
+#
+# مع تفعيل "Require review from Code Owners" في حماية فرع main، أي Pull Request
+# يمس مسارًا مملوكًا هنا لا يمكن دمجه دون موافقة مالكه.
+#
+# ملاحظة مهمة: CODEOWNERS تفرض *المراجعة*، ولا تمنع الدفع المباشر. المنع الفعلي
+# يأتي من ثلاثة إعدادات في واجهة GitHub (راجع docs/repo-governance-ar.md):
+#   1. حماية فرع main: PR إلزامي + منع force-push.
+#   2. إزالة صلاحية الكتابة عن المتعاونين الخارجيين واعتماد Fork + PR.
+#   3. (اختياري) Repository Ruleset بقاعدة Restricted file paths.
+# وطبقة رابعة برمجية: .github/workflows/path-guard.yml ترفض المسارات غير المسموحة.
+
+# الافتراضي: كل شيء مملوك لمالك المستودع.
+*                       @anaantm31-svg
+
+# النواة التشغيلية — لا تُعدّل دون مراجعة.
+/backend/               @anaantm31-svg
+/mobile/                @anaantm31-svg
+/admin-dashboard/       @anaantm31-svg
+/shared/                @anaantm31-svg
+/docs/                  @anaantm31-svg
+/.github/               @anaantm31-svg
+/.gitignore             @anaantm31-svg
+/README.md              @anaantm31-svg
+
+# أعمال أعضاء الفريق — معزولة في مجلداتها.
+# استبدل @teammate-username باسم مستخدم GitHub الفعلي لزميل المحاكي/العتاد.
+# /partners/hardware-sim/  @anaantm31-svg @teammate-username
+/partners/              @anaantm31-svg

@@ -298,7 +298,7 @@ workers؛ التنفيذ الحالي داخل العملية ومناسب لع�
 1. تشغيل `pytest` من جذر المستودع ليس موحدًا؛ `smoke_test.py` يُجمع بطريقة غير مناسبة ومسار `app` لا يضبط تلقائيًا.
 2. يوجد warning متعلق بإصدار `httpx` و`TestClient` ويجب تثبيت نسخ متوافقة.
 3. الإصدارات غير موحدة: README يشير إلى V2.1 بينما health يعيد 2.2.0.
-4. `docs/graduation_project.md` يحتوي مسارًا قديمًا `f:\end\mobile`.
+4. `docs/graduation_project.md` يحتوي مسارًا قديمًا `f:\end\mobile`. (أُغلق بأرشفة الملف محليًا — راجع `docs/README.md` §5.)
 5. توثيق hardware يقول إن النموذج مدرب على المحاكاة، بينما الخدمة الحالية تحمل Bonn فعليًا.
 6. التوثيق يصف Firebase، بينما مسار التشغيل المحلي يعتمد بدرجة كبيرة على JSON/in-memory؛ يجب وصف deployment profiles بوضوح.
 7. لا توجد CI ظاهرة لتشغيل اختبارات backend وFlutter وبناء dashboard تلقائيًا.

@@ -38,13 +38,26 @@ flutter run
 حساب أسرة/طبيب → زر السحابة لتحديث التنبيهات المشتركة.
 
 ## توثيق
-- `docs/mvp_without_hardware.md`
-- `docs/hardware_integration.md`
-- `docs/graduation_project.md`
-- `docs/api.md`
-- `docs/backend-runbook.md`
-- `docs/backend-hosting.md`
-- `docs/firebase-setup.md`
-- `docs/supabase-migration-ar.md`
-- `docs/BACKEND_ANALYSIS_REPORT_AR.md`
+
+**ابدأ من `docs/README.md`** — فهرس يربط كل ملف بالفصل الذي يغذّيه في ملف التوثيق
+النهائي، ويحدّد ما هو منفَّذ وما هو مخطَّط.
+
+- `docs/README.md` — فهرس التوثيق (نقطة البداية)
+- `docs/api.md` — مرجع الـ API
+- `docs/data-model.md` — نموذج البيانات ومخطّط SQL
+- `docs/BACKEND_ANALYSIS_REPORT_AR.md` — تحليل الـ backend الكامل
+- `docs/security.md` — الأمن والخصوصية
+- `docs/frontend-plan-ar.md` — خطة الواجهات (تصميم، لم يُنفَّذ)
+- `docs/model-requirements-ar.md` — متطلبات نموذج الذكاء الاصطناعي
+- `docs/simulator-requirements-ar.md` — متطلبات محاكي الجهاز
+- `docs/background-alerts-ar.md` — التنبيهات في الخلفية
+- `docs/hardware_integration.md` — بروتوكول جهاز الرأس
+- `docs/ADMIN_SYSTEM.md` — نظام مدير النظام
+- `docs/backend-runbook.md` — تشغيل الـ backend
+- `docs/backend-hosting.md` — الاستضافة
+- `docs/hosting-request-ar.md` — فصل خدمة النموذج
+- `docs/supabase-migration-ar.md` — الانتقال إلى PostgreSQL/Supabase
+- `docs/firebase-setup.md` — إعداد Firebase وFCM
+- `docs/ml-eval.md` — تقييم النموذج
+- `docs/repo-governance-ar.md` — حوكمة المستودع
 

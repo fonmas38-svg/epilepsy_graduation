@@ -73,6 +73,11 @@ firebase_options.dart
 .qwen/
 .windsurf/
 
+# أرشيف توثيق محلي: ملفات قديمة/مستبدَلة أُبقيت على القرص للرجوع إليها فقط،
+# ولا تُرفع إلى GitHub حتى لا تضلّل من يكتب ملف التوثيق النهائي للجامعة.
+# راجع docs/_archive/README.md و docs/README.md.
+docs/_archive/
+
 # Misc
 *.log
 

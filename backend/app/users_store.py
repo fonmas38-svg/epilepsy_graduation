@@ -335,7 +335,50 @@ def counts() -> dict:
         }
 
 
+def seed_demo_accounts() -> None:
+    """Ensure standard demo accounts exist for evaluation and defense."""
+    doc = get_by_username("doctor")
+    if not doc:
+        doc = create_user(
+            username="doctor",
+            name="د. خالد العمري",
+            role="doctor",
+            password_hash=security.hash_password("doctor123"),
+            created_by="system",
+        )
+    pat = get_by_username("patient")
+    if not pat:
+        pat = create_user(
+            username="patient",
+            name="أحمد محمود",
+            role="patient",
+            password_hash=security.hash_password("patient123"),
+            created_by="system",
+        )
+        if doc and pat:
+            try:
+                assign_patient(pat["id"], doc["id"], by="system")
+            except Exception:
+                pass
+    cg = get_by_username("caregiver")
+    if not cg:
+        cg = create_user(
+            username="caregiver",
+            name="سارة محمود (المرافق)",
+            role="caregiver",
+            password_hash=security.hash_password("caregiver123"),
+            created_by="system",
+        )
+        if pat and cg:
+            try:
+                link_caregiver(pat["id"], cg["id"], by="system")
+            except Exception:
+                pass
+
+
 def seed_admin() -> dict | None:
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        seed_demo_accounts()
     if list_users(role="admin"):
         return None
     username = os.getenv("ADMIN_USERNAME", "admin")

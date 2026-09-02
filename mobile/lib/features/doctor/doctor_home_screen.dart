@@ -205,6 +205,16 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
             icon: const Icon(Icons.cloud_download_outlined),
           ),
           IconButton(
+            tooltip: 'توجيهات ورسائل المرضى',
+            onPressed: () => Navigator.pushNamed(context, Routes.messages),
+            icon: const Icon(Icons.chat_bubble_outline),
+          ),
+          IconButton(
+            tooltip: 'التقارير الطبية وتصدير Excel',
+            onPressed: () => Navigator.pushNamed(context, Routes.reports),
+            icon: const Icon(Icons.table_chart_outlined),
+          ),
+          IconButton(
             tooltip: l.settingsTitle,
             onPressed: () =>
                 Navigator.pushNamed(context, Routes.patientSettings),

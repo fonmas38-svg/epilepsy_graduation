@@ -50,8 +50,9 @@ class AlertRouteArgs {
 
 /// Arguments for [Routes.doctorPatient] and [Routes.familyRespond].
 class PatientRouteArgs {
-  const PatientRouteArgs({required this.patientId, this.alertId});
+  const PatientRouteArgs({required this.patientId, this.alertId, this.patientName});
 
   final String patientId;
   final String? alertId;
+  final String? patientName;
 }

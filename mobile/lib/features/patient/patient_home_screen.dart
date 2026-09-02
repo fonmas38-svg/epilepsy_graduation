@@ -280,6 +280,16 @@ class _DashboardTabState extends State<_DashboardTab> {
               icon: const Icon(Icons.science_outlined),
             ),
           IconButton(
+            tooltip: 'توجيهات ورسائل الطبيب',
+            onPressed: () => Navigator.pushNamed(context, Routes.messages),
+            icon: const Icon(Icons.chat_bubble_outline),
+          ),
+          IconButton(
+            tooltip: 'التقارير الطبية وتصدير Excel',
+            onPressed: () => Navigator.pushNamed(context, Routes.reports),
+            icon: const Icon(Icons.table_chart_outlined),
+          ),
+          IconButton(
             tooltip: l.settings,
             onPressed: () =>
                 Navigator.pushNamed(context, Routes.patientSettings),
@@ -749,6 +759,16 @@ class _QuickActionsSection extends StatelessWidget {
         spacing: Gap.sm,
         runSpacing: Gap.sm,
         children: [
+          const _Action(
+            icon: Icons.table_chart_outlined,
+            label: 'التقارير وتصدير Excel',
+            route: Routes.reports,
+          ),
+          const _Action(
+            icon: Icons.chat_bubble_outline,
+            label: 'توجيهات ورسائل الطبيب',
+            route: Routes.messages,
+          ),
           _Action(
             icon: Icons.event_note_outlined,
             label: l.triggersTitle,

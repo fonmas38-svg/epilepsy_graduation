@@ -265,6 +265,30 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
         title: Text(_data?.profile?.name ?? l.patientFile),
         actions: [
           IconButton(
+            tooltip: 'توجيهات ورسائل المريض',
+            onPressed: () => Navigator.pushNamed(
+              context,
+              Routes.messages,
+              arguments: PatientRouteArgs(
+                patientId: pid,
+                patientName: _data?.profile?.name,
+              ),
+            ),
+            icon: const Icon(Icons.chat_bubble_outline),
+          ),
+          IconButton(
+            tooltip: 'التقارير الطبية وتصدير Excel',
+            onPressed: () => Navigator.pushNamed(
+              context,
+              Routes.reports,
+              arguments: PatientRouteArgs(
+                patientId: pid,
+                patientName: _data?.profile?.name,
+              ),
+            ),
+            icon: const Icon(Icons.table_chart_outlined),
+          ),
+          IconButton(
             tooltip: l.adjudicationTitle,
             onPressed: () =>
                 Navigator.pushNamed(context, Routes.doctorAdjudication),
@@ -1087,27 +1111,43 @@ class _ReportsSection extends StatelessWidget {
     return SectionCard(
       title: l.reportsSection,
       icon: Icons.description_outlined,
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: SizedBox(
-              height: A11y.minTouchTarget,
-              child: FilledButton.icon(
-                onPressed: enabled ? onPdf : null,
-                icon: const Icon(Icons.picture_as_pdf_outlined),
-                label: Text(l.exportPdf),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: A11y.minTouchTarget,
+                  child: FilledButton.icon(
+                    onPressed: enabled ? onPdf : null,
+                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                    label: Text(l.exportPdf),
+                  ),
+                ),
               ),
-            ),
+              Gap.hSm,
+              Expanded(
+                child: SizedBox(
+                  height: A11y.minTouchTarget,
+                  child: OutlinedButton.icon(
+                    onPressed: enabled ? onCsv : null,
+                    icon: const Icon(Icons.table_view_outlined),
+                    label: Text(l.exportCsv),
+                  ),
+                ),
+              ),
+            ],
           ),
-          Gap.hSm,
-          Expanded(
-            child: SizedBox(
-              height: A11y.minTouchTarget,
-              child: OutlinedButton.icon(
-                onPressed: enabled ? onCsv : null,
-                icon: const Icon(Icons.table_view_outlined),
-                label: Text(l.exportCsv),
-              ),
+          Gap.vSm,
+          SizedBox(
+            height: A11y.minTouchTarget,
+            child: OutlinedButton.icon(
+              onPressed: enabled
+                  ? () => Navigator.pushNamed(context, Routes.reports)
+                  : null,
+              icon: const Icon(Icons.table_chart_outlined),
+              label: const Text('مركز التقارير الطبية الشاملة وتصدير Excel'),
             ),
           ),
         ],

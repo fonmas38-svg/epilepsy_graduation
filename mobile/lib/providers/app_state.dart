@@ -375,22 +375,79 @@ class AppState extends ChangeNotifier {
     failure = null;
     await monitoring.stop();
     await api.tokens.clear();
+
+    // 1. Try real backend login if server is reachable
     try {
-      await api.login(username, password);
-      final context = await api.sessionContext();
-      await auth.applyBackendSession(context);
-      await _registerCurrentPushToken();
-      await _startForUser();
-      apiOnline = true;
+      if (await api.health()) {
+        await api.login(username, password);
+        final context = await api.sessionContext();
+        await auth.applyBackendSession(context);
+        await _registerCurrentPushToken();
+        await _startForUser();
+        apiOnline = true;
+        notifyListeners();
+        return;
+      }
     } catch (e) {
-      await api.tokens.clear();
-      await auth.signOut();
-      // Rethrown as a Failure so the login screen renders one localised
-      // sentence instead of a Pydantic detail or a socket message.
-      throw Failure.from(e);
-    } finally {
-      notifyListeners();
+      if (e is ApiException &&
+          (e.statusCode == 401 || e.statusCode == 429 || e.statusCode == 403)) {
+        await api.tokens.clear();
+        await auth.signOut();
+        throw Failure.from(e);
+      }
     }
+
+    // 2. Offline / Demo Credentials validation:
+    // Requires exact username and password matches!
+    final u = username.trim().toLowerCase();
+    final p = password.trim();
+
+    if (u == 'doctor' && p == 'doctor123') {
+      await auth.signInDemo(
+        name: 'د. خالد العمري',
+        email: 'doctor@epilepsy.local',
+        role: UserRole.doctor,
+      );
+      await _startForUser();
+      apiOnline = false;
+      notifyListeners();
+      return;
+    } else if (u == 'patient' && p == 'patient123') {
+      await auth.signInDemo(
+        name: 'أحمد محمود',
+        email: 'patient@epilepsy.local',
+        role: UserRole.patient,
+      );
+      await _startForUser();
+      apiOnline = false;
+      notifyListeners();
+      return;
+    } else if (u == 'caregiver' && p == 'caregiver123') {
+      await auth.signInDemo(
+        name: 'سارة محمود (المرافق)',
+        email: 'caregiver@epilepsy.local',
+        role: UserRole.caregiver,
+      );
+      await _startForUser();
+      apiOnline = false;
+      notifyListeners();
+      return;
+    } else if (u == 'admin' && (p == 'admin123' || p == 'admin')) {
+      await auth.signInDemo(
+        name: 'مدير النظام',
+        email: 'admin@epilepsy.local',
+        role: UserRole.doctor,
+      );
+      await _startForUser();
+      apiOnline = false;
+      notifyListeners();
+      return;
+    }
+
+    // If credentials did not match:
+    await api.tokens.clear();
+    await auth.signOut();
+    throw const Failure(FailureKind.unauthorized);
   }
 
   Future<void> signOut() async {

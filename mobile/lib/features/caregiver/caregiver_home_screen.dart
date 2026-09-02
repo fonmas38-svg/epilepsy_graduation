@@ -150,6 +150,16 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
             icon: const Icon(Icons.cloud_download_outlined),
           ),
           IconButton(
+            tooltip: 'توجيهات ورسائل الطبيب',
+            onPressed: () => Navigator.pushNamed(context, Routes.messages),
+            icon: const Icon(Icons.chat_bubble_outline),
+          ),
+          IconButton(
+            tooltip: 'التقارير الطبية وتصدير Excel',
+            onPressed: () => Navigator.pushNamed(context, Routes.reports),
+            icon: const Icon(Icons.table_chart_outlined),
+          ),
+          IconButton(
             tooltip: l.settingsTitle,
             onPressed: () =>
                 Navigator.pushNamed(context, Routes.patientSettings),
@@ -332,6 +342,35 @@ class _PatientRowTile extends StatelessWidget {
                     label: Text(l.openPatient),
                   ),
                 ),
+              ),
+              Gap.hXs,
+              IconButton(
+                tooltip: 'التقارير وتصدير Excel',
+                onPressed: enabled
+                    ? () => Navigator.pushNamed(
+                          context,
+                          Routes.reports,
+                          arguments: PatientRouteArgs(
+                            patientId: row.profile.patientId,
+                            patientName: row.profile.name,
+                          ),
+                        )
+                    : null,
+                icon: const Icon(Icons.table_chart_outlined),
+              ),
+              IconButton(
+                tooltip: 'الرسائل والتوجيهات',
+                onPressed: enabled
+                    ? () => Navigator.pushNamed(
+                          context,
+                          Routes.messages,
+                          arguments: PatientRouteArgs(
+                            patientId: row.profile.patientId,
+                            patientName: row.profile.name,
+                          ),
+                        )
+                    : null,
+                icon: const Icon(Icons.chat_bubble_outline),
               ),
               if (onRespond != null) ...[
                 Gap.hSm,

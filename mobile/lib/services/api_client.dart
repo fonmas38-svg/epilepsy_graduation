@@ -376,6 +376,132 @@ class ApiClient {
     }
   }
 
+  // ------------------------------------------------------------------ care (§10)
+  //
+  // The care resources (medications, triggers, emergency contacts, consents,
+  // timeline, adjudications) are reached through one generic request method
+  // rather than a typed method each. Two reasons:
+  //
+  // * The offline outbox stores a write as `{method, path, body}` and replays it
+  //   later. It needs exactly this shape; a typed method per endpoint would mean
+  //   a switch over path strings at replay time, which is the same thing with
+  //   more places to get wrong.
+  // * Several of these endpoints are new on the backend side. When one is not
+  //   deployed yet it answers 404, [Failure] maps that to «notFound», and the
+  //   caller keeps its locally-stored copy. Nothing crashes.
+
+  /// Authenticated JSON request with a single 401 retry, mirroring [_postAuthed]
+  /// for the verbs it does not cover.
+  Future<http.Response> _requestAuthed(
+    String method,
+    String path, {
+    Object? body,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final payload = body == null ? null : jsonEncode(body);
+
+    Future<http.Response> attempt() async {
+      final headers = await _headers();
+      final uri = _u(path);
+      return switch (method.toUpperCase()) {
+        'GET' => _client.get(uri, headers: headers).timeout(timeout),
+        'PUT' => _client
+            .put(uri, headers: headers, body: payload)
+            .timeout(timeout),
+        'PATCH' => _client
+            .patch(uri, headers: headers, body: payload)
+            .timeout(timeout),
+        'DELETE' => _client
+            .delete(uri, headers: headers, body: payload)
+            .timeout(timeout),
+        _ => _client
+            .post(uri, headers: headers, body: payload)
+            .timeout(timeout),
+      };
+    }
+
+    var r = await attempt();
+    if (r.statusCode == 401) {
+      final token = await tokens.bearer(forceRefresh: true);
+      if (token != null && token.isNotEmpty) r = await attempt();
+    }
+    return r;
+  }
+
+  /// Send one care write. Returns the decoded body when there is one.
+  ///
+  /// Throws [ApiException] on any non-2xx so the outbox can decide between
+  /// «retry later» and «give up», rather than silently treating a rejection as
+  /// success and deleting the queued item.
+  Future<Map<String, dynamic>> sendJson({
+    required String method,
+    required String path,
+    Map<String, Object?> body = const {},
+  }) async {
+    final r = await _requestAuthed(
+      method,
+      path,
+      body: method.toUpperCase() == 'GET' ? null : body,
+    );
+    if (r.statusCode < 200 || r.statusCode >= 300) {
+      throw ApiException(
+        _detail(r, 'تعذّر إتمام الطلب'),
+        statusCode: r.statusCode,
+      );
+    }
+    if (r.body.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(r.body);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      return {'data': decoded};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// GET a list resource. Tolerates both a bare JSON array and the
+  /// `{"items": [...]}` envelope the admin endpoints use.
+  Future<List<Map<String, dynamic>>> getList(String path) async {
+    final r = await _requestAuthed(
+      'GET',
+      path,
+      timeout: const Duration(seconds: 10),
+    );
+    if (r.statusCode < 200 || r.statusCode >= 300) {
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل البيانات'),
+        statusCode: r.statusCode,
+      );
+    }
+    final decoded = jsonDecode(r.body);
+    final raw = decoded is Map
+        ? (decoded['items'] ?? decoded['results'] ?? decoded['data'])
+        : decoded;
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  /// GET a single object resource.
+  Future<Map<String, dynamic>> getObject(String path) async {
+    final r = await _requestAuthed(
+      'GET',
+      path,
+      timeout: const Duration(seconds: 10),
+    );
+    if (r.statusCode < 200 || r.statusCode >= 300) {
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل البيانات'),
+        statusCode: r.statusCode,
+      );
+    }
+    final decoded = jsonDecode(r.body);
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    return const {};
+  }
+
   /// The active inference engine reported by the backend (cnn_lstm_fusion /
   /// sklearn / rules) plus deep-model metadata. Surfaced in the UI so users can
   /// see whether the deep model is live.

@@ -2,139 +2,196 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../core/enums.dart';
+import '../core/theme/app_colors.dart';
+import '../core/theme/app_spacing.dart';
+import '../core/theme/risk_view.dart';
+import '../core/ui/common.dart';
+import '../l10n/app_localizations.dart';
 import '../models/prediction_state.dart';
 
-/// Custom-painted seizure-forecast gauge.
+/// Seizure-forecast gauge: `P(preictal)` as a hand-painted half arc.
 ///
-/// fl_chart (^0.69.2) ships no radial-gauge widget, so this is a hand-painted
-/// arc. It renders `P(preictal)` on the SAME colour palette as [StatusBadge]
-/// (green→amber→red) so detection and prediction read as one system. Purely
-/// presentational — it never computes risk, only displays [PredictionState].
+/// fl_chart ships no radial gauge, so the arc is a [CustomPainter]. Three rules
+/// from `docs/frontend-plan-ar.md` apply:
+///
+/// * The colour comes from [AppColors] (§2.4), so it is legible in dark mode and
+///   identical to every other risk surface in the app.
+/// * The band is stated in **words and an icon** as well as colour (§2.4/§7).
+/// * The provenance is always visible, and a simulated forecast says so out loud
+///   (§11.2) — a demo number must never be able to pass for a model output.
 class PredictionGauge extends StatelessWidget {
   const PredictionGauge({super.key, required this.prediction});
 
   final PredictionState prediction;
 
-  // Shared risk palette (identical hex to StatusBadge) → one colour system.
-  static const _stable = Color(0xFF1B7F4E);
-  static const _watch = Color(0xFFB7791F);
-  static const _high = Color(0xFFB42318);
-
-  Color get _color => switch (prediction.band) {
-        RiskLabel.stable => _stable,
-        RiskLabel.watch => _watch,
-        RiskLabel.highRisk => _high,
-      };
-
-  String get _bandLabelAr => switch (prediction.band) {
-        RiskLabel.stable => 'استقرار',
-        RiskLabel.watch => 'ارتفاع محتمل',
-        RiskLabel.highRisk => 'خطر وشيك',
-      };
-
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final view = prediction.band.bandView;
+    final colors = AppColors.of(context, view);
     final pct = (prediction.preictalProb * 100).clamp(0, 100).round();
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      color: _color.withValues(alpha: 0.06),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.online_prediction, size: 18, color: _color),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text('احتمال اقتراب نوبة',
-                      style: Theme.of(context).textTheme.titleMedium),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            SizedBox(
-              height: 132,
-              child: CustomPaint(
-                painter: _GaugePainter(
-                  value: prediction.preictalProb.clamp(0.0, 1.0).toDouble(),
-                  color: _color,
-                  track: Theme.of(context).dividerColor.withValues(alpha: 0.25),
-                ),
-                child: Align(
-                  alignment: const Alignment(0, 0.45),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('$pct%',
-                          style: Theme.of(context)
-                              .textTheme
-                              .headlineMedium
-                              ?.copyWith(
-                                  color: _color, fontWeight: FontWeight.bold)),
-                      Text(_bandLabelAr,
-                          style: TextStyle(
-                              color: _color, fontWeight: FontWeight.w600)),
-                    ],
+
+    return SectionCard(
+      title: l.preictalProb,
+      icon: Icons.online_prediction_outlined,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Semantics(
+            label: '${l.preictalProb} $pct٪ — ${_bandLabel(view, l)}',
+            child: ExcludeSemantics(
+              child: SizedBox(
+                height: 132,
+                child: CustomPaint(
+                  painter: _GaugePainter(
+                    value: prediction.preictalProb.clamp(0.0, 1.0).toDouble(),
+                    color: colors.solid,
+                    track: theme.colorScheme.surfaceContainerHighest,
+                  ),
+                  child: Align(
+                    alignment: const Alignment(0, 0.45),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '$pct%',
+                          style: theme.textTheme.headlineMedium?.copyWith(
+                            color: colors.foreground,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              AppColors.iconFor(view),
+                              size: 16,
+                              color: colors.foreground,
+                            ),
+                            Gap.hXs,
+                            Text(
+                              _bandLabel(view, l),
+                              style: theme.textTheme.labelLarge?.copyWith(
+                                color: colors.foreground,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-            if (prediction.drivers != null && prediction.drivers!.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              _DriversRow(drivers: prediction.drivers!, color: _color),
-            ],
+          ),
+          if (prediction.drivers != null && prediction.drivers!.isNotEmpty) ...[
+            Gap.vMd,
+            Text(
+              l.drivers,
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            Gap.vXs,
+            _DriversRow(drivers: prediction.drivers!, view: view),
           ],
-        ),
+          Gap.vMd,
+          ForecastSourceNote(prediction: prediction),
+        ],
       ),
+    );
+  }
+
+  static String _bandLabel(RiskView view, AppLocalizations l) => switch (view) {
+    RiskView.safe => l.riskSafeTitle,
+    RiskView.caution => l.riskCautionTitle,
+    RiskView.danger => l.riskDangerTitle,
+    RiskView.unknown => l.riskUnknownTitle,
+  };
+}
+
+/// Where the forecast came from — and, when it is the offline heuristic rather
+/// than the trained model, an explicit warning that the number is simulated.
+///
+/// §11.2: «لا تُقدِّم مخرجات محاكاة كأنها نتائج نموذج». This is that rule as a
+/// widget, so no screen can render a forecast without carrying its provenance.
+class ForecastSourceNote extends StatelessWidget {
+  const ForecastSourceNote({super.key, required this.prediction});
+
+  final PredictionState prediction;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final isModel = prediction.isModel;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LabeledValue(
+          label: l.forecastSection,
+          value: isModel ? l.forecastSourceModel : l.forecastSourceHeuristic,
+          icon: isModel ? Icons.psychology_outlined : Icons.science_outlined,
+        ),
+        if (!isModel) ...[
+          Gap.vSm,
+          InfoNote(
+            text: l.forecastHeuristicWarning,
+            icon: Icons.warning_amber_rounded,
+            view: RiskView.caution,
+          ),
+        ],
+      ],
     );
   }
 }
 
-/// Auditable "why" (#22): per-channel contributions to the forecast, shown as
-/// compact chips so the prediction is explainable, not a black box.
+/// Auditable "why": per-channel contribution to the forecast, as chips, so the
+/// prediction is explainable instead of a black box.
 class _DriversRow extends StatelessWidget {
-  const _DriversRow({required this.drivers, required this.color});
+  const _DriversRow({required this.drivers, required this.view});
 
   final Map<String, double> drivers;
-  final Color color;
+  final RiskView view;
 
-  static const _labelsAr = {
-    'eeg': 'الدماغ',
-    'hr': 'النبض',
-    'motion': 'الحركة',
-    'ecg': 'القلب',
+  static String _label(String key, AppLocalizations l) => switch (key) {
+    'eeg' => l.driverEeg,
+    'hr' => l.driverHr,
+    'motion' => l.driverMotion,
+    'ecg' => l.driverEcg,
+    _ => key,
   };
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final colors = AppColors.of(context, view);
     final total = drivers.values.fold<double>(0, (a, b) => a + b);
     final entries = drivers.entries.where((e) => e.value > 0).toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    if (entries.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    if (entries.isEmpty) return const SizedBox.shrink();
+
     return Wrap(
-      spacing: 6,
-      runSpacing: 6,
+      spacing: Gap.xs,
+      runSpacing: Gap.xs,
       children: [
         for (final e in entries)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: Insets.chip,
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: color.withValues(alpha: 0.3)),
+              color: colors.container,
+              borderRadius: Radii.rPill,
+              border: Border.all(color: colors.border),
             ),
             child: Text(
               total > 0
-                  ? '${_labelsAr[e.key] ?? e.key} ${((e.value / total) * 100).round()}%'
-                  : (_labelsAr[e.key] ?? e.key),
-              style: TextStyle(
-                  color: color, fontSize: 11, fontWeight: FontWeight.w600),
+                  ? '${_label(e.key, l)} ${((e.value / total) * 100).round()}%'
+                  : _label(e.key, l),
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: colors.foreground,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
       ],
@@ -143,7 +200,11 @@ class _DriversRow extends StatelessWidget {
 }
 
 class _GaugePainter extends CustomPainter {
-  _GaugePainter({required this.value, required this.color, required this.track});
+  _GaugePainter({
+    required this.value,
+    required this.color,
+    required this.track,
+  });
 
   final double value; // 0..1
   final Color color;
@@ -152,8 +213,8 @@ class _GaugePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     const stroke = 16.0;
-    // Top "rainbow" arc: 180° from left (π) sweeping clockwise through the top
-    // (3π/2, up) to the right (2π). Value fills left→right = low→high.
+    // Half arc: 180° from the left (π) sweeping clockwise over the top to the
+    // right (2π), so the fill grows left→right = low→high.
     const startAngle = math.pi;
     const sweep = math.pi;
 
@@ -174,7 +235,12 @@ class _GaugePainter extends CustomPainter {
 
     canvas.drawArc(arcRect, startAngle, sweep, false, trackPaint);
     canvas.drawArc(
-        arcRect, startAngle, sweep * value.clamp(0.0, 1.0), false, valuePaint);
+      arcRect,
+      startAngle,
+      sweep * value.clamp(0.0, 1.0),
+      false,
+      valuePaint,
+    );
   }
 
   @override

@@ -1,17 +1,25 @@
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 
 import '../core/config.dart';
 import '../core/enums.dart';
+import '../core/errors/failure.dart';
+import '../core/theme/risk_view.dart';
+import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../models/prediction_state.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/care_service.dart';
 import '../services/local_database.dart';
 import '../services/location_service.dart';
 import '../services/medication_service.dart';
 import '../services/monitoring_service.dart';
 import '../services/notification_service.dart';
 import '../services/prealert_controller.dart';
+import '../services/biometric_service.dart';
+import '../services/emergency_sms_service.dart';
+import '../services/report_export_service.dart';
 import '../services/settings_service.dart';
 import '../services/signal_simulator.dart';
 import '../services/sync_service.dart';
@@ -22,9 +30,10 @@ class AppState extends ChangeNotifier {
     db = LocalDatabase.instance;
     api = ApiClient();
     settings = SettingsService();
-    sync = SyncService(db: db, api: api, auth: auth);
-    notifications = NotificationService();
+    sync = SyncService(db: db, api: api, auth: auth)..adoptLocalizations(_l10n);
+    notifications = NotificationService(fallbackTitle: _l10n.notificationFallbackTitle);
     medication = MedicationService(db: db, notifications: notifications);
+    care = CareService(api: api, db: db);
     monitoring = MonitoringService(
       db: db,
       simulator: SignalSimulator(),
@@ -46,7 +55,7 @@ class AppState extends ChangeNotifier {
       // log (#19) can record what we predicted, regardless of outcome.
       _preAlertPrediction = monitoring.latestPrediction;
       // Surface as an OS/local notification too (degrades to in-app banner).
-      notifications.showLocal('تنبيه مبكر', pre.message);
+      notifications.showLocal(l10n.severityPreAlert, pre.message);
       preAlerts.start(pre);
     };
     preAlerts.onUpdate = notifyListeners;
@@ -65,6 +74,29 @@ class AppState extends ChangeNotifier {
       await _logPredictionEvent('cancelled_false_alarm');
       notifyListeners();
     };
+    // Theme / language / sensitivity changes must repaint the app immediately,
+    // so the settings store's notifications are forwarded as our own.
+    settings.addListener(notifyListeners);
+    // Same for the care store: a contact saved offline, or an outbox item that
+    // finally went out, changes what several screens must show.
+    care.addListener(notifyListeners);
+  }
+
+  /// Localised strings for code paths that have no `BuildContext`.
+  ///
+  /// `MonitoringService` and `NotificationService` can raise a pre-alert while
+  /// no screen is mounted (a background tick, an FCM message). They still must
+  /// not embed Arabic literals — §2.3 — so the root widget hands the resolved
+  /// [AppLocalizations] down through [adoptLocalizations] on every locale
+  /// change, and Arabic is the compile-time default until it does.
+  AppLocalizations _l10n = const AppLocalizations(Locale('ar'));
+  AppLocalizations get l10n => _l10n;
+
+  void adoptLocalizations(AppLocalizations value) {
+    if (value.locale.languageCode == _l10n.locale.languageCode) return;
+    _l10n = value;
+    sync.adoptLocalizations(value);
+    notifications.fallbackTitle = value.notificationFallbackTitle;
   }
 
   late final AuthService auth;
@@ -76,8 +108,21 @@ class AppState extends ChangeNotifier {
   late final MedicationService medication;
   late final MonitoringService monitoring;
 
+  /// Offline-first store for contacts, medical card, diary, consents and
+  /// clinical documentation (§3.3–§3.6, §4, §5.4).
+  late final CareService care;
+
   /// Best-effort GPS for SOS (isolated; degrades to no coordinates).
   final LocationService location = LocationService();
+
+  /// Secure biometric authentication service.
+  final BiometricService biometrics = BiometricService();
+
+  /// Emergency SMS fallback service with GPS fix.
+  final EmergencySmsService emergencySms = const EmergencySmsService();
+
+  /// Medical report and Excel workbook exporter.
+  final ReportExportService reportExporter = ReportExportService();
 
   /// Owns the early pre-alert lifecycle + 30-second false-alarm cancel window.
   final PreAlertController preAlerts = PreAlertController();
@@ -88,7 +133,37 @@ class AppState extends ChangeNotifier {
   bool ready = false;
   bool apiOnline = false;
   AlertItem? lastAlert;
-  String? error;
+
+  /// The last non-fatal problem, as a typed [Failure] rather than a prebuilt
+  /// sentence. Screens render it through `ErrorState` / `AppSnack`, which is what
+  /// keeps §2.6 true: the message is chosen at paint time, in the active
+  /// language, and the technical detail stays in `debugDetail`.
+  Failure? failure;
+
+  void clearFailure() {
+    if (failure == null) return;
+    failure = null;
+    notifyListeners();
+  }
+
+  /// What the patient's status card should display right now (§3.1).
+  ///
+  /// Centralised so no screen invents its own freshness rule. When the head
+  /// device is the source and it is not connected, the newest cached label is
+  /// treated as unusable — a green badge fed by a disconnected sensor is exactly
+  /// the lie §11.1 forbids.
+  RiskView get riskView {
+    final assessment = monitoring.latestAssessment;
+    return RiskViewX.resolve(
+      label: assessment?.label,
+      observedAt: assessment?.timestamp,
+      dataAvailable: monitoring.source != SignalSource.headDevice ||
+          monitoring.deviceConnected,
+    );
+  }
+
+  /// When the displayed status was produced, for the «آخر تحديث …» line.
+  DateTime? get lastObservedAt => monitoring.latestAssessment?.timestamp;
 
   /// Active pre-alert (prediction layer) and its remaining cancel seconds.
   AlertItem? get preAlert => preAlerts.active;
@@ -128,8 +203,23 @@ class AppState extends ChangeNotifier {
     try {
       final fix = await location.currentFix();
       lastAlert = await sync.sendSos(pid, fix: fix, patientName: user?.name);
+
+      // Offline Emergency SMS Fallback: if offline, dispatch SMS to contacts directly
+      if (!await sync.isOnline) {
+        try {
+          final contacts = await db.emergencyContactsFor(pid);
+          final phones = contacts.map((c) => c.phone).where((p) => p.trim().isNotEmpty).toList();
+          if (phones.isNotEmpty) {
+            await emergencySms.sendEmergencySms(
+              phoneNumbers: phones,
+              patientName: user?.name ?? 'المريض',
+              fix: fix,
+            );
+          }
+        } catch (_) {}
+      }
     } catch (e) {
-      error = 'تعذّر إرسال الاستغاثة: $e';
+      failure = Failure.from(e);
     } finally {
       sosInProgress = false;
       notifyListeners();
@@ -169,7 +259,7 @@ class AppState extends ChangeNotifier {
     final key = '${now.hour}:${now.minute}';
     if (key == _reminderMinute) return;
     _reminderMinute = key;
-    medication.fireDueReminders(pid); // fire-and-forget
+    medication.fireDueReminders(pid, _l10n); // fire-and-forget
   }
 
   /// Backend engine reported by /model/info (cnn_lstm_fusion / sklearn / rules).
@@ -194,15 +284,16 @@ class AppState extends ChangeNotifier {
       if (e.isUnauthorized) {
         await api.tokens.clear();
         await auth.signOut();
-        error = 'انتهت جلسة الدخول. سجّل الدخول مرة أخرى.';
+        failure = const Failure(FailureKind.unauthorized);
       } else {
-        error = 'تعذّر استرجاع جلسة الدخول: $e';
+        failure = Failure.from(e);
       }
     } catch (e) {
-      error = 'تعذّر استرجاع جلسة الدخول: $e';
+      failure = Failure.from(e);
     }
     try {
       await notifications.init(
+        fallbackTitle: _l10n.notificationFallbackTitle,
         onMessage: (title, body) {
           lastAlert = AlertItem(
             id: 'fcm-${DateTime.now().millisecondsSinceEpoch}',
@@ -225,6 +316,24 @@ class AppState extends ChangeNotifier {
     if (apiOnline) {
       activeEngine = (await api.modelInfo())?['active_engine'] as String?;
     }
+
+    // Continuous network connectivity watcher: detects drops and auto-flushes on reconnection
+    Connectivity().onConnectivityChanged.listen((results) async {
+      final isNowConnected = results.any((r) => r != ConnectivityResult.none);
+      final health = isNowConnected ? await api.health() : false;
+      if (health != apiOnline) {
+        apiOnline = health;
+        notifyListeners();
+        if (apiOnline) {
+          final pid = monitoring.activePatientId ?? auth.currentUser?.uid;
+          if (pid != null) {
+            await sync.syncPending(pid);
+          }
+          await care.flushOutbox();
+        }
+      }
+    });
+
     ready = true;
     notifyListeners();
     if (auth.currentUser != null) {
@@ -237,7 +346,7 @@ class AppState extends ChangeNotifier {
     required String email,
     required UserRole role,
   }) async {
-    error = null;
+    failure = null;
     // Local demo sign-in always succeeds (no network needed). Everything after
     // it — JWT issuance, DB, monitoring — is best-effort and must not block the
     // user from reaching their dashboard.
@@ -246,18 +355,15 @@ class AppState extends ChangeNotifier {
     if (user != null) {
       try {
         final ok = await api.tokens.authenticate(role: role, subject: user.uid);
-        if (!ok) {
-          error =
-              'تعذّر الحصول على رمز الدخول من الخادم — يعمل التطبيق دون اتصال.';
-        }
+        if (!ok) failure = const Failure(FailureKind.offline);
       } catch (e) {
-        error = 'تعذّر الاتصال بالخادم ($e) — يعمل التطبيق دون اتصال.';
+        failure = Failure.from(e);
       }
     }
     try {
       await _startForUser();
     } catch (e) {
-      error = 'تم الدخول، لكن تعذّر بدء المراقبة: $e';
+      failure = Failure.from(e);
     }
     notifyListeners();
   }
@@ -266,7 +372,7 @@ class AppState extends ChangeNotifier {
     required String username,
     required String password,
   }) async {
-    error = null;
+    failure = null;
     await monitoring.stop();
     await api.tokens.clear();
     try {
@@ -279,7 +385,9 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       await api.tokens.clear();
       await auth.signOut();
-      rethrow;
+      // Rethrown as a Failure so the login screen renders one localised
+      // sentence instead of a Pydantic detail or a socket message.
+      throw Failure.from(e);
     } finally {
       notifyListeners();
     }
@@ -305,7 +413,15 @@ class AppState extends ChangeNotifier {
     await api.tokens.clear();
     await auth.signOut();
     lastAlert = null;
+    failure = null;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    settings.removeListener(notifyListeners);
+    care.removeListener(notifyListeners);
+    super.dispose();
   }
 
   Future<void> _startForUser() async {
@@ -320,6 +436,12 @@ class AppState extends ChangeNotifier {
     try {
       final profile = auth.patientById(patientId);
       if (profile != null) await medication.seedFromProfile(profile);
+    } catch (_) {}
+    // Care data loads from SQLite first, so the emergency screen is usable
+    // before the network is even tried. Best-effort: a failure here must never
+    // stop monitoring from starting.
+    try {
+      await care.loadFor(patientId);
     } catch (_) {}
     await monitoring.start(patientId);
     apiOnline = await api.health();
@@ -370,17 +492,33 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Pull the cloud copy for **every** patient this account can see.
+  ///
+  /// It used to pull `patients.first` only, so a doctor or a relative following
+  /// three people refreshed one of them and the other two silently kept whatever
+  /// this device already held — while the button said the list was up to date.
+  /// Everything written here lands in SQLite, which is what the per-patient list
+  /// screens read.
   Future<void> refreshFromCloud() async {
     final patients = auth.accessiblePatients();
     if (patients.isEmpty) return;
-    final patientId = patients.first.patientId;
+    for (final p in patients) {
+      await _refreshPatientFromCloud(p.patientId);
+    }
+    // Only the patient actually being monitored may repoint the monitoring
+    // service. `refresh` overwrites its app-wide latest reading, assessment and
+    // alert list, so calling it once per patient inside the loop would leave
+    // every screen that reads those fields showing whoever happened to be last.
+    final active = monitoring.activePatientId;
+    if (active != null) await monitoring.refresh(active);
+    notifyListeners();
+  }
+
+  Future<void> _refreshPatientFromCloud(String patientId) async {
     try {
       final remoteAlerts = await sync.pullCloudAlerts(patientId);
-      if (remoteAlerts.isNotEmpty) {
-        for (final a in remoteAlerts.reversed) {
-          await db.insertAlert(a);
-        }
-        await monitoring.refresh(patientId);
+      for (final a in remoteAlerts.reversed) {
+        await db.insertAlert(a);
       }
       // update status from cloud patient doc
       final body = await api.cloudPatient(patientId);
@@ -407,10 +545,10 @@ class AppState extends ChangeNotifier {
             'processingMs': latest['processingMs'] ?? 0,
           }),
         );
-        await monitoring.refresh(patientId);
       }
-    } catch (_) {}
-    notifyListeners();
+    } catch (_) {
+      // One patient's pull failing must not abandon the rest of the list.
+    }
   }
 
   Future<void> dismissAlertBanner() async {
@@ -424,4 +562,20 @@ class AppState extends ChangeNotifier {
   }
 
   List<PatientProfile> get patients => auth.accessiblePatients();
+
+  /// The patient whose data the app is currently showing. For a patient that is
+  /// themselves; for a doctor or family member it is the one being monitored.
+  String? get activePatientId =>
+      monitoring.activePatientId ?? auth.currentUser?.uid;
+
+  /// Point monitoring and the care store at a different patient — used by the
+  /// doctor's list (§5.1) and the family's patient cards (§4.1).
+  Future<void> selectPatient(String patientId) async {
+    if (patientId == monitoring.activePatientId) return;
+    try {
+      await care.loadFor(patientId);
+    } catch (_) {}
+    await monitoring.start(patientId);
+    notifyListeners();
+  }
 }

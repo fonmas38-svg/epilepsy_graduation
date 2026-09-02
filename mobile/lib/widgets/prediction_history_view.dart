@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import '../core/theme/app_colors.dart';
+import '../core/theme/app_spacing.dart';
+import '../core/theme/risk_view.dart';
+import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../providers/app_state.dart';
 
@@ -17,31 +21,29 @@ class PredictionHistoryView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     final db = context.read<AppState>().db;
     return FutureBuilder<List<PredictionEvent>>(
       future: db.predictionEventsFor(patientId),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
+            padding: EdgeInsets.symmetric(vertical: Gap.md),
             child: Center(child: CircularProgressIndicator()),
           );
         }
         final events = snap.data ?? const <PredictionEvent>[];
         if (events.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Text(
-              'لا توجد أحداث تنبؤ بعد. عند إطلاق تنبيه مبكر (وتصعيده أو إلغائه '
-              'خلال مهلة الـ30 ثانية) سيُسجَّل هنا كدليل على التنبؤ المسبق.',
-            ),
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: Gap.sm),
+            child: Text(l.noPredictionEvents),
           );
         }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _Summary(events: events),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.sm),
             ...events.map((e) => _EventTile(event: e)),
           ],
         );
@@ -59,6 +61,12 @@ class _Summary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final danger = AppColors.of(context, RiskView.danger).foreground;
+    final caution = AppColors.of(context, RiskView.caution).foreground;
+    final safe = AppColors.of(context, RiskView.safe).foreground;
+    final primary = Theme.of(context).colorScheme.primary;
+
     final escalated = events.where((e) => e.outcome == 'escalated').length;
     final cancelled =
         events.where((e) => e.outcome == 'cancelled_false_alarm').length;
@@ -70,26 +78,28 @@ class _Summary extends StatelessWidget {
         ? null
         : leads.reduce((a, b) => a + b) / leads.length;
     return Card(
-      color: const Color(0xFF1B4965).withValues(alpha: 0.06),
+      color: primary.withValues(alpha: 0.06),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(Gap.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${events.length} حدث تنبؤ مُسجَّل',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 6),
+            Text(
+              l.predictionEventsCount(events.length),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: Gap.xs),
             Wrap(
-              spacing: 8,
-              runSpacing: 6,
+              spacing: Gap.sm,
+              runSpacing: Gap.xs,
               children: [
-                _Stat(label: 'تصعيد', value: '$escalated', color: const Color(0xFFB42318)),
-                _Stat(label: 'إنذار كاذب', value: '$cancelled', color: const Color(0xFFB7791F)),
+                _Stat(label: l.escalatedShort, value: '$escalated', color: danger),
+                _Stat(label: l.falseAlarm, value: '$cancelled', color: caution),
                 if (avgLead != null)
                   _Stat(
-                    label: 'متوسط المهلة',
-                    value: '~${avgLead.toStringAsFixed(1)} د',
-                    color: const Color(0xFF1B7F4E),
+                    label: l.avgLeadTime,
+                    value: l.minutesApprox(avgLead.toStringAsFixed(1)),
+                    color: safe,
                   ),
               ],
             ),
@@ -110,14 +120,16 @@ class _Stat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: Gap.xs),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(Radii.pill),
         border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
-      child: Text('$label: $value',
-          style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+      child: Text(
+        '$label: $value',
+        style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
+      ),
     );
   }
 }
@@ -127,25 +139,33 @@ class _EventTile extends StatelessWidget {
 
   final PredictionEvent event;
 
-  (String, Color, IconData) get _outcome => switch (event.outcome) {
-        'escalated' => ('تصعيد إلى تنبيه', const Color(0xFFB42318), Icons.notifications_active),
-        'cancelled_false_alarm' =>
-          ('إلغاء (إنذار كاذب)', const Color(0xFFB7791F), Icons.cancel_schedule_send),
-        'onset_confirmed' =>
-          ('تأكيد بدء النوبة', const Color(0xFF7A1212), Icons.bolt),
-        _ => (event.outcome, const Color(0xFF1B4965), Icons.timeline),
-      };
+  (String, Color, IconData) _outcome(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final danger = AppColors.of(context, RiskView.danger).foreground;
+    final caution = AppColors.of(context, RiskView.caution).foreground;
+    final primary = Theme.of(context).colorScheme.primary;
+
+    return switch (event.outcome) {
+      'escalated' => (l.outcomeEscalated, danger, Icons.notifications_active),
+      'cancelled_false_alarm' => (l.outcomeFalseAlarm, caution, Icons.cancel_schedule_send),
+      'onset_confirmed' => (l.outcomeOnsetConfirmed, danger, Icons.bolt),
+      _ => (event.outcome, primary, Icons.timeline),
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
-    final (label, color, icon) = _outcome;
+    final l = AppLocalizations.of(context);
+    final (label, color, icon) = _outcome(context);
     final fmt = DateFormat('MM/dd HH:mm');
     final isModel = event.source == 'cnn_lstm_preictal';
     final parts = <String>[
-      'احتمالية ${(event.preictalProb * 100).toStringAsFixed(0)}%',
-      if (event.leadTimeMin != null) 'مهلة ~${event.leadTimeMin!.toStringAsFixed(1)} د',
-      if (event.horizonMin != null) 'أفق ${event.horizonMin!.toStringAsFixed(0)} د',
-      isModel ? 'نموذج عصبي' : 'محاكاة',
+      '${l.preictalProb}: ${(event.preictalProb * 100).toStringAsFixed(0)}%',
+      if (event.leadTimeMin != null)
+        '${l.leadTime}: ${l.minutesApprox(event.leadTimeMin!.toStringAsFixed(1))}',
+      if (event.horizonMin != null)
+        '${l.horizonShort}: ${l.minutes(event.horizonMin!.toStringAsFixed(0))}',
+      isModel ? l.forecastSourceModel : l.forecastSourceHeuristic,
     ];
     return Card(
       child: ListTile(

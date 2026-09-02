@@ -43,10 +43,6 @@ class PredictionState {
   /// Whether the forecast came from the real trained model vs. the heuristic.
   bool get isModel => source == 'cnn_lstm_preictal';
 
-  /// Human label for the forecast source (Arabic), for the sim-vs-model chip.
-  String get sourceLabelAr =>
-      isModel ? 'نموذج تنبؤ عصبي (CNN-LSTM)' : 'محاكاة تنبؤية';
-
   bool get hasLeadTime => leadTimeMin != null;
 
   /// Map the forecast probability onto the shared risk palette so the gauge

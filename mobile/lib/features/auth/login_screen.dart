@@ -2,8 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/enums.dart';
+import '../../core/errors/failure.dart';
+import '../../core/theme/app_spacing.dart';
+import '../../core/ui/common.dart';
+import '../../l10n/app_localizations.dart';
 import '../../providers/app_state.dart';
 
+/// Sign-in (§2.2 guard 1's destination).
+///
+/// The role dropdown belongs to demo mode only: a real sign-in gets its role
+/// from the backend session, never from a value the client picked. Letting the
+/// user choose it would make the role a client-side claim.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -17,6 +26,7 @@ class _LoginScreenState extends State<LoginScreen> {
   UserRole _role = UserRole.patient;
   bool _loading = false;
   bool _obscurePassword = true;
+  Failure? _failure;
 
   @override
   void dispose() {
@@ -25,39 +35,45 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  String _roleLabel(UserRole role, AppLocalizations l) => switch (role) {
+    UserRole.patient => l.rolePatient,
+    UserRole.caregiver => l.roleCaregiver,
+    UserRole.doctor => l.roleDoctor,
+  };
+
   Future<void> _submitAccount() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _failure = null;
+    });
     try {
-      final state = context.read<AppState>();
-      await state.signInWithPassword(
+      await context.read<AppState>().signInWithPassword(
         username: _usernameCtrl.text.trim(),
         password: _passwordCtrl.text,
       );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('تعذّر تسجيل الدخول: $e')));
-      }
+      // signInWithPassword throws a Failure; anything else is normalised here so
+      // the user still sees one localised sentence rather than an exception.
+      if (mounted) setState(() => _failure = Failure.from(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _submitDemo() async {
-    setState(() => _loading = true);
+    final l = AppLocalizations.of(context);
+    setState(() {
+      _loading = true;
+      _failure = null;
+    });
     try {
       await context.read<AppState>().signInDemo(
-        name: 'مستخدم تجريبي',
+        name: l.demoUserName,
         email: 'demo@epilepsy.local',
         role: _role,
       );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('تعذّر بدء العرض التجريبي: $e')));
-      }
+      if (mounted) setState(() => _failure = Failure.from(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -65,147 +81,153 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final canSubmit =
+        !_loading &&
+        _usernameCtrl.text.trim().isNotEmpty &&
+        _passwordCtrl.text.isNotEmpty;
+
     return Scaffold(
-      body: Container(
-        width: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topRight,
-            end: Alignment.bottomLeft,
-            colors: [Color(0xFF0B3D4A), Color(0xFF145C6B), Color(0xFFE8F3F1)],
-            stops: [0, 0.45, 1],
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: ListView(
-                padding: const EdgeInsets.all(24),
-                children: [
-                  const SizedBox(height: 24),
-                  Text(
-                    'Epilepsy Monitor',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.5,
-                    ),
+      // No gradient: the theme owns colour now, so this screen looks right in
+      // dark mode instead of forcing a light card onto a dark background (§2.4).
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: ListView(
+              padding: Insets.page,
+              children: [
+                Gap.vXl,
+                Icon(
+                  Icons.monitor_heart_outlined,
+                  size: 56,
+                  color: theme.colorScheme.primary,
+                ),
+                Gap.vMd,
+                Text(
+                  l.appTitle,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'مراقبة مرضى الصرع والتنبؤ المبكر بالنوبات',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.white.withValues(alpha: 0.9),
-                    ),
+                ),
+                Gap.vXs,
+                Text(
+                  l.appTagline,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
-                  const SizedBox(height: 32),
-                  Card(
-                    elevation: 0,
-                    color: Colors.white.withValues(alpha: 0.96),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          TextField(
-                            controller: _usernameCtrl,
-                            onChanged: (_) => setState(() {}),
-                            decoration: const InputDecoration(
-                              labelText: 'اسم المستخدم',
-                              prefixIcon: Icon(Icons.person_outline),
-                              border: OutlineInputBorder(),
-                            ),
+                ),
+                Gap.vXl,
+                Card(
+                  child: Padding(
+                    padding: Insets.card,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          controller: _usernameCtrl,
+                          onChanged: (_) => setState(() {}),
+                          textInputAction: TextInputAction.next,
+                          autofillHints: const [AutofillHints.username],
+                          decoration: InputDecoration(
+                            labelText: l.username,
+                            prefixIcon: const Icon(Icons.person_outline),
                           ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: _passwordCtrl,
-                            onChanged: (_) => setState(() {}),
-                            obscureText: _obscurePassword,
-                            onSubmitted: (_) =>
-                                _loading ? null : _submitAccount(),
-                            decoration: InputDecoration(
-                              labelText: 'كلمة المرور',
-                              prefixIcon: const Icon(Icons.lock_outline),
-                              border: OutlineInputBorder(),
-                              suffixIcon: IconButton(
-                                tooltip: _obscurePassword
-                                    ? 'إظهار كلمة المرور'
-                                    : 'إخفاء كلمة المرور',
-                                onPressed: () => setState(
-                                  () => _obscurePassword = !_obscurePassword,
-                                ),
-                                icon: Icon(
-                                  _obscurePassword
-                                      ? Icons.visibility
-                                      : Icons.visibility_off,
-                                ),
+                        ),
+                        Gap.vMd,
+                        TextField(
+                          controller: _passwordCtrl,
+                          onChanged: (_) => setState(() {}),
+                          obscureText: _obscurePassword,
+                          autofillHints: const [AutofillHints.password],
+                          onSubmitted: (_) => canSubmit ? _submitAccount() : null,
+                          decoration: InputDecoration(
+                            labelText: l.password,
+                            prefixIcon: const Icon(Icons.lock_outline),
+                            suffixIcon: IconButton(
+                              tooltip: _obscurePassword
+                                  ? l.showPassword
+                                  : l.hidePassword,
+                              onPressed: () => setState(
+                                () => _obscurePassword = !_obscurePassword,
+                              ),
+                              icon: Icon(
+                                _obscurePassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
                               ),
                             ),
                           ),
-                          const SizedBox(height: 20),
-                          FilledButton.icon(
-                            onPressed:
-                                _loading ||
-                                    _usernameCtrl.text.trim().isEmpty ||
-                                    _passwordCtrl.text.isEmpty
-                                ? null
-                                : _submitAccount,
-                            icon: const Icon(Icons.login),
-                            label: _loading
+                        ),
+                        if (_failure != null) ...[
+                          Gap.vMd,
+                          InfoNote(
+                            text: _failure!.message(l),
+                            icon: _failure!.icon,
+                            view: _failure!.tone,
+                          ),
+                        ],
+                        Gap.vLg,
+                        SizedBox(
+                          height: A11y.minTouchTarget,
+                          child: FilledButton.icon(
+                            onPressed: canSubmit ? _submitAccount : null,
+                            icon: _loading
                                 ? const SizedBox(
-                                    height: 20,
-                                    width: 20,
+                                    height: 18,
+                                    width: 18,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
                                     ),
                                   )
-                                : const Text('تسجيل الدخول'),
+                                : const Icon(Icons.login),
+                            label: Text(l.signIn),
                           ),
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 16),
-                            child: Divider(),
-                          ),
-                          DropdownButtonFormField<UserRole>(
-                            initialValue: _role,
-                            decoration: const InputDecoration(
-                              labelText: 'الدور',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: UserRole.values
-                                .map(
-                                  (r) => DropdownMenuItem(
-                                    value: r,
-                                    child: Text(r.labelAr),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (v) =>
-                                setState(() => _role = v ?? UserRole.patient),
-                          ),
-                          const SizedBox(height: 12),
-                          OutlinedButton.icon(
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: Gap.lg),
+                          child: Divider(),
+                        ),
+                        DropdownButtonFormField<UserRole>(
+                          initialValue: _role,
+                          decoration: InputDecoration(labelText: l.roleLabel),
+                          items: [
+                            for (final r in UserRole.values)
+                              DropdownMenuItem(
+                                value: r,
+                                child: Text(_roleLabel(r, l)),
+                              ),
+                          ],
+                          onChanged: _loading
+                              ? null
+                              : (v) =>
+                                    setState(() => _role = v ?? UserRole.patient),
+                        ),
+                        Gap.vMd,
+                        SizedBox(
+                          height: A11y.minTouchTarget,
+                          child: OutlinedButton.icon(
                             onPressed: _loading ? null : _submitDemo,
                             icon: const Icon(Icons.science_outlined),
-                            label: const Text('دخول تجريبي'),
+                            label: Text(l.signInDemo),
                           ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'الحسابات الحقيقية تُنشأ من لوحة الإدارة. وضع العرض يعمل دون حساب.',
-                            style: Theme.of(context).textTheme.bodySmall,
-                            textAlign: TextAlign.center,
+                        ),
+                        Gap.vSm,
+                        Text(
+                          l.demoNote,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),

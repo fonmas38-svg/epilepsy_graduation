@@ -1,8 +1,10 @@
+import 'dart:ui';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:uuid/uuid.dart';
 
 import '../core/config.dart';
 import '../core/enums.dart';
+import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../models/prediction_state.dart';
 import 'api_client.dart';
@@ -18,6 +20,12 @@ class SyncService {
   final ApiClient api;
   final AuthService auth;
   final _uuid = const Uuid();
+
+  AppLocalizations _l10n = const AppLocalizations(Locale('ar'));
+
+  void adoptLocalizations(AppLocalizations l) {
+    _l10n = l;
+  }
 
   /// Configurable seizure-prediction horizon (SPH, minutes) used by the offline
   /// forecast heuristic (#21). AppState keeps this in sync with the persisted
@@ -91,18 +99,30 @@ class SyncService {
     if (assessment.label == RiskLabel.highRisk) return null; // already detected
 
     final lead = prediction.leadTimeMin;
-    final leadAr = lead == null
-        ? ''
-        : ' خلال ~${lead >= 10 ? lead.toStringAsFixed(0) : lead.toStringAsFixed(1)} دقيقة';
+    final headline = lead == null
+        ? _l10n.activeAlertHeadlineNoLead
+        : _l10n.activeAlertHeadline(
+            lead >= 10 ? lead.toStringAsFixed(0) : lead.toStringAsFixed(1),
+          );
     return AlertItem(
       id: _uuid.v4(),
       patientId: reading.patientId,
       timestamp: DateTime.now(),
       severity: 'pre_alert',
-      message:
-          'نوبة محتملة$leadAr — يمكن الإلغاء خلال 30 ثانية إذا كان إنذاراً كاذباً.',
+      message: '$headline — ${_l10n.preAlertCancelWindowNote}',
       recipients: const ['patient'],
     );
+  }
+
+  /// Maximum duration (minutes) a seizure is considered active/in-need of immediate rescue.
+  /// If an offline event is evaluated past this window, it is logged as completed
+  /// without triggering retroactive frantic alerts to caregivers.
+  static const int activeSeizureRescueWindowMin = 5;
+
+  /// Check whether the seizure event is still within the active rescue window.
+  bool isWithinRescueWindow(DateTime eventTime) {
+    final diff = DateTime.now().difference(eventTime).inMinutes;
+    return diff <= activeSeizureRescueWindowMin;
   }
 
   /// Escalate a pre-alert that was NOT cancelled within the window: persist it
@@ -112,14 +132,20 @@ class SyncService {
     VitalReading reading,
     AlertItem preAlert,
   ) async {
+    final stillActive = isWithinRescueWindow(preAlert.timestamp);
+    final statusNote = stillActive
+        ? '${_l10n.preAlertNotCancelled} ${preAlert.message}'
+        : 'انقضت فترة النوبة وسُجلت في السجل كمنتهية دون إشعار متأخر.';
+
     final escalated = AlertItem(
       id: preAlert.id,
       patientId: preAlert.patientId,
       timestamp: DateTime.now(),
-      severity: 'critical',
-      message:
-          'لم يتم إلغاء التنبيه المبكر — يُرجى الاطمئنان على المريض. ${preAlert.message}',
-      recipients: const ['patient', 'caregiver', 'doctor'],
+      severity: stillActive ? 'critical' : 'resolved',
+      message: statusNote,
+      recipients: stillActive
+          ? const ['patient', 'caregiver', 'doctor']
+          : const ['patient'],
     );
     await db.insertAlert(escalated);
     if (await isOnline) {
@@ -149,17 +175,17 @@ class SyncService {
     String? patientName,
   }) async {
     final who = (patientName == null || patientName.isEmpty)
-        ? 'المريض'
+        ? _l10n.thePatient
         : patientName;
     final location = fix == null
-        ? 'تعذّر تحديد الموقع (بدون إحداثيات).'
-        : 'الموقع: ${fix.mapsUrl}';
+        ? _l10n.locationUnavailable
+        : _l10n.locationIs(fix.mapsUrl);
     final alert = AlertItem(
       id: _uuid.v4(),
       patientId: patientId,
       timestamp: DateTime.now(),
       severity: 'critical',
-      message: 'استغاثة SOS من $who — طلب مساعدة فورية. $location',
+      message: 'SOS ($who) — ${_l10n.sosMessageSuffix} $location',
       recipients: const ['caregiver', 'doctor'],
     );
     await db.insertAlert(alert);
@@ -216,8 +242,7 @@ class SyncService {
       timestamp: DateTime.now(),
       severity: remote?['severity'] as String? ?? 'critical',
       message:
-          remote?['message'] as String? ??
-          'تم اكتشاف خطر مرتفع لحدوث نوبة. يرجى التحقق من المريض فوراً.',
+          remote?['message'] as String? ?? _l10n.riskDangerBodyNoLead,
       recipients: List<String>.from(
         remote?['recipients'] as List? ??
             const ['patient', 'caregiver', 'doctor'],

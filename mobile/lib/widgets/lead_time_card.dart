@@ -2,15 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../core/theme/app_colors.dart';
+import '../core/theme/app_spacing.dart';
+import '../core/theme/risk_view.dart';
+import '../core/ui/common.dart';
+import '../l10n/app_localizations.dart';
 import '../models/prediction_state.dart';
 
-/// Lead-time countdown for the seizure forecast.
+/// Live lead-time countdown for the seizure forecast.
 ///
-/// Shows "نوبة محتملة خلال ~N دقيقة" with a live 1-second timer that interpolates
-/// the estimated lead-time *between* backend polls, so the countdown feels
-/// continuous rather than stepping only when a new [PredictionState] arrives.
-/// Also carries a simulated-vs-model chip (#23) reusing the `_EngineChip`
-/// visual pattern so the forecast's provenance is always visible.
+/// The backend is polled every few seconds, so a raw «~15 دقيقة» would sit
+/// frozen and then jump. This interpolates locally once per second between polls
+/// so the number stays truthful in between.
+///
+/// One second is the fastest anything in this app is allowed to change: §7
+/// forbids fast animation and flashing outright, so the text is re-rendered
+/// without any transition, and nothing here fades, slides or pulses.
 class LeadTimeCard extends StatefulWidget {
   const LeadTimeCard({super.key, required this.prediction});
 
@@ -22,14 +29,15 @@ class LeadTimeCard extends StatefulWidget {
 
 class _LeadTimeCardState extends State<LeadTimeCard> {
   Timer? _timer;
-  // Lead-time in seconds, interpolated locally between polls.
+
+  /// Remaining lead time in seconds, interpolated locally between polls.
   double? _remainingSec;
 
   @override
   void initState() {
     super.initState();
     _syncFrom(widget.prediction);
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _decay());
+    _restartTimer();
   }
 
   @override
@@ -39,6 +47,7 @@ class _LeadTimeCardState extends State<LeadTimeCard> {
     if (widget.prediction.leadTimeMin != old.prediction.leadTimeMin ||
         widget.prediction.preictalProb != old.prediction.preictalProb) {
       _syncFrom(widget.prediction);
+      _restartTimer();
     }
   }
 
@@ -49,10 +58,23 @@ class _LeadTimeCardState extends State<LeadTimeCard> {
         : (min * 60).clamp(0, 24 * 3600).toDouble();
   }
 
-  void _decay() {
+  /// No lead time ⇒ no timer. A ticker that only recomputes the same `null`
+  /// would wake the whole subtree once a second for nothing.
+  void _restartTimer() {
+    _timer?.cancel();
     if (_remainingSec == null) return;
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _decay());
+  }
+
+  void _decay() {
+    final current = _remainingSec;
+    if (current == null) return;
+    if (current <= 0) {
+      _timer?.cancel();
+      return;
+    }
     setState(() {
-      _remainingSec = (_remainingSec! - 1).clamp(0, 24 * 3600).toDouble();
+      _remainingSec = (current - 1).clamp(0, 24 * 3600).toDouble();
     });
   }
 
@@ -62,128 +84,72 @@ class _LeadTimeCardState extends State<LeadTimeCard> {
     super.dispose();
   }
 
-  String get _countdownAr {
+  String _countdown(AppLocalizations l) {
     final s = _remainingSec;
-    if (s == null) return 'غير متاح';
-    if (s <= 0) return 'وشيكة الآن';
+    if (s == null) return l.notSet;
+    if (s <= 0) return l.justNow;
     final totalMin = s / 60.0;
     if (totalMin >= 1) {
-      return '~${totalMin.toStringAsFixed(totalMin >= 10 ? 0 : 1)} دقيقة';
+      final n = totalMin >= 10
+          ? '${totalMin.round()}'
+          : totalMin.toStringAsFixed(1);
+      return l.minutesApprox(n);
     }
-    return '~${s.round()} ثانية';
+    return '~${s.round()} ${l.secondsUnit}';
   }
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final theme = Theme.of(context);
     final p = widget.prediction;
-    final predicted = p.predicted;
-    final accent = predicted
-        ? const Color(0xFFB42318)
-        : const Color(0xFF1B4965);
+    // «تنبيه مبكر» is a danger surface; a mere forecast readout is not.
+    final view = p.predicted ? RiskView.danger : RiskView.caution;
+    final colors = AppColors.of(context, view);
 
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      color: accent.withValues(alpha: 0.06),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  predicted
-                      ? Icons.notification_important
-                      : Icons.timer_outlined,
-                  size: 18,
-                  color: accent,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    predicted
-                        ? 'تنبيه مبكر: نوبة محتملة'
-                        : 'زمن الاستباق المتوقع',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: accent,
-                      fontWeight: FontWeight.w700,
+    return SectionCard(
+      title: p.predicted ? l.severityPreAlert : l.leadTime,
+      icon: p.predicted
+          ? Icons.notification_important_outlined
+          : Icons.timer_outlined,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Semantics(
+            label: '${l.leadTime} ${_countdown(l)}',
+            child: ExcludeSemantics(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Icon(
+                    AppColors.iconFor(view),
+                    size: 18,
+                    color: colors.foreground,
+                  ),
+                  Gap.hSm,
+                  Flexible(
+                    child: Text(
+                      _countdown(l),
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        color: colors.foreground,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Text(
-                  'نوبة محتملة خلال',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  _countdownAr,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    color: accent,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            if (p.horizonMin != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                'أفق التنبؤ: ${p.horizonMin!.toStringAsFixed(0)} دقيقة',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-            const SizedBox(height: 10),
-            _SourceChip(prediction: p),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Simulated-vs-model provenance chip (#23), mirroring the `_EngineChip` look
-/// used on the home screen so the forecast's source is honest and visible.
-class _SourceChip extends StatelessWidget {
-  const _SourceChip({required this.prediction});
-
-  final PredictionState prediction;
-
-  @override
-  Widget build(BuildContext context) {
-    final isModel = prediction.isModel;
-    final color = isModel ? Colors.indigo : Colors.teal;
-    final icon = isModel ? Icons.psychology : Icons.science_outlined;
-    return Align(
-      alignment: AlignmentDirectional.centerStart,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withValues(alpha: 0.4)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 6),
-            Text(
-              'مصدر التنبؤ: ${prediction.sourceLabelAr}',
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
+                ],
               ),
             ),
+          ),
+          if (p.horizonMin != null) ...[
+            Gap.vSm,
+            LabeledValue(
+              label: l.horizonTitle,
+              value: '${p.horizonMin!.toStringAsFixed(0)} ${l.minutesUnit}',
+              icon: Icons.schedule_outlined,
+            ),
           ],
-        ),
+        ],
       ),
     );
   }

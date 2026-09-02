@@ -21,6 +21,9 @@ that is not assigned to them; passwords are always stored hashed (PBKDF2).
 """
 from __future__ import annotations
 
+import time
+from collections import defaultdict
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -33,6 +36,31 @@ from app.auth import (
 )
 
 router = APIRouter(tags=["accounts"])
+
+# Anti-Brute-Force Rate Limiting (5 failed attempts per 15-minute window)
+_FAILED_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
+_MAX_FAILED_ATTEMPTS = 5
+_LOCKOUT_WINDOW_SECONDS = 900
+
+
+def _check_rate_limit(username: str) -> None:
+    now = time.time()
+    cutoff = now - _LOCKOUT_WINDOW_SECONDS
+    attempts = [t for t in _FAILED_ATTEMPTS[username] if t > cutoff]
+    _FAILED_ATTEMPTS[username] = attempts
+    if len(attempts) >= _MAX_FAILED_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Account temporarily locked for 15 minutes.",
+        )
+
+
+def _record_failed_attempt(username: str) -> None:
+    _FAILED_ATTEMPTS[username].append(time.time())
+
+
+def _reset_attempts(username: str) -> None:
+    _FAILED_ATTEMPTS.pop(username, None)
 
 require_admin = require_role("admin")
 require_doctor = require_role("doctor", "admin")
@@ -166,11 +194,14 @@ def _accessible_patient_views(user: dict) -> list[dict]:
 @router.post("/auth/login", response_model=LoginResponse)
 def login(body: LoginRequest):
     """Exchange username + password for a signed JWT (same tokens as /auth/token)."""
+    _check_rate_limit(body.username)
     user = users_store.get_by_username(body.username)
     if not user or not security.verify_password(body.password, user.get("passwordHash", "")):
+        _record_failed_attempt(body.username)
         raise HTTPException(status_code=401, detail="invalid username or password")
     if user.get("disabled"):
         raise HTTPException(status_code=403, detail="account disabled")
+    _reset_attempts(body.username)
     token = create_token(user["id"], user["role"], extra={"username": user["username"]})
     users_store.log(user["id"], user["role"], "login", target=user["id"])
     return LoginResponse(

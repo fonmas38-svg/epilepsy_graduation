@@ -7,10 +7,11 @@ import '../core/config.dart';
 /// Handles FCM registration and foreground notifications.
 /// In DEMO_MODE this is a no-op stub that logs locally.
 class NotificationService {
-  NotificationService();
+  NotificationService({this.fallbackTitle = 'Alert'});
 
   static String get platformName => defaultTargetPlatform.name;
 
+  String fallbackTitle;
   String? token;
   void Function(String token)? _onToken;
 
@@ -22,7 +23,9 @@ class NotificationService {
   Future<void> init({
     void Function(String title, String body)? onMessage,
     void Function(String token)? onToken,
+    String? fallbackTitle,
   }) async {
+    if (fallbackTitle != null) this.fallbackTitle = fallbackTitle;
     _sink = onMessage;
     _onToken = onToken;
     final isAndroid =
@@ -49,7 +52,7 @@ class NotificationService {
       _onToken?.call(refreshed);
     });
     FirebaseMessaging.onMessage.listen((message) {
-      final title = message.notification?.title ?? 'تنبيه';
+      final title = message.notification?.title ?? this.fallbackTitle;
       final body = message.notification?.body ?? '';
       onMessage?.call(title, body);
     });

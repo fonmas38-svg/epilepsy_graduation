@@ -1,31 +1,13 @@
-import 'package:flutter/material.dart';
+/// Moved to `core/ui/risk_indicator.dart`.
+///
+/// The old `StatusBadge` conveyed the risk level through **colour alone**, which
+/// `docs/frontend-plan-ar.md` §2.4 forbids outright (and §7 repeats for
+/// accessibility): a colour-blind reader, a greyscale screenshot or a
+/// screen-reader user got no information at all. Its replacement, [RiskBadge],
+/// always pairs colour with an icon *and* a word.
+///
+/// This file stays as a re-export so any import of the old path keeps resolving
+/// to exactly one implementation instead of two drifting copies.
+library;
 
-import '../core/enums.dart';
-
-class StatusBadge extends StatelessWidget {
-  const StatusBadge({super.key, required this.label});
-
-  final RiskLabel label;
-
-  Color get _color => switch (label) {
-        RiskLabel.stable => const Color(0xFF1B7F4E),
-        RiskLabel.watch => const Color(0xFFB7791F),
-        RiskLabel.highRisk => const Color(0xFFB42318),
-      };
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: _color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _color.withValues(alpha: 0.4)),
-      ),
-      child: Text(
-        label.labelAr,
-        style: TextStyle(color: _color, fontWeight: FontWeight.w700),
-      ),
-    );
-  }
-}
+export '../core/ui/risk_indicator.dart' show RiskBadge, RiskGauge, RiskStrip;

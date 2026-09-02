@@ -1,45 +1,171 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_spacing.dart';
+import '../../core/theme/risk_view.dart';
+import '../../core/ui/risk_indicator.dart';
+import '../../core/ui/states.dart';
+import '../../core/utils/time_ago.dart';
+import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 
+/// Display state for one alert row.
+///
+/// `AlertItem.severity` is a backend string (`critical` / `warning` /
+/// `pre_alert` / `info`). It is mapped here rather than in the model so the
+/// model stays free of presentation, and an unrecognised severity degrades to
+/// «غير معروف» instead of silently rendering as safe (§11.1).
+({RiskView view, String label}) alertSeverity(String raw, AppLocalizations l) =>
+    switch (raw.trim().toLowerCase()) {
+      'critical' || 'danger' || 'high_risk' => (
+        view: RiskView.danger,
+        label: l.severityCritical,
+      ),
+      'warning' || 'watch' => (
+        view: RiskView.caution,
+        label: l.severityWarning,
+      ),
+      'pre_alert' || 'prealert' || 'preictal' => (
+        view: RiskView.caution,
+        label: l.severityPreAlert,
+      ),
+      'info' || 'stable' => (view: RiskView.safe, label: l.severityInfo),
+      _ => (view: RiskView.unknown, label: l.unknown),
+    };
+
+/// A card for a single alert (§2.4's `AlertCard`).
+class AlertCard extends StatelessWidget {
+  const AlertCard({
+    super.key,
+    required this.alert,
+    this.onAcknowledge,
+    this.onTap,
+  });
+
+  final AlertItem alert;
+
+  /// Null hides the acknowledge button — e.g. for a read-only history list.
+  final Future<void> Function()? onAcknowledge;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final s = alertSeverity(alert.severity, l);
+    final colors = AppColors.of(context, s.view);
+    final when = TimeAgo.since(alert.timestamp, l);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: Gap.sm),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: Radii.rMd,
+        child: Padding(
+          padding: Insets.card,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    AppColors.iconFor(s.view),
+                    color: colors.foreground,
+                    size: 20,
+                  ),
+                  Gap.hSm,
+                  Expanded(
+                    child: RiskBadge(
+                      view: s.view,
+                      labelOverride: s.label,
+                      dense: true,
+                    ),
+                  ),
+                  Text(
+                    when,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              Gap.vSm,
+              Text(alert.message, style: theme.textTheme.bodyMedium),
+              Gap.vSm,
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      alert.acknowledged
+                          ? '${l.acknowledged}${alert.acknowledgedBy == null ? '' : ' — ${alert.acknowledgedBy}'}'
+                          : TimeAgo.stamp(alert.timestamp),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  if (!alert.acknowledged && onAcknowledge != null)
+                    SizedBox(
+                      height: A11y.minTouchTarget,
+                      child: TextButton.icon(
+                        onPressed: () => onAcknowledge!(),
+                        icon: const Icon(Icons.done),
+                        label: Text(l.acknowledge),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Scrollable alert list with a real empty state (§2.4's four states).
 class AlertsList extends StatelessWidget {
   const AlertsList({
     super.key,
     required this.alerts,
-    required this.onAcknowledge,
+    this.onAcknowledge,
+    this.onOpen,
+    this.padding = Insets.page,
+    this.shrinkWrap = false,
   });
 
   final List<AlertItem> alerts;
-  final Future<void> Function(String id) onAcknowledge;
+  final Future<void> Function(String id)? onAcknowledge;
+  final void Function(AlertItem alert)? onOpen;
+  final EdgeInsets padding;
 
-  Color _severityColor(String severity) => switch (severity) {
-        'critical' => const Color(0xFFB42318),
-        'warning' => const Color(0xFFB7791F),
-        _ => const Color(0xFF1B4965),
-      };
+  /// True when embedded inside another scroll view.
+  final bool shrinkWrap;
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     if (alerts.isEmpty) {
-      return const Center(child: Text('لا توجد تنبيهات'));
+      return EmptyState(
+        title: l.noAlerts,
+        body: l.emptyBody,
+        icon: Icons.notifications_none_outlined,
+        compact: shrinkWrap,
+      );
     }
-    final fmt = DateFormat('MM-dd HH:mm');
-    return ListView.separated(
+    return ListView.builder(
+      padding: padding,
+      shrinkWrap: shrinkWrap,
+      physics: shrinkWrap ? const NeverScrollableScrollPhysics() : null,
       itemCount: alerts.length,
-      separatorBuilder: (context, index) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        final a = alerts[index];
-        return ListTile(
-          leading: Icon(Icons.notification_important, color: _severityColor(a.severity)),
-          title: Text(a.message),
-          subtitle: Text('${fmt.format(a.timestamp)} · ${a.severity}'),
-          trailing: a.acknowledged
-              ? const Icon(Icons.check_circle, color: Colors.green)
-              : TextButton(
-                  onPressed: () => onAcknowledge(a.id),
-                  child: const Text('إقرار'),
-                ),
+      itemBuilder: (context, i) {
+        final a = alerts[i];
+        return AlertCard(
+          alert: a,
+          onAcknowledge: onAcknowledge == null
+              ? null
+              : () => onAcknowledge!(a.id),
+          onTap: onOpen == null ? null : () => onOpen!(a),
         );
       },
     );

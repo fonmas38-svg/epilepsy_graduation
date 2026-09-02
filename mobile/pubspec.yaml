@@ -9,6 +9,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Ships with the Flutter SDK (no download): supplies the Material/Cupertino
+  # localisations for `ar`. Without it, Material widgets throw as soon as the
+  # app locale is Arabic. Required by docs/frontend-plan-ar.md §2.3.
+  flutter_localizations:
+    sdk: flutter
   cupertino_icons: ^1.0.8
   http: ^1.2.2
   sqflite: ^2.4.1
@@ -19,7 +24,9 @@ dependencies:
   path_provider: ^2.1.5
   shared_preferences: ^2.3.3
   fl_chart: ^0.69.2
-  intl: ^0.19.0
+  # Must match what `flutter_localizations` pins, otherwise version solving
+  # fails outright — the SDK wins that argument, not this file.
+  intl: ^0.20.2
   uuid: ^4.5.1
   provider: ^6.1.2
   connectivity_plus: ^6.1.0
@@ -27,6 +34,11 @@ dependencies:
   # fully optional-by-behavior: if the plugin/permission is unavailable the SOS
   # alert still fires without coordinates, so no core path depends on it.
   geolocator: ^13.0.1
+  # One-tap emergency calling (§3.5) and map directions to the patient (§4.2).
+  # Isolated behind ExternalActions: every call site has a documented fallback
+  # (show + copy the number, show the coordinates), so a missing plugin or a
+  # device with no dialer degrades instead of dead-ending during an emergency.
+  url_launcher: ^6.3.1
   csv: ^6.0.0
   pdf: ^3.11.1
   printing: ^5.13.4
@@ -34,6 +46,8 @@ dependencies:
   firebase_auth: ^5.3.4
   cloud_firestore: ^5.5.1
   firebase_messaging: ^15.1.6
+  local_auth: ^3.0.2
+  excel: ^4.0.6
 
 dev_dependencies:
   flutter_test:
@@ -42,3 +56,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/images/

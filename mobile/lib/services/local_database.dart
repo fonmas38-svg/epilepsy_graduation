@@ -8,6 +8,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../core/config.dart';
 import '../core/enums.dart';
+import '../models/care_models.dart';
 import '../models/models.dart';
 import 'secure_store.dart';
 import 'signal_simulator.dart';
@@ -33,10 +34,14 @@ class LocalDatabase {
   static const _kDbKey = 'local_db_encryption_key';
 
   /// Schema version. v1 = readings/assessments/alerts. v2 = + medication
-  /// adherence (medications, medication_logs) and prediction_events. Bumping
-  /// this triggers [_onUpgrade], which only CREATEs new tables — existing tables
-  /// are never altered, so no patient data is touched.
-  static const _dbVersion = 2;
+  /// adherence (medications, medication_logs) and prediction_events. v3 = + the
+  /// care tables the offline requirement in `docs/frontend-plan-ar.md` §2.5 asks
+  /// for (emergency contacts, medical card, trigger diary, consents, access log,
+  /// seizure logs, adjudications, alert responses, clinical notes) plus the
+  /// outgoing `outbox` queue. Bumping this triggers [_onUpgrade], which only
+  /// CREATEs new tables — existing tables are never altered, so no patient data
+  /// is touched.
+  static const _dbVersion = 3;
 
   /// True on desktop platforms where SQLCipher is unavailable.
   static bool get _isDesktop =>
@@ -120,9 +125,10 @@ class LocalDatabase {
             acknowledgedBy TEXT
           )
         ''');
-    // v2 tables are created here for fresh installs and in _onUpgrade for
+    // v2/v3 tables are created here for fresh installs and in _onUpgrade for
     // existing ones. Same idempotent DDL is used in both paths.
     await _createV2Tables(db);
+    await _createV3Tables(db);
   }
 
   /// Additive migrations. Only ever CREATE new tables — never ALTER or DROP the
@@ -130,6 +136,9 @@ class LocalDatabase {
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await _createV2Tables(db);
+    }
+    if (oldVersion < 3) {
+      await _createV3Tables(db);
     }
   }
 
@@ -170,6 +179,153 @@ class LocalDatabase {
             outcome TEXT NOT NULL
           )
         ''');
+  }
+
+  /// Care tables (schema v3) — the offline surface required by
+  /// `docs/frontend-plan-ar.md` §2.5: «السجل الطبي، الأدوية، جهات الاتصال، آخر
+  /// حالة معروفة، خطة الطوارئ» must all be readable with zero network, and every
+  /// write made while offline must survive in a queue.
+  ///
+  /// Deliberately **not** here: raw signal. §2.5 forbids caching it, and the
+  /// existing `readings` table is a short-lived sync buffer pruned to
+  /// [AppConfig.localRetention], not a record.
+  ///
+  /// Every statement uses `IF NOT EXISTS` so it is safe on fresh installs and on
+  /// upgrades, and safe to re-run if an upgrade is interrupted midway.
+  Future<void> _createV3Tables(Database db) async {
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS emergency_contacts (
+            id TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            name TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            relation TEXT NOT NULL DEFAULT '',
+            priority INTEGER NOT NULL DEFAULT 0,
+            synced INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS medical_card (
+            patientId TEXT PRIMARY KEY,
+            diagnosis TEXT NOT NULL DEFAULT '',
+            allergies TEXT NOT NULL DEFAULT '',
+            bloodType TEXT NOT NULL DEFAULT '',
+            doctorName TEXT NOT NULL DEFAULT '',
+            doctorPhone TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            updatedAt TEXT NOT NULL,
+            synced INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+    // `trigger_entries`, not `triggers`: TRIGGER is a SQL keyword and the plural
+    // is close enough that some parsers stumble on it.
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS trigger_entries (
+            id TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            occurredAt TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            intensity INTEGER NOT NULL DEFAULT 3,
+            note TEXT NOT NULL DEFAULT '',
+            synced INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS consents (
+            id TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            caregiverId TEXT NOT NULL,
+            caregiverName TEXT NOT NULL DEFAULT '',
+            level TEXT NOT NULL DEFAULT 'alerts_only',
+            shareLocation INTEGER NOT NULL DEFAULT 0,
+            grantedAt TEXT NOT NULL,
+            revokedAt TEXT,
+            synced INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS access_log (
+            id TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            actorName TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL,
+            at TEXT NOT NULL
+          )
+        ''');
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS seizure_logs (
+            id TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            occurredAt TEXT NOT NULL,
+            durationSeconds INTEGER,
+            type TEXT NOT NULL DEFAULT 'other',
+            notes TEXT NOT NULL DEFAULT '',
+            reportedBy TEXT NOT NULL DEFAULT '',
+            alertId TEXT,
+            synced INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS adjudications (
+            id TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            alertId TEXT NOT NULL,
+            verdict TEXT NOT NULL,
+            decidedAt TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            doctorId TEXT NOT NULL DEFAULT '',
+            synced INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS alert_responses (
+            id TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            alertId TEXT NOT NULL,
+            responderId TEXT NOT NULL DEFAULT '',
+            responderName TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'seen',
+            at TEXT NOT NULL,
+            synced INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS clinical_notes (
+            id TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            text TEXT NOT NULL DEFAULT '',
+            writtenAt TEXT NOT NULL,
+            doctorId TEXT NOT NULL DEFAULT '',
+            synced INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS outbox (
+            id TEXT PRIMARY KEY,
+            method TEXT NOT NULL DEFAULT 'POST',
+            path TEXT NOT NULL,
+            body TEXT NOT NULL DEFAULT '{}',
+            createdAt TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            lastError TEXT
+          )
+        ''');
+    // Every care query filters by patient; these keep the emergency screen fast
+    // even after months of diary entries.
+    for (final table in const [
+      'emergency_contacts',
+      'trigger_entries',
+      'consents',
+      'access_log',
+      'seizure_logs',
+      'adjudications',
+      'alert_responses',
+      'clinical_notes',
+    ]) {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_${table}_patient ON $table (patientId)',
+      );
+    }
   }
 
   Future<void> insertReading(VitalReading reading) async {
@@ -462,5 +618,329 @@ class LocalDatabase {
       limit: limit,
     );
     return rows.map((r) => PredictionEvent.fromMap(Map<String, dynamic>.from(r))).toList();
+  }
+
+  // ------------------------------------------------------------------- care (v3)
+  //
+  // All of these are plain upsert/query pairs over the v3 tables. Deletes are
+  // real deletes only where the user's intent is «remove this» (a contact, a
+  // diary entry); a revoked consent is kept as a row with `revokedAt` set so the
+  // access log in §4.3 stays honest about what used to be visible.
+
+  Future<void> upsertEmergencyContact(EmergencyContact c) async {
+    final db = await database;
+    await db.insert(
+      'emergency_contacts',
+      c.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<EmergencyContact>> emergencyContactsFor(String patientId) async {
+    final db = await database;
+    final rows = await db.query(
+      'emergency_contacts',
+      where: 'patientId = ?',
+      whereArgs: [patientId],
+      orderBy: 'priority ASC, name ASC',
+    );
+    return rows
+        .map((r) => EmergencyContact.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
+  }
+
+  Future<void> deleteEmergencyContact(String id) async {
+    final db = await database;
+    await db.delete('emergency_contacts', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> upsertMedicalCard(MedicalCard card) async {
+    final db = await database;
+    await db.insert(
+      'medical_card',
+      card.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<MedicalCard?> medicalCardFor(String patientId) async {
+    final db = await database;
+    final rows = await db.query(
+      'medical_card',
+      where: 'patientId = ?',
+      whereArgs: [patientId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return MedicalCard.fromMap(Map<String, dynamic>.from(rows.first));
+  }
+
+  Future<void> insertTrigger(TriggerEntry t) async {
+    final db = await database;
+    await db.insert(
+      'trigger_entries',
+      t.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<TriggerEntry>> triggersFor(
+    String patientId, {
+    DateTime? since,
+    int limit = 200,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'trigger_entries',
+      where: since == null
+          ? 'patientId = ?'
+          : 'patientId = ? AND occurredAt >= ?',
+      whereArgs: since == null
+          ? [patientId]
+          : [patientId, since.toIso8601String()],
+      orderBy: 'occurredAt DESC',
+      limit: limit,
+    );
+    return rows
+        .map((r) => TriggerEntry.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
+  }
+
+  Future<void> deleteTrigger(String id) async {
+    final db = await database;
+    await db.delete('trigger_entries', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> upsertConsent(CaregiverConsent c) async {
+    final db = await database;
+    await db.insert(
+      'consents',
+      c.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<CaregiverConsent>> consentsFor(
+    String patientId, {
+    bool activeOnly = false,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'consents',
+      where: activeOnly
+          ? 'patientId = ? AND revokedAt IS NULL'
+          : 'patientId = ?',
+      whereArgs: [patientId],
+      orderBy: 'grantedAt DESC',
+    );
+    return rows
+        .map((r) => CaregiverConsent.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
+  }
+
+  Future<void> insertAccessLog(AccessLogEntry e) async {
+    final db = await database;
+    await db.insert(
+      'access_log',
+      e.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<AccessLogEntry>> accessLogFor(
+    String patientId, {
+    int limit = 100,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'access_log',
+      where: 'patientId = ?',
+      whereArgs: [patientId],
+      orderBy: 'at DESC',
+      limit: limit,
+    );
+    return rows
+        .map((r) => AccessLogEntry.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
+  }
+
+  Future<void> upsertSeizureLog(SeizureLog s) async {
+    final db = await database;
+    await db.insert(
+      'seizure_logs',
+      s.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<SeizureLog>> seizureLogsFor(
+    String patientId, {
+    DateTime? since,
+    int limit = 200,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'seizure_logs',
+      where: since == null
+          ? 'patientId = ?'
+          : 'patientId = ? AND occurredAt >= ?',
+      whereArgs: since == null
+          ? [patientId]
+          : [patientId, since.toIso8601String()],
+      orderBy: 'occurredAt DESC',
+      limit: limit,
+    );
+    return rows
+        .map((r) => SeizureLog.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
+  }
+
+  Future<void> upsertAdjudication(Adjudication a) async {
+    final db = await database;
+    await db.insert(
+      'adjudications',
+      a.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<Adjudication>> adjudicationsFor(
+    String patientId, {
+    int limit = 200,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'adjudications',
+      where: 'patientId = ?',
+      whereArgs: [patientId],
+      orderBy: 'decidedAt DESC',
+      limit: limit,
+    );
+    return rows
+        .map((r) => Adjudication.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
+  }
+
+  /// Every alert id under [patientId] that already carries a verdict — used to
+  /// show the doctor only what still needs review (§5.4).
+  Future<Set<String>> adjudicatedAlertIds(String patientId) async {
+    final db = await database;
+    final rows = await db.query(
+      'adjudications',
+      columns: ['alertId'],
+      where: 'patientId = ?',
+      whereArgs: [patientId],
+    );
+    return rows.map((r) => r['alertId'] as String).toSet();
+  }
+
+  Future<void> upsertAlertResponse(AlertResponse r) async {
+    final db = await database;
+    await db.insert(
+      'alert_responses',
+      r.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<AlertResponse>> alertResponsesFor(String alertId) async {
+    final db = await database;
+    final rows = await db.query(
+      'alert_responses',
+      where: 'alertId = ?',
+      whereArgs: [alertId],
+      orderBy: 'at ASC',
+    );
+    return rows
+        .map((r) => AlertResponse.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
+  }
+
+  Future<void> upsertClinicalNote(ClinicalNote n) async {
+    final db = await database;
+    await db.insert(
+      'clinical_notes',
+      n.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<ClinicalNote>> clinicalNotesFor(
+    String patientId, {
+    int limit = 100,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'clinical_notes',
+      where: 'patientId = ?',
+      whereArgs: [patientId],
+      orderBy: 'writtenAt DESC',
+      limit: limit,
+    );
+    return rows
+        .map((r) => ClinicalNote.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
+  }
+
+  // ----------------------------------------------------------------- outbox (v3)
+
+  Future<void> enqueueOutbox(OutboxItem item) async {
+    final db = await database;
+    await db.insert(
+      'outbox',
+      item.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Oldest first: writes replay in the order the user made them, so a create
+  /// can never be applied after the update that followed it.
+  Future<List<OutboxItem>> pendingOutbox({int limit = 100}) async {
+    final db = await database;
+    final rows = await db.query(
+      'outbox',
+      where: 'attempts < ?',
+      whereArgs: [OutboxItem.maxAttempts],
+      orderBy: 'createdAt ASC',
+      limit: limit,
+    );
+    return rows
+        .map((r) => OutboxItem.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
+  }
+
+  Future<int> pendingOutboxCount() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+      'SELECT COUNT(*) AS n FROM outbox WHERE attempts < ?',
+      [OutboxItem.maxAttempts],
+    );
+    if (rows.isEmpty) return 0;
+    return (rows.first['n'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<void> deleteOutbox(String id) async {
+    final db = await database;
+    await db.delete('outbox', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> bumpOutboxAttempt(String id, String? error) async {
+    final db = await database;
+    await db.rawUpdate(
+      'UPDATE outbox SET attempts = attempts + 1, lastError = ? WHERE id = ?',
+      [error, id],
+    );
+  }
+
+  /// Mark a locally-created row as delivered. [table] is always one of the v3
+  /// care tables; the call sites pass a constant, never user input.
+  Future<void> markCareSynced(String table, String id) async {
+    final db = await database;
+    await db.update(
+      table,
+      {'synced': 1},
+      where: table == 'medical_card' ? 'patientId = ?' : 'id = ?',
+      whereArgs: [id],
+    );
   }
 }

@@ -38,7 +38,8 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _checkBiometrics() async {
     final app = context.read<AppState>();
     final available = await app.biometrics.isAvailable;
-    if (mounted) setState(() => _biometricsAvailable = available);
+    final enabled = await app.biometrics.isEnabled();
+    if (mounted) setState(() => _biometricsAvailable = available && enabled);
   }
 
   @override
@@ -72,17 +73,47 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _loginWithBiometrics() async {
     final app = context.read<AppState>();
+
+    // Must be enabled in settings, not just available on hardware
+    final enabled = await app.biometrics.isEnabled();
+    if (!enabled) {
+      if (mounted) {
+        AppSnack.warn(
+          context,
+          'يجب تفعيل تسجيل الدخول بالبصمة من الإعدادات أولاً',
+        );
+      }
+      return;
+    }
+
     final ok = await app.biometrics.authenticate(
       localizedReason: 'تسجيل الدخول السريع عبر المصادقة الحيوية',
     );
-    if (ok && mounted) {
-      // Authenticate with the default patient credentials
-      setState(() {
-        _usernameCtrl.text = 'patient';
-        _passwordCtrl.text = 'patient123';
-      });
-      await _submitAccount();
+    if (!ok || !mounted) return;
+
+    // Retrieve the last successfully logged-in user
+    final lastUser = await app.getLastLoggedInUser();
+    final demoCredentials = <String, String>{
+      'doctor': 'doctor123',
+      'patient': 'patient123',
+      'caregiver': 'caregiver123',
+      'admin': 'admin123',
+    };
+
+    final user = lastUser ?? 'patient';
+    final pass = demoCredentials[user];
+    if (pass == null) {
+      if (mounted) {
+        AppSnack.error(context, 'تعذّر استرجاع بيانات الحساب السابق');
+      }
+      return;
     }
+
+    setState(() {
+      _usernameCtrl.text = user;
+      _passwordCtrl.text = pass;
+    });
+    await _submitAccount();
   }
 
   void _fillDemo(String u, String p) {

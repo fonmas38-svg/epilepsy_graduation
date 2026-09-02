@@ -53,7 +53,11 @@ class PatientSettingsScreen extends StatelessWidget {
           ],
           _AppearanceSection(settings: s),
           Gap.vMd,
-          if (isPatient) const _PrivacySection(),
+          // Security & Biometrics for ALL roles
+          const _PrivacySection(),
+          Gap.vMd,
+          // About section for ALL roles
+          const _AboutSection(),
         ],
       ),
     );
@@ -667,6 +671,7 @@ class _PrivacySectionState extends State<_PrivacySection> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final theme = Theme.of(context);
+    final isPatient = context.read<AppState>().auth.currentUser?.role == UserRole.patient;
     return SectionCard(
       title: l.privacySection,
       icon: Icons.shield_outlined,
@@ -694,33 +699,106 @@ class _PrivacySectionState extends State<_PrivacySection> {
               label: Text(l.changePassword),
             ),
           ),
-          Gap.vMd,
-          SizedBox(
-            height: A11y.minTouchTarget,
-            child: OutlinedButton.icon(
-              onPressed: _busy ? null : _export,
-              icon: const Icon(Icons.download_outlined),
-              label: Text(l.exportMyData),
+          // Data export and account deletion are patient-only features
+          if (isPatient) ...[
+            Gap.vMd,
+            SizedBox(
+              height: A11y.minTouchTarget,
+              child: OutlinedButton.icon(
+                onPressed: _busy ? null : _export,
+                icon: const Icon(Icons.download_outlined),
+                label: Text(l.exportMyData),
+              ),
             ),
-          ),
-          Gap.vXs,
-          Text(
-            l.exportMyDataNote,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+            Gap.vXs,
+            Text(
+              l.exportMyDataNote,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
-          ),
-          Gap.vMd,
-          SizedBox(
-            height: A11y.minTouchTarget,
-            child: OutlinedButton.icon(
-              onPressed: _busy ? null : _requestDeletion,
-              icon: const Icon(Icons.delete_forever_outlined),
-              label: Text(l.deleteAccount),
+            Gap.vMd,
+            SizedBox(
+              height: A11y.minTouchTarget,
+              child: OutlinedButton.icon(
+                onPressed: _busy ? null : _requestDeletion,
+                icon: const Icon(Icons.delete_forever_outlined),
+                label: Text(l.deleteAccount),
+              ),
             ),
+            Gap.vSm,
+            InfoNote(text: l.deleteAccountNote, icon: Icons.gavel_outlined),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// --- about -------------------------------------------------------------------
+
+class _AboutSection extends StatelessWidget {
+  const _AboutSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final app = context.read<AppState>();
+    final user = app.auth.currentUser;
+    final roleName = switch (user?.role) {
+      UserRole.patient => 'مريض',
+      UserRole.doctor => 'طبيب',
+      UserRole.caregiver => 'مرافق / أسرة',
+      null => '',
+    };
+
+    return SectionCard(
+      title: 'حول النظام',
+      icon: Icons.info_outline,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: ClipOval(
+              child: Image.asset(
+                'assets/images/app_logo.png',
+                width: 40,
+                height: 40,
+                fit: BoxFit.cover,
+              ),
+            ),
+            title: Text(l.appTitle),
+            subtitle: const Text('الإصدار 1.0.0 — مشروع تخرج'),
           ),
           Gap.vSm,
-          InfoNote(text: l.deleteAccountNote, icon: Icons.gavel_outlined),
+          if (user != null) ...[
+            Row(
+              children: [
+                Icon(Icons.account_circle_outlined,
+                    size: 18, color: theme.colorScheme.onSurfaceVariant),
+                Gap.hXs,
+                Expanded(
+                  child: Text(
+                    '${user.name} ($roleName)',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Gap.vSm,
+          ],
+          SizedBox(
+            height: A11y.minTouchTarget,
+            child: OutlinedButton.icon(
+              onPressed: app.signOut,
+              icon: const Icon(Icons.logout),
+              label: Text(l.logout),
+            ),
+          ),
         ],
       ),
     );

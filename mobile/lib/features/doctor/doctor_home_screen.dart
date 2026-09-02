@@ -184,8 +184,32 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
     final app = context.watch<AppState>();
     final rows = _visible();
     final pending = _rows.fold<int>(0, (n, r) => n + r.pendingAdjudications);
-
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldExit = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text(l.exitConfirmTitle),
+            content: Text(l.exitConfirmMessage),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(l.keepInBackground),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(l.exitApp),
+              ),
+            ],
+          ),
+        );
+        if (shouldExit == true && context.mounted) {
+          await app.signOut();
+        }
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Text(l.doctorHome),
         actions: [
@@ -311,8 +335,9 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 /// Sort and filter controls. Chips rather than a segmented button: the labels are

@@ -148,11 +148,25 @@ class AppRouter {
       fullScreen: true,
     ),
     Routes.reports: _Spec(
-      build: (_) => const MedicalReportsScreen(),
+      build: (args) {
+        final pArgs = args is PatientRouteArgs ? args : null;
+        return MedicalReportsScreen(
+          patientId: pArgs?.patientId,
+          patientName: pArgs?.patientName,
+        );
+      },
+      roles: null,
       restorable: false,
     ),
     Routes.messages: _Spec(
-      build: (_) => const ClinicalMessagesScreen(),
+      build: (args) {
+        final pArgs = args is PatientRouteArgs ? args : null;
+        return ClinicalMessagesScreen(
+          patientId: pArgs?.patientId,
+          patientName: pArgs?.patientName,
+        );
+      },
+      roles: null,
       restorable: false,
     ),
   };

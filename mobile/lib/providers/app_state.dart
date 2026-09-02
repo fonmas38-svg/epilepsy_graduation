@@ -1,5 +1,6 @@
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/config.dart';
 import '../core/enums.dart';
@@ -384,6 +385,7 @@ class AppState extends ChangeNotifier {
         await auth.applyBackendSession(context);
         await _registerCurrentPushToken();
         await _startForUser();
+        await saveLastLoggedInUser(username);
         apiOnline = true;
         notifyListeners();
         return;
@@ -409,6 +411,7 @@ class AppState extends ChangeNotifier {
         role: UserRole.doctor,
       );
       await _startForUser();
+      await saveLastLoggedInUser(username);
       apiOnline = false;
       notifyListeners();
       return;
@@ -419,6 +422,7 @@ class AppState extends ChangeNotifier {
         role: UserRole.patient,
       );
       await _startForUser();
+      await saveLastLoggedInUser(username);
       apiOnline = false;
       notifyListeners();
       return;
@@ -429,6 +433,7 @@ class AppState extends ChangeNotifier {
         role: UserRole.caregiver,
       );
       await _startForUser();
+      await saveLastLoggedInUser(username);
       apiOnline = false;
       notifyListeners();
       return;
@@ -439,6 +444,7 @@ class AppState extends ChangeNotifier {
         role: UserRole.doctor,
       );
       await _startForUser();
+      await saveLastLoggedInUser(username);
       apiOnline = false;
       notifyListeners();
       return;
@@ -448,6 +454,24 @@ class AppState extends ChangeNotifier {
     await api.tokens.clear();
     await auth.signOut();
     throw const Failure(FailureKind.unauthorized);
+  }
+
+  static const _lastUserKey = 'last_logged_in_username';
+
+  Future<void> saveLastLoggedInUser(String username) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_lastUserKey, username.trim().toLowerCase());
+    } catch (_) {}
+  }
+
+  Future<String?> getLastLoggedInUser() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_lastUserKey);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> signOut() async {
@@ -485,22 +509,24 @@ class AppState extends ChangeNotifier {
     final user = auth.currentUser;
     if (user == null) return;
     final patients = auth.accessiblePatients();
-    if (patients.isEmpty) return;
     final patientId = user.role == UserRole.patient
         ? user.uid
-        : patients.first.patientId;
-    // Seed the medication plan from the patient profile (idempotent).
-    try {
-      final profile = auth.patientById(patientId);
-      if (profile != null) await medication.seedFromProfile(profile);
-    } catch (_) {}
-    // Care data loads from SQLite first, so the emergency screen is usable
-    // before the network is even tried. Best-effort: a failure here must never
-    // stop monitoring from starting.
-    try {
-      await care.loadFor(patientId);
-    } catch (_) {}
-    await monitoring.start(patientId);
+        : (patients.isNotEmpty ? patients.first.patientId : null);
+
+    if (patientId != null) {
+      // Seed the medication plan from the patient profile (idempotent).
+      try {
+        final profile = auth.patientById(patientId);
+        if (profile != null) await medication.seedFromProfile(profile);
+      } catch (_) {}
+      // Care data loads from SQLite first, so the emergency screen is usable
+      // before the network is even tried. Best-effort: a failure here must never
+      // stop monitoring from starting.
+      try {
+        await care.loadFor(patientId);
+      } catch (_) {}
+      await monitoring.start(patientId);
+    }
     apiOnline = await api.health();
   }
 

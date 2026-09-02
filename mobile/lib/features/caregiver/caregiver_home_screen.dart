@@ -140,7 +140,32 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldExit = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text(l.exitConfirmTitle),
+            content: Text(l.exitConfirmMessage),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(l.keepInBackground),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(l.exitApp),
+              ),
+            ],
+          ),
+        );
+        if (shouldExit == true && context.mounted) {
+          await app.signOut();
+        }
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Text(l.familyHome),
         actions: [
@@ -218,8 +243,9 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 /// One followed patient plus the little that is needed to rank and describe them.

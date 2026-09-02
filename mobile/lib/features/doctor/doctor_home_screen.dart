@@ -205,6 +205,12 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
             icon: const Icon(Icons.cloud_download_outlined),
           ),
           IconButton(
+            tooltip: l.settingsTitle,
+            onPressed: () =>
+                Navigator.pushNamed(context, Routes.patientSettings),
+            icon: const Icon(Icons.settings_outlined),
+          ),
+          IconButton(
             tooltip: l.logout,
             onPressed: app.signOut,
             icon: const Icon(Icons.logout),

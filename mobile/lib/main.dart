@@ -141,38 +141,43 @@ class _AppOverlayState extends State<_AppOverlay> {
 
     return MediaQuery(
       data: media.copyWith(textScaler: scaled),
-      child: Stack(
-        children: [
-          InactivityWatcher(
-            child: widget.child ?? const SizedBox.shrink(),
-          ),
-          if (state.preAlert != null)
-            _TopBanner(
-              view: RiskView.caution,
-              icon: Icons.online_prediction,
-              title: state.preAlert!.message,
-              subtitle: l.cancelWindow,
-              action: FilledButton.tonal(
-                onPressed: state.cancelPreAlert,
-                child: Text('${l.cancel} (${state.preAlertSecondsLeft})'),
-              ),
-            )
-          else if (state.lastAlert != null)
-            _TopBanner(
-              view: RiskView.danger,
-              icon: AppColors.iconFor(RiskView.danger),
-              title: state.lastAlert!.message,
-              subtitle: l.activeAlertTitle,
-              onTap: () => AppRouter.openAlert(
-                alertId: state.lastAlert!.id,
-                patientId: state.lastAlert!.patientId,
-              ),
-              action: IconButton(
-                tooltip: l.close,
-                icon: const Icon(Icons.close),
-                onPressed: state.dismissAlertBanner,
-              ),
+      child: Overlay(
+        initialEntries: [
+          OverlayEntry(
+            builder: (context) => Stack(
+              children: [
+                InactivityWatcher(
+                  child: widget.child ?? const SizedBox.shrink(),
+                ),
+                if (state.preAlert != null)
+                  _TopBanner(
+                    view: RiskView.caution,
+                    icon: Icons.online_prediction,
+                    title: state.preAlert!.message,
+                    subtitle: l.cancelWindow,
+                    action: FilledButton.tonal(
+                      onPressed: state.cancelPreAlert,
+                      child: Text('${l.cancel} (${state.preAlertSecondsLeft})'),
+                    ),
+                  )
+                else if (state.lastAlert != null)
+                  _TopBanner(
+                    view: RiskView.danger,
+                    icon: AppColors.iconFor(RiskView.danger),
+                    title: state.lastAlert!.message,
+                    subtitle: l.activeAlertTitle,
+                    onTap: () => AppRouter.openAlert(
+                      alertId: state.lastAlert!.id,
+                      patientId: state.lastAlert!.patientId,
+                    ),
+                    action: IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: state.dismissAlertBanner,
+                    ),
+                  ),
+              ],
             ),
+          ),
         ],
       ),
     );

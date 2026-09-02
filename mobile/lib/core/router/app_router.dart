@@ -104,7 +104,7 @@ class AppRouter {
     ),
     Routes.patientSettings: _Spec(
       build: (_) => const PatientSettingsScreen(),
-      roles: _patientOnly,
+      roles: null,
     ),
     Routes.patientConsents: _Spec(
       build: (_) => const ConsentsScreen(),

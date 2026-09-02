@@ -34,23 +34,26 @@ class PatientSettingsScreen extends StatelessWidget {
     // watching the app state is enough to repaint on every preference change.
     final app = context.watch<AppState>();
     final s = app.settings;
+    final isPatient = app.auth.currentUser?.role == UserRole.patient;
 
     return Scaffold(
       appBar: AppBar(title: Text(l.settingsTitle)),
       body: ListView(
         padding: Insets.pageBottomSafe,
         children: [
-          _SensitivitySection(settings: s),
-          Gap.vMd,
-          _HorizonSection(app: app),
-          Gap.vMd,
-          _QuietHoursSection(settings: s),
-          Gap.vMd,
-          _NotifySection(settings: s),
-          Gap.vMd,
+          if (isPatient) ...[
+            _SensitivitySection(settings: s),
+            Gap.vMd,
+            _HorizonSection(app: app),
+            Gap.vMd,
+            _QuietHoursSection(settings: s),
+            Gap.vMd,
+            _NotifySection(settings: s),
+            Gap.vMd,
+          ],
           _AppearanceSection(settings: s),
           Gap.vMd,
-          const _PrivacySection(),
+          if (isPatient) const _PrivacySection(),
         ],
       ),
     );

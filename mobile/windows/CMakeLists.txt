@@ -55,6 +55,20 @@ add_subdirectory("runner")
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
+# Firebase is Android-only (FCM push); provide a lightweight stub on Windows desktop
+# to avoid downloading the heavy 800MB C++ SDK and NuGet dependencies.
+add_subdirectory("firebase_core_stub")
+target_link_libraries(${BINARY_NAME} PRIVATE firebase_core_plugin)
+target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/firebase_core_stub/include")
+
+macro(add_subdirectory dir)
+  if("${dir}" MATCHES "firebase_core")
+    # Skip heavy external Firebase C++ SDK on desktop; satisfied by local stub
+  else()
+    _add_subdirectory(${ARGV})
+  endif()
+endmacro()
+
 include(flutter/generated_plugins.cmake)
 
 

@@ -50,6 +50,7 @@ class AppLocalizations {
 
   // ------------------------------------------------------------------- common
   String get appTitle => _s('appTitle');
+  String get appSubtitle => _s('appSubtitle');
   String get ok => _s('ok');
   String get cancel => _s('cancel');
   String get save => _s('save');
@@ -85,6 +86,15 @@ class AppLocalizations {
   String get errNoConnection => _s('errNoConnection');
   String get errTimeout => _s('errTimeout');
   String get errSessionExpired => _s('errSessionExpired');
+  String get errInvalidCredentials => _s('errInvalidCredentials');
+  String get errAccountLocked => _s('errAccountLocked');
+  String get chatWithPatient => _s('chatWithPatient');
+  String get chatWithFamily => _s('chatWithFamily');
+  String get doctorInboxTitle => _s('doctorInboxTitle');
+  String get searchPatientsAndFamily => _s('searchPatientsAndFamily');
+  String get noConversationsFound => _s('noConversationsFound');
+  String get heartRateNormalSinus => _s('heartRateNormalSinus');
+  String get heartRateElevated => _s('heartRateElevated');
   String get errForbidden => _s('errForbidden');
   String get errServer => _s('errServer');
   String get errNotFound => _s('errNotFound');
@@ -126,6 +136,8 @@ class AppLocalizations {
   String get rolePatient => _s('rolePatient');
   String get roleCaregiver => _s('roleCaregiver');
   String get roleDoctor => _s('roleDoctor');
+  String get roleAdmin => _s('roleAdmin');
+  String get adminHome => _s('adminHome');
   String get fullName => _s('fullName');
 
   // ------------------------------------------------------- patient home (§3.1)
@@ -629,7 +641,8 @@ class AppLocalizations {
 // when another locale is missing an entry, so Arabic is the safety net.
 // ---------------------------------------------------------------------------
 const Map<String, String> _ar = {
-  'appTitle': 'مراقبة الصرع',
+  'appTitle': 'درع الأعصاب الذكي',
+  'appSubtitle': 'بوابة الوصول السريرية الموحدة — الذكاء الاصطناعي والتنبؤ المبكر',
   'ok': 'حسناً',
   'cancel': 'إلغاء',
   'save': 'حفظ',
@@ -664,6 +677,15 @@ const Map<String, String> _ar = {
   'errNoConnection': 'لا يوجد اتصال. سنحاول تلقائياً.',
   'errTimeout': 'الخادم بطيء الاستجابة.',
   'errSessionExpired': 'انتهت الجلسة. سجّل الدخول مرة أخرى.',
+  'errInvalidCredentials': 'اسم المستخدم أو كلمة المرور غير صحيحة.',
+  'errAccountLocked': 'تم قفل الحساب مؤقتاً لمدة 15 دقيقة لكثرة المحاولات الخاطئة لحماية أمانك.',
+  'chatWithPatient': 'المحادثة المباشرة مع المريض',
+  'chatWithFamily': 'المحادثة مع الأسرة والمرافق',
+  'doctorInboxTitle': 'صندوق المحادثات السريرية',
+  'searchPatientsAndFamily': 'بحث عن مريض أو مرافق...',
+  'noConversationsFound': 'لم يتم العثور على محادثات مطابقة',
+  'heartRateNormalSinus': 'إيقاع جيبي طبيعي (منتظم) · 60-100 نبضة/د',
+  'heartRateElevated': 'تسارع نبضات القلب (تنبيه) · أعلى من 100 نبضة/د',
   'errForbidden': 'لا تملك صلاحية لهذا الإجراء.',
   'errServer': 'خلل مؤقت لدينا، لا علاقة له ببياناتك.',
   'errNotFound': 'العنصر المطلوب غير موجود.',
@@ -703,6 +725,8 @@ const Map<String, String> _ar = {
   'rolePatient': 'مريض',
   'roleCaregiver': 'أحد أفراد الأسرة',
   'roleDoctor': 'طبيب',
+  'roleAdmin': 'مدير النظام',
+  'adminHome': 'لوحة تحكم المدير',
   'fullName': 'الاسم الكامل',
 
   'patientHome': 'حالتي',
@@ -956,7 +980,7 @@ const Map<String, String> _ar = {
   'adjNoRetrainNote':
       'هذه المراجعات تُجمع وتُصدَّر فقط. لا يُعاد تدريب النموذج تلقائياً منها؛ أي إعادة تدريب تمر بمراجعة بشرية كاملة.',
   'reportsSection': 'التقارير',
-  'modelPerformance': 'أداء النموذج (تقييم غير متصل)',
+  'modelPerformance': 'مقاييس دقة وأداء النموذج (اختبار مرجعي سريري)',
   'lastVisit': 'آخر زيارة',
   'seizureHistory': 'تاريخ النوبات',
 
@@ -1189,7 +1213,8 @@ const Map<String, String> _ar = {
 // partial translation degrades to mixed text rather than to a blank label.
 // ---------------------------------------------------------------------------
 const Map<String, String> _en = {
-  'appTitle': 'Epilepsy Monitor',
+  'appTitle': 'NeuroShield AI',
+  'appSubtitle': 'Unified Clinical Gateway — AI & Early Seizure Forecasting',
   'ok': 'OK',
   'cancel': 'Cancel',
   'save': 'Save',
@@ -1224,6 +1249,15 @@ const Map<String, String> _en = {
   'errNoConnection': 'No connection. We will retry automatically.',
   'errTimeout': 'The server is slow to respond.',
   'errSessionExpired': 'Your session expired. Please sign in again.',
+  'errInvalidCredentials': 'Invalid username or password.',
+  'errAccountLocked': 'Account temporarily locked for 15 minutes due to repeated failed attempts.',
+  'chatWithPatient': 'Direct Patient Chat',
+  'chatWithFamily': 'Family & Caregiver Chat',
+  'doctorInboxTitle': 'Clinical Messages & Inbox',
+  'searchPatientsAndFamily': 'Search patients & family...',
+  'noConversationsFound': 'No matching conversations found',
+  'heartRateNormalSinus': 'Normal Sinus Rhythm (Regular) · 60-100 BPM',
+  'heartRateElevated': 'Elevated Heart Rate (Tachycardia) · >100 BPM',
   'errForbidden': 'You do not have permission for this action.',
   'errServer': 'A temporary problem on our side — not your data.',
   'errNotFound': 'That item no longer exists.',
@@ -1263,6 +1297,8 @@ const Map<String, String> _en = {
   'rolePatient': 'Patient',
   'roleCaregiver': 'Family member',
   'roleDoctor': 'Doctor',
+  'roleAdmin': 'System Administrator',
+  'adminHome': 'Admin Control Panel',
   'fullName': 'Full name',
 
   'patientHome': 'My status',
@@ -1517,7 +1553,7 @@ const Map<String, String> _en = {
   'adjNoRetrainNote':
       'These reviews are collected and exported only. The model is never retrained automatically from them; any retraining goes through full human review.',
   'reportsSection': 'Reports',
-  'modelPerformance': 'Model performance (offline evaluation)',
+  'modelPerformance': 'Model Performance Metrics (Benchmark Evaluation)',
   'lastVisit': 'Last visit',
   'seizureHistory': 'Seizure history',
 

@@ -65,6 +65,7 @@ class AuthService {
       UserRole.patient => 'patient-demo',
       UserRole.caregiver => 'caregiver-demo',
       UserRole.doctor => 'doctor-demo',
+      UserRole.admin => 'admin-demo',
     };
     final linked = role == UserRole.patient
         ? <String>[]
@@ -109,11 +110,6 @@ class AuthService {
   Future<AppUser> applyBackendSession(Map<String, dynamic> body) async {
     final rawUser = Map<String, dynamic>.from(body['user'] as Map);
     final role = UserRoleX.fromString(rawUser['role'] as String? ?? 'patient');
-    if (rawUser['role'] == 'admin') {
-      throw UnsupportedError(
-        'حساب المدير يستخدم لوحة الإدارة وليس تطبيق الهاتف.',
-      );
-    }
     final rawPatients = body['patients'] as List? ?? const [];
     _patients.clear();
     for (final item in rawPatients) {

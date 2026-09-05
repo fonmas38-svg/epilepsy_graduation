@@ -520,8 +520,14 @@ class _PrivacySectionState extends State<_PrivacySection> {
   }
 
   Future<void> _checkBiometrics() async {
+    final app = context.read<AppState>();
+    final user = app.auth.currentUser;
+    final u = app.currentSessionUsername ??
+        (user?.role == UserRole.patient
+            ? 'patient'
+            : (user?.email.split('@').first ?? 'user'));
     final avail = await _biometrics.isAvailable;
-    final enabled = await _biometrics.isEnabled();
+    final enabled = await _biometrics.isEnabledForUser(u);
     if (mounted) {
       setState(() {
         _biometricsAvailable = avail;
@@ -533,6 +539,12 @@ class _PrivacySectionState extends State<_PrivacySection> {
   Future<void> _toggleBiometrics(bool enable) async {
     final l = AppLocalizations.of(context);
     final app = context.read<AppState>();
+    final user = app.auth.currentUser;
+    final u = app.currentSessionUsername ??
+        (user?.role == UserRole.patient
+            ? 'patient'
+            : (user?.email.split('@').first ?? 'user'));
+
     if (enable) {
       final success = await _biometrics.authenticate(
         localizedReason: l.biometricPromptReason,
@@ -541,25 +553,25 @@ class _PrivacySectionState extends State<_PrivacySection> {
         if (mounted) AppSnack.warn(context, 'لم يتم التحقق من البصمة عبر المستشعر');
         return;
       }
-      final user = app.auth.currentUser;
-      final u = app.currentSessionUsername ??
-          (user?.role == UserRole.patient
-              ? 'patient'
-              : (user?.email.split('@').first ?? 'patient'));
-      final p = app.currentSessionPassword ?? 'patient123';
+      final p = app.currentSessionPassword ??
+          (u == 'patient'
+              ? 'patient123'
+              : (u == 'doctor'
+                  ? 'doctor123'
+                  : (u == 'admin' ? 'admin123' : 'caregiver123')));
       await _biometrics.enableForUser(
         username: u,
         userId: user?.uid ?? u,
         password: p,
       );
     } else {
-      await _biometrics.disableBiometrics();
+      await _biometrics.disableForUser(u);
     }
     if (mounted) {
       setState(() => _biometricsEnabled = enable);
       AppSnack.success(
         context,
-        enable ? 'تم تفعيل تسجيل الدخول بالبصمة لهذا الحساب' : 'تم تعطيل الدخول بالبصمة',
+        enable ? 'تم تفعيل تسجيل الدخول بالبصمة لحساب «$u»' : 'تم تعطيل الدخول بالبصمة لحساب «$u»',
       );
     }
   }
@@ -766,6 +778,7 @@ class _AboutSection extends StatelessWidget {
       UserRole.patient => 'مريض',
       UserRole.doctor => 'طبيب',
       UserRole.caregiver => 'مرافق / أسرة',
+      UserRole.admin => 'مدير النظام',
       null => '',
     };
 
@@ -786,7 +799,7 @@ class _AboutSection extends StatelessWidget {
               ),
             ),
             title: Text(l.appTitle),
-            subtitle: const Text('الإصدار 1.0.0 — مشروع تخرج'),
+            subtitle: const Text('الإصدار 2.3.0 — المنظومة الذكية لمراقبة الصرع'),
           ),
           Gap.vSm,
           if (user != null) ...[

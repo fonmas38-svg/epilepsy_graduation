@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -9,6 +12,12 @@ plugins {
 // Adding google-services.json enables the plugin automatically for real FCM builds.
 if (file("google-services.json").isFile) {
     apply(plugin = "com.google.gms.google-services")
+}
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -26,21 +35,35 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.epilepsy.monitor.epilepsy_monitor"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            val keyAliasVal = keystoreProperties.getProperty("keyAlias")
+            val keyPasswordVal = keystoreProperties.getProperty("keyPassword")
+            val storePasswordVal = keystoreProperties.getProperty("storePassword")
+            val storeFileVal = keystoreProperties.getProperty("storeFile")
+            val kFile = if (storeFileVal != null) file(storeFileVal) else null
+
+            if (kFile != null && kFile.exists()) {
+                keyAlias = keyAliasVal
+                keyPassword = keyPasswordVal
+                storeFile = kFile
+                storePassword = storePasswordVal
+            } else {
+                initWith(getByName("debug"))
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
 
             // Code obfuscation and shrinking for reverse-engineering protection (§1.4)
             isMinifyEnabled = true

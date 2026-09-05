@@ -89,14 +89,14 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.epilepsy.monitor" "\0"
-            VALUE "FileDescription", "epilepsy_monitor" "\0"
-            VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "epilepsy_monitor" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.epilepsy.monitor. All rights reserved." "\0"
+            VALUE "CompanyName", "NeuroShield Health Technologies" "\0"
+            VALUE "FileDescription", "NeuroShield AI — Smart Seizure Forecasting System" "\0"
+            VALUE "FileVersion", "2.3.0.0" "\0"
+            VALUE "InternalName", "NeuroShieldAI" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 NeuroShield AI. All rights reserved." "\0"
             VALUE "OriginalFilename", "epilepsy_monitor.exe" "\0"
-            VALUE "ProductName", "epilepsy_monitor" "\0"
-            VALUE "ProductVersion", VERSION_AS_STRING "\0"
+            VALUE "ProductName", "NeuroShield AI (درع الأعصاب الذكي)" "\0"
+            VALUE "ProductVersion", "2.3.0" "\0"
         END
     END
     BLOCK "VarFileInfo"

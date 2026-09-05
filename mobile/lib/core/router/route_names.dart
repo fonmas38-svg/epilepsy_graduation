@@ -28,6 +28,9 @@ abstract final class Routes {
   static const doctorPatient = '/doctor/patient';
   static const doctorAdjudication = '/doctor/adjudication';
 
+  // Admin (§6)
+  static const admin = '/admin';
+
   /// Full-screen active alert (§3.2). Shared by all roles: a family member
   /// tapping the push notification and the patient whose device raised it land
   /// on the same route, which then renders the view appropriate to the role.

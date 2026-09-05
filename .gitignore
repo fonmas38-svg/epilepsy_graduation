@@ -78,6 +78,14 @@ firebase_options.dart
 # راجع docs/_archive/README.md و docs/README.md.
 docs/_archive/
 
+# ملفات التوثيق الأكاديمي النهائي (Word / Final Book) — غير مرفوعة لـ GitHub
+docs/final_book/
+docs/build_all_thesis_chapters.py
+docs/thesis_docx_base.py
+
+# Certificates
+*.pfx
+
 # Misc
 *.log
 

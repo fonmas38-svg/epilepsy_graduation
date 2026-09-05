@@ -1,4 +1,4 @@
-enum UserRole { patient, caregiver, doctor }
+enum UserRole { patient, caregiver, doctor, admin }
 
 extension UserRoleX on UserRole {
   String get value => name;
@@ -69,6 +69,25 @@ enum AlertSensitivity {
       AlertSensitivity.values.firstWhere(
         (e) => e.name == raw,
         orElse: () => AlertSensitivity.medium,
+      );
+}
+
+enum ServerMode { auto, cloud, local, custom }
+
+extension ServerModeX on ServerMode {
+  String get value => name;
+
+  String get arabicLabel => switch (this) {
+        ServerMode.auto => 'تلقائي ذكي (سحابي ⇆ محلي)',
+        ServerMode.cloud => 'سحابي (Render Cloud)',
+        ServerMode.local => 'محلي (Localhost)',
+        ServerMode.custom => 'عنوان مخصص (Custom IP)',
+      };
+
+  static ServerMode fromString(String? raw) =>
+      ServerMode.values.firstWhere(
+        (e) => e.name == raw,
+        orElse: () => ServerMode.auto,
       );
 }
 

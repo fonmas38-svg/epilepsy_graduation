@@ -4,10 +4,21 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 
 class AppConfig {
   static const cloudProductionUrl = 'https://epilepsy-graduation.onrender.com';
+  static const localAndroidUrl = 'http://10.0.2.2:8000';
+  static const localDesktopUrl = 'http://127.0.0.1:8000';
+
+  /// Default local URL adapted automatically to the running platform:
+  /// Android Emulator accesses host localhost via 10.0.2.2; Windows/Web uses 127.0.0.1.
+  static String get defaultLocalUrl {
+    if (kIsWeb) return localDesktopUrl;
+    try {
+      if (Platform.isAndroid) return localAndroidUrl;
+    } catch (_) {}
+    return localDesktopUrl;
+  }
 
   /// Base URL of the analysis backend. Defaults to the live cloud backend.
-  /// Override for local development with:
-  ///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000
+  /// Can be overridden via environment or updated dynamically at runtime in AppState.
   static String get apiBaseUrl {
     const override = String.fromEnvironment('API_BASE_URL');
     if (override.isNotEmpty) return override;

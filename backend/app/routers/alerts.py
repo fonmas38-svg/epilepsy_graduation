@@ -39,9 +39,9 @@ def evaluate_alert(
     should_notify = label == "high_risk"
     severity = {"stable": "info", "watch": "warning", "high_risk": "critical"}[label]
     message = {
-        "stable": "Patient vitals look stable.",
-        "watch": "Patient needs closer monitoring.",
-        "high_risk": "High seizure risk detected. Check on the patient immediately.",
+        "stable": "المؤشرات الحيوية للمريض مستقرة وطبيعية.",
+        "watch": "ملاحظة: المؤشرات الحيوية بحاجة لمتابعة هادئة.",
+        "high_risk": "رصد احتمال نوبة محتملة: يرجى اتخاذ تدابير الراحة والسلامة فوراً.",
     }[label]
     return AlertPayload(
         patient_id=body.patient_id,

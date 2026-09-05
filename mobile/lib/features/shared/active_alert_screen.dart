@@ -302,6 +302,20 @@ class _Body extends StatelessWidget {
   }
 }
 
+String _friendlyAlertMessage(String msg) {
+  final m = msg.trim();
+  if (m.contains('High seizure risk detected') || m.contains('high_risk')) {
+    return 'رصد احتمال نوبة محتملة: يرجى الجلوس والاسترخاء وتجنب أي مجهود، النظام يراقبك باستمرار.';
+  }
+  if (m.contains('Patient needs closer monitoring') || m.contains('watch')) {
+    return 'ملاحظة سريرية: المؤشرات الحيوية بحاجة لمتابعة هادئة.';
+  }
+  if (m.contains('Patient vitals look stable')) {
+    return 'المؤشرات الحيوية مستقرة وطبيعية تماماً والحمد لله.';
+  }
+  return m;
+}
+
 class _Headline extends StatelessWidget {
   const _Headline({required this.alert});
 
@@ -316,31 +330,54 @@ class _Headline extends StatelessWidget {
     final colors = AppColors.of(context, s.view);
     final profile = app.auth.patientById(alert.patientId);
     final lead = app.monitoring.latestPrediction?.leadTimeMin;
+    final isDark = theme.brightness == Brightness.dark;
 
     return Container(
       padding: Insets.card,
       decoration: BoxDecoration(
-        color: colors.container,
+        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
         borderRadius: Radii.rLg,
-        border: Border.all(color: colors.border),
+        border: Border.all(
+          color: colors.foreground.withValues(alpha: 0.4),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: colors.foreground.withValues(alpha: 0.08),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(AppColors.iconFor(s.view), color: colors.foreground),
+              Icon(AppColors.iconFor(s.view), color: colors.foreground, size: 22),
               Gap.hSm,
               Expanded(
                 child: RiskBadge(view: s.view, labelOverride: s.label),
               ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'درع الأعصاب الذكي',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF38BDF8),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
             ],
           ),
-          Gap.vSm,
+          Gap.vMd,
           Text(
-            // A lead time is only quoted when the forecast actually produced
-            // one; «سيحدث خلال … دقيقة» with an invented number is worse than no
-            // number at all (§11.1).
             lead == null || lead <= 0
                 ? l.activeAlertHeadlineNoLead
                 : l.activeAlertHeadline(lead.round()),
@@ -350,19 +387,32 @@ class _Headline extends StatelessWidget {
             ),
           ),
           Gap.vSm,
-          Text(alert.message, style: theme.textTheme.bodyMedium),
-          Gap.vSm,
-          LabeledValue(
-            label: l.alertTime,
-            value: TimeAgo.stamp(alert.timestamp),
-            icon: Icons.schedule_outlined,
-          ),
-          if (profile != null)
-            LabeledValue(
-              label: l.patientLabel,
-              value: profile.name,
-              icon: Icons.person_outline,
+          Text(
+            _friendlyAlertMessage(alert.message),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              height: 1.5,
+              fontSize: 14.5,
             ),
+          ),
+          Gap.vMd,
+          Wrap(
+            spacing: Gap.md,
+            runSpacing: Gap.xs,
+            children: [
+              LabeledValue(
+                label: l.alertTime,
+                value: TimeAgo.stamp(alert.timestamp),
+                icon: Icons.schedule_outlined,
+              ),
+              if (profile != null)
+                LabeledValue(
+                  label: l.patientLabel,
+                  value: profile.name,
+                  icon: Icons.person_outline,
+                ),
+            ],
+          ),
+          Gap.vSm,
           RiskStrip(view: s.view),
         ],
       ),

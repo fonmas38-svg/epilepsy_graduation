@@ -14,8 +14,13 @@ class TokenProvider {
         _baseUrl = baseUrl ?? AppConfig.apiBaseUrl;
 
   final http.Client _client;
-  final String _baseUrl;
+  String _baseUrl;
   final _store = SecureStore.instance;
+
+  String get baseUrl => _baseUrl;
+  void updateBaseUrl(String newUrl) {
+    _baseUrl = newUrl.replaceAll(RegExp(r'/+$'), '');
+  }
 
   static const _kToken = 'jwt_access_token';
   static const _kExpiry = 'jwt_expiry_epoch_ms';
@@ -41,6 +46,7 @@ class TokenProvider {
         UserRole.patient => 'patient',
         UserRole.caregiver => 'caregiver',
         UserRole.doctor => 'doctor',
+        UserRole.admin => 'admin',
       };
 
   /// Restore a previously cached token so the app is authenticated on launch.

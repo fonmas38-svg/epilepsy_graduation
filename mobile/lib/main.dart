@@ -14,6 +14,7 @@ import 'core/theme/app_colors.dart';
 import 'core/theme/app_spacing.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/risk_view.dart';
+import 'features/admin/admin_home_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/caregiver/caregiver_home_screen.dart';
 import 'features/doctor/doctor_home_screen.dart';
@@ -166,7 +167,7 @@ class _AppOverlayState extends State<_AppOverlay> {
                 InactivityWatcher(
                   child: widget.child ?? const SizedBox.shrink(),
                 ),
-                if (state.preAlert != null)
+                if (state.auth.currentUser?.role == UserRole.patient && state.preAlert != null)
                   _TopBanner(
                     view: RiskView.caution,
                     icon: Icons.online_prediction,
@@ -177,7 +178,9 @@ class _AppOverlayState extends State<_AppOverlay> {
                       child: Text('أنا بخير (${state.preAlertSecondsLeft})'),
                     ),
                   )
-                else if (state.lastAlert != null)
+                else if (state.auth.currentUser?.role == UserRole.patient &&
+                    state.lastAlert != null &&
+                    !state.lastAlert!.acknowledged)
                   _TopBanner(
                     view: RiskView.danger,
                     icon: AppColors.iconFor(RiskView.danger),
@@ -224,17 +227,22 @@ class _AppOverlayState extends State<_AppOverlay> {
     WidgetsBinding.instance.addPostFrameCallback((_) => widget.router.restore());
   }
 
-  /// Open the full-screen alert view for a new critical alert.
+  /// Open the full-screen alert view for a fresh critical alert.
   ///
-  /// Patient and family only. A doctor following twenty patients would be thrown
-  /// out of whatever they were reading by every one of them; they get the banner,
-  /// and their own list already sorts by who needs attention (§5.1).
+  /// Patient and family only. A doctor following twenty patients must not be interrupted;
+  /// their own list already sorts by who needs attention (§5.1).
   void _maybeOpenAlert(AppState state) {
     final alert = state.lastAlert;
     if (alert == null || alert.severity != 'critical') return;
     if (alert.id == _autoOpenedAlertId) return;
     final role = state.auth.currentUser?.role;
     if (role != UserRole.patient && role != UserRole.caregiver) return;
+
+    // Only auto-open if the alert was generated very recently (within 2 minutes)
+    // and is unacknowledged, preventing past alerts from popping up unexpectedly upon login.
+    final isFresh = DateTime.now().difference(alert.timestamp).inMinutes.abs() < 2;
+    if (!isFresh || alert.acknowledged) return;
+
     _autoOpenedAlertId = alert.id;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AppRouter.openAlert(alertId: alert.id, patientId: alert.patientId);
@@ -392,6 +400,7 @@ class _RootShellState extends State<RootShell> {
       UserRole.patient => const PatientHomeScreen(),
       UserRole.caregiver => const CaregiverHomeScreen(),
       UserRole.doctor => const DoctorHomeScreen(),
+      UserRole.admin => const AdminHomeScreen(),
     };
   }
 }

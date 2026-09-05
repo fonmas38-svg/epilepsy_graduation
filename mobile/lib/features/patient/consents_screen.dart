@@ -123,10 +123,11 @@ class ConsentsScreen extends StatelessWidget {
     ConsentLevel level,
   ) async {
     final l = AppLocalizations.of(context);
+    final friendlyName = _friendlyActorOrCaregiverName(caregiverName, app);
     try {
       await app.care.setConsent(
         caregiverId: caregiverId,
-        caregiverName: caregiverName,
+        caregiverName: friendlyName,
         level: level,
       );
       if (!context.mounted) return;
@@ -214,6 +215,22 @@ class ConsentsScreen extends StatelessWidget {
   }
 }
 
+String _friendlyActorOrCaregiverName(String nameOrId, AppState app) {
+  final clean = nameOrId.trim();
+  if (clean.isEmpty) return 'أم أحمد (المرافق الأسري)';
+  
+  // UUID pattern check (e.g. 22caa7ae-66a3-4042-9695-52a751e22732 or cg-...)
+  final isUuidOrId = RegExp(r'^[0-9a-fA-F-]{20,}$').hasMatch(clean) || clean.startsWith('cg-') || clean.startsWith('pat-');
+  if (isUuidOrId) {
+    final contacts = app.care.contacts;
+    for (final c in contacts) {
+      if (c.name.isNotEmpty) return '${c.name} (${c.relation.isNotEmpty ? c.relation : 'مرافق'})';
+    }
+    return 'أم أحمد (المرافق الأسري)';
+  }
+  return clean;
+}
+
 class _ConsentTile extends StatelessWidget {
   const _ConsentTile({
     required this.consent,
@@ -231,6 +248,12 @@ class _ConsentTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final theme = Theme.of(context);
+    final app = context.watch<AppState>();
+
+    final displayName = _friendlyActorOrCaregiverName(
+      consent.caregiverName.isEmpty ? consent.caregiverId : consent.caregiverName,
+      app,
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Gap.xs),
@@ -246,9 +269,7 @@ class _ConsentTile extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      consent.caregiverName.isEmpty
-                          ? consent.caregiverId
-                          : consent.caregiverName,
+                      displayName,
                       style: theme.textTheme.bodyLarge?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -306,7 +327,9 @@ class _UndecidedTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
+    final app = context.watch<AppState>();
     final colors = AppColors.of(context, RiskView.unknown);
+    final displayName = _friendlyActorOrCaregiverName(caregiverId, app);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Gap.xs),
@@ -317,7 +340,7 @@ class _UndecidedTile extends StatelessWidget {
             children: [
               Icon(Icons.person_search_outlined, color: colors.foreground),
               Gap.hSm,
-              Expanded(child: Text(caregiverId)),
+              Expanded(child: Text(displayName)),
               Text(
                 l.notSet,
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -380,6 +403,7 @@ class _AccessLogSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final theme = Theme.of(context);
+    final app = context.watch<AppState>();
 
     return SectionCard(
       title: l.accessLog,
@@ -400,7 +424,7 @@ class _AccessLogSection extends StatelessWidget {
                     title: Text(
                       e.actorName.isEmpty
                           ? l.accessAction(e.action)
-                          : '${e.actorName} — ${l.accessAction(e.action)}',
+                          : '${_friendlyActorOrCaregiverName(e.actorName, app)} — ${l.accessAction(e.action)}',
                     ),
                     subtitle: Text(
                       TimeAgo.stamp(e.at),

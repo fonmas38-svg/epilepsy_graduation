@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../features/admin/admin_home_screen.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/caregiver/alert_response_screen.dart';
 import '../../features/caregiver/caregiver_home_screen.dart';
@@ -74,6 +75,7 @@ class AppRouter {
   static const _patientOnly = {UserRole.patient};
   static const _caregiverOnly = {UserRole.caregiver};
   static const _doctorOnly = {UserRole.doctor};
+  static const _adminOnly = {UserRole.admin};
 
   static final Map<String, _Spec> _specs = {
     Routes.login: _Spec(
@@ -174,6 +176,10 @@ class AppRouter {
       roles: null,
       restorable: false,
     ),
+    Routes.admin: _Spec(
+      build: (_) => const AdminHomeScreen(),
+      roles: _adminOnly,
+    ),
   };
 
   /// The home route for [role]; [Routes.login] when there is no session.
@@ -181,6 +187,7 @@ class AppRouter {
     UserRole.patient => Routes.patient,
     UserRole.caregiver => Routes.family,
     UserRole.doctor => Routes.doctor,
+    UserRole.admin => Routes.admin,
     null => Routes.login,
   };
 

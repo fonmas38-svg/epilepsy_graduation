@@ -8,7 +8,17 @@ const USER_KEY = 'epi_admin_user';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY));
+  const [token, setToken] = useState(() => {
+    try {
+      const urlToken = new URLSearchParams(window.location.search).get('token');
+      if (urlToken) {
+        localStorage.setItem(TOKEN_KEY, urlToken);
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return urlToken;
+      }
+    } catch (_) {}
+    return localStorage.getItem(TOKEN_KEY);
+  });
   const [user, setUser] = useState(() => {
     try {
       const raw = localStorage.getItem(USER_KEY);

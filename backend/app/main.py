@@ -3,9 +3,12 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app import alert_outbox, notification_delivery
 from app.device_hub import DeviceHub
@@ -121,7 +124,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Epilepsy Monitoring API",
-    description="Smart epileptic patient monitoring and early seizure prediction (graduation)",
+    description="Smart epileptic patient monitoring and early seizure prediction system",
     version="2.3.0",
     lifespan=lifespan,
 )
@@ -147,4 +150,20 @@ app.include_router(model_info.router)
 app.include_router(clinical.router)
 app.include_router(messages.router)
 app.include_router(notifications.router)
+
+# Serve React Admin Dashboard at /admin
+_admin_dist = Path(__file__).resolve().parent.parent.parent / "admin-dashboard" / "dist"
+if _admin_dist.exists():
+    _assets_dir = _admin_dist / "assets"
+    if _assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="web_root_assets")
+        app.mount("/admin/assets", StaticFiles(directory=str(_assets_dir)), name="web_admin_assets")
+
+    @app.get("/admin", include_in_schema=False)
+    @app.get("/admin/{full_path:path}", include_in_schema=False)
+    async def serve_admin_dashboard(full_path: str = ""):
+        target_file = _admin_dist / full_path
+        if full_path and target_file.is_file():
+            return FileResponse(target_file)
+        return FileResponse(_admin_dist / "index.html")
 

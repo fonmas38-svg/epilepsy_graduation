@@ -28,12 +28,15 @@ enum FailureKind {
 
 @immutable
 class Failure implements Exception {
-  const Failure(this.kind, {this.debugDetail});
+  const Failure(this.kind, {this.debugDetail, this.customMessage});
 
   final FailureKind kind;
 
   /// Raw technical detail. For logs and bug reports only — **never** rendered.
   final String? debugDetail;
+
+  /// Optional human-readable override message when standard kind messages don't fit (e.g. login failed vs session expired).
+  final String? customMessage;
 
   /// The session died; the caller should sign the user out rather than retry.
   bool get isAuth => kind == FailureKind.unauthorized;
@@ -59,7 +62,7 @@ class Failure implements Exception {
   bool get isConnectivity =>
       kind == FailureKind.offline || kind == FailureKind.timeout;
 
-  String message(AppLocalizations l) => switch (kind) {
+  String message(AppLocalizations l) => customMessage ?? switch (kind) {
     FailureKind.offline => l.errNoConnection,
     FailureKind.timeout => l.errTimeout,
     FailureKind.unauthorized => l.errSessionExpired,

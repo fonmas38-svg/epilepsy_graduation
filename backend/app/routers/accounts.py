@@ -24,7 +24,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app import cloud_store, device_store, security, users_store
@@ -37,30 +37,61 @@ from app.auth import (
 
 router = APIRouter(tags=["accounts"])
 
-# Anti-Brute-Force Rate Limiting (5 failed attempts per 15-minute window)
+# Anti-Brute-Force Rate Limiting & High-Security Surveillance
 _FAILED_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
+_FAILED_IP_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
 _MAX_FAILED_ATTEMPTS = 5
+_MAX_ADMIN_FAILED_ATTEMPTS = 3  # High-security threshold for admin accounts
 _LOCKOUT_WINDOW_SECONDS = 900
 
 
-def _check_rate_limit(username: str) -> None:
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_rate_limit(username: str, ip: str) -> None:
     now = time.time()
     cutoff = now - _LOCKOUT_WINDOW_SECONDS
-    attempts = [t for t in _FAILED_ATTEMPTS[username] if t > cutoff]
-    _FAILED_ATTEMPTS[username] = attempts
-    if len(attempts) >= _MAX_FAILED_ATTEMPTS:
+    u_key = username.strip().lower()
+
+    # Username check
+    attempts = [t for t in _FAILED_ATTEMPTS[u_key] if t > cutoff]
+    _FAILED_ATTEMPTS[u_key] = attempts
+    limit = _MAX_ADMIN_FAILED_ATTEMPTS if u_key == "admin" else _MAX_FAILED_ATTEMPTS
+    if len(attempts) >= limit:
+        users_store.log(
+            actor=username,
+            actor_role="admin" if u_key == "admin" else "user",
+            action="account_lockout_triggered",
+            target=f"ip:{ip}",
+            detail={"reason": "rate_limit_exceeded", "attempts": len(attempts), "ip": ip},
+        )
         raise HTTPException(
             status_code=429,
-            detail="Too many failed login attempts. Account temporarily locked for 15 minutes.",
+            detail=f"Too many failed login attempts ({len(attempts)}/{limit}). Account locked for 15 minutes.",
+        )
+
+    # IP check (prevents spray attacks)
+    ip_attempts = [t for t in _FAILED_IP_ATTEMPTS[ip] if t > cutoff]
+    _FAILED_IP_ATTEMPTS[ip] = ip_attempts
+    if len(ip_attempts) >= 15:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests from this IP. Temporarily blocked for 15 minutes.",
         )
 
 
-def _record_failed_attempt(username: str) -> None:
-    _FAILED_ATTEMPTS[username].append(time.time())
+def _record_failed_attempt(username: str, ip: str) -> None:
+    now = time.time()
+    _FAILED_ATTEMPTS[username.strip().lower()].append(now)
+    _FAILED_IP_ATTEMPTS[ip].append(now)
 
 
 def _reset_attempts(username: str) -> None:
-    _FAILED_ATTEMPTS.pop(username, None)
+    _FAILED_ATTEMPTS.pop(username.strip().lower(), None)
 
 require_admin = require_role("admin")
 require_doctor = require_role("doctor", "admin")
@@ -203,18 +234,55 @@ def _accessible_patient_views(user: dict) -> list[dict]:
 
 
 @router.post("/auth/login", response_model=LoginResponse)
-def login(body: LoginRequest):
-    """Exchange username + password for a signed JWT (same tokens as /auth/token)."""
-    _check_rate_limit(body.username)
+def login(body: LoginRequest, request: Request):
+    """Exchange username + password for a signed JWT with active surveillance & rate-limiting."""
+    client_ip = _get_client_ip(request)
+    user_agent = request.headers.get("user-agent", "unknown")
+    _check_rate_limit(body.username, client_ip)
+
     user = users_store.get_by_username(body.username)
     if not user or not security.verify_password(body.password, user.get("passwordHash", "")):
-        _record_failed_attempt(body.username)
+        _record_failed_attempt(body.username, client_ip)
+        is_admin = body.username.strip().lower() == "admin"
+        users_store.log(
+            actor=body.username,
+            actor_role="admin" if is_admin else "user",
+            action="admin_login_failed" if is_admin else "login_failed",
+            target=f"ip:{client_ip}",
+            detail={
+                "ip": client_ip,
+                "user_agent": user_agent[:120],
+                "reason": "invalid_credentials",
+                "severity": "high" if is_admin else "medium",
+            },
+        )
         raise HTTPException(status_code=401, detail="invalid username or password")
+
     if user.get("disabled"):
+        users_store.log(
+            actor=user["id"],
+            actor_role=user["role"],
+            action="login_rejected_disabled",
+            target=f"ip:{client_ip}",
+            detail={"ip": client_ip, "username": user["username"]},
+        )
         raise HTTPException(status_code=403, detail="account disabled")
+
     _reset_attempts(body.username)
     token = create_token(user["id"], user["role"], extra={"username": user["username"]})
-    users_store.log(user["id"], user["role"], "login", target=user["id"])
+    is_admin = user["role"] == "admin"
+    users_store.log(
+        actor=user["id"],
+        actor_role=user["role"],
+        action="admin_login_success" if is_admin else "login",
+        target=user["id"],
+        detail={
+            "ip": client_ip,
+            "user_agent": user_agent[:120],
+            "security_level": "maximum" if is_admin else "standard",
+            "timestamp": time.time(),
+        },
+    )
     return LoginResponse(
         access_token=token,
         role=user["role"],

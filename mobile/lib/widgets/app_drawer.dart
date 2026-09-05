@@ -21,7 +21,8 @@ class AppDrawer extends StatelessWidget {
     // Use pushReplacement if navigating to home roots to keep stack clean
     if (targetRoute == Routes.patient ||
         targetRoute == Routes.doctor ||
-        targetRoute == Routes.family) {
+        targetRoute == Routes.family ||
+        targetRoute == Routes.admin) {
       Navigator.pushNamedAndRemoveUntil(context, targetRoute, (r) => false);
     } else {
       Navigator.pushNamed(context, targetRoute);
@@ -70,12 +71,14 @@ class AppDrawer extends StatelessWidget {
       UserRole.patient => l.rolePatient,
       UserRole.doctor => l.roleDoctor,
       UserRole.caregiver => l.roleCaregiver,
+      UserRole.admin => l.roleAdmin,
     };
 
     final roleIcon = switch (role) {
       UserRole.patient => Icons.favorite_rounded,
       UserRole.doctor => Icons.medical_services_rounded,
       UserRole.caregiver => Icons.family_restroom_rounded,
+      UserRole.admin => Icons.admin_panel_settings_rounded,
     };
 
     final riskTone = AppColors.of(context, app.riskView);
@@ -303,6 +306,22 @@ class AppDrawer extends StatelessWidget {
                       icon: Icons.chat_bubble_outline,
                       title: 'محادثة الأسرة والمريض',
                       onTap: () => _navigate(context, Routes.messages),
+                    ),
+                    _DrawerTile(
+                      icon: Icons.table_chart_outlined,
+                      title: 'التقارير الطبية وتصدير Excel',
+                      onTap: () => _navigate(context, Routes.reports),
+                    ),
+                    _DrawerTile(
+                      icon: Icons.settings_outlined,
+                      title: l.settingsTitle,
+                      onTap: () => _navigate(context, Routes.patientSettings),
+                    ),
+                  ] else if (role == UserRole.admin) ...[
+                    _DrawerTile(
+                      icon: Icons.admin_panel_settings_outlined,
+                      title: l.adminHome,
+                      onTap: () => _navigate(context, Routes.admin),
                     ),
                     _DrawerTile(
                       icon: Icons.table_chart_outlined,

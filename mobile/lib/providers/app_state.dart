@@ -154,6 +154,15 @@ class AppState extends ChangeNotifier {
   bool apiOnline = false;
   AlertItem? lastAlert;
 
+  static const _kServerModeKey = 'server_target_mode';
+  static const _kCustomServerUrlKey = 'server_custom_url';
+
+  ServerMode serverMode = ServerMode.auto;
+  String? customServerUrl;
+  int? currentServerPingMs;
+  bool isCheckingServer = false;
+  String get currentBaseUrl => api.baseUrl;
+
   String? currentSessionUsername;
   String? currentSessionPassword;
 
@@ -304,6 +313,132 @@ class AppState extends ChangeNotifier {
     medication.fireDueReminders(pid, _l10n); // fire-and-forget
   }
 
+  Future<void> _initServerConnection() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedMode = prefs.getString(_kServerModeKey);
+      serverMode = ServerModeX.fromString(savedMode);
+      customServerUrl = prefs.getString(_kCustomServerUrlKey);
+      await applyServerMode(serverMode, customUrl: customServerUrl, save: false);
+    } catch (_) {
+      serverMode = ServerMode.auto;
+      apiOnline = await api.health();
+    }
+  }
+
+  /// Switch the active server target mode (auto / cloud / local / custom)
+  Future<void> applyServerMode(
+    ServerMode mode, {
+    String? customUrl,
+    bool save = true,
+  }) async {
+    serverMode = mode;
+    if (customUrl != null && customUrl.trim().isNotEmpty) {
+      customServerUrl = customUrl.trim();
+    }
+    if (save) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_kServerModeKey, mode.name);
+        if (customServerUrl != null) {
+          await prefs.setString(_kCustomServerUrlKey, customServerUrl!);
+        }
+      } catch (_) {}
+    }
+
+    isCheckingServer = true;
+    notifyListeners();
+
+    try {
+      switch (mode) {
+        case ServerMode.cloud:
+          api.updateBaseUrl(AppConfig.cloudProductionUrl);
+          currentServerPingMs = await api.ping(api.baseUrl);
+          apiOnline = currentServerPingMs != null;
+          break;
+
+        case ServerMode.local:
+          api.updateBaseUrl(AppConfig.defaultLocalUrl);
+          currentServerPingMs = await api.ping(api.baseUrl);
+          apiOnline = currentServerPingMs != null;
+          break;
+
+        case ServerMode.custom:
+          if (customServerUrl != null && customServerUrl!.isNotEmpty) {
+            api.updateBaseUrl(customServerUrl!);
+            currentServerPingMs = await api.ping(api.baseUrl);
+            apiOnline = currentServerPingMs != null;
+          }
+          break;
+
+        case ServerMode.auto:
+          // Try Cloud first
+          final cloudPing = await api.ping(AppConfig.cloudProductionUrl);
+          if (cloudPing != null) {
+            api.updateBaseUrl(AppConfig.cloudProductionUrl);
+            currentServerPingMs = cloudPing;
+            apiOnline = true;
+          } else {
+            // Cloud down or unreachable: seamlessly fall back to local!
+            final localPing = await api.ping(AppConfig.defaultLocalUrl);
+            if (localPing != null) {
+              api.updateBaseUrl(AppConfig.defaultLocalUrl);
+              currentServerPingMs = localPing;
+              apiOnline = true;
+            } else {
+              // Both offline: keep cloud as target
+              api.updateBaseUrl(AppConfig.cloudProductionUrl);
+              currentServerPingMs = null;
+              apiOnline = false;
+            }
+          }
+          break;
+      }
+
+      if (apiOnline) {
+        try {
+          activeEngine = (await api.modelInfo())?['active_engine'] as String?;
+        } catch (_) {}
+      }
+      debugPrint('[AppState] Connection Result: ServerMode=$mode, ActiveBaseUrl=${api.baseUrl}, Online=$apiOnline, Ping=${currentServerPingMs}ms, Engine=$activeEngine');
+
+      // Auto-recovery for cloud cold starts
+      if (!apiOnline && mode == ServerMode.auto) {
+        Future.delayed(const Duration(seconds: 4), () async {
+          if (!apiOnline && serverMode == ServerMode.auto) {
+            debugPrint('[AppState] Re-checking cloud connection (possible cold wake-up)...');
+            final retryPing = await api.ping(AppConfig.cloudProductionUrl, timeout: const Duration(seconds: 12));
+            if (retryPing != null) {
+              api.updateBaseUrl(AppConfig.cloudProductionUrl);
+              currentServerPingMs = retryPing;
+              apiOnline = true;
+              try {
+                activeEngine = (await api.modelInfo())?['active_engine'] as String?;
+              } catch (_) {}
+              notifyListeners();
+              debugPrint('[AppState] Cloud Server recovered! Ping: ${retryPing}ms');
+            }
+          }
+        });
+      }
+    } finally {
+      isCheckingServer = false;
+      notifyListeners();
+    }
+  }
+
+  /// Measures live latencies to both Cloud and Local servers concurrently.
+  Future<Map<String, int?>> probeAllServers() async {
+    final results = await Future.wait([
+      api.ping(AppConfig.cloudProductionUrl),
+      api.ping(AppConfig.defaultLocalUrl),
+    ]);
+    return {
+      'cloud': results[0],
+      'local': results[1],
+    };
+  }
+
   /// Backend engine reported by /model/info (cnn_lstm_fusion / sklearn / rules).
   String? activeEngine;
 
@@ -357,10 +492,7 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       // notifications are best-effort in demo mode
     }
-    apiOnline = await api.health();
-    if (apiOnline) {
-      activeEngine = (await api.modelInfo())?['active_engine'] as String?;
-    }
+    await _initServerConnection();
 
     // Continuous network connectivity watcher: detects drops and auto-flushes on reconnection
     Connectivity().onConnectivityChanged.listen((results) async {
@@ -424,7 +556,19 @@ class AppState extends ChangeNotifier {
 
     // 1. Try real backend login if server is reachable
     try {
-      if (await api.health()) {
+      bool isHealthy = await api.health();
+      // In auto mode, if primary server is not healthy, immediately probe the fallback server
+      if (!isHealthy && serverMode == ServerMode.auto) {
+        final fallbackUrl = api.baseUrl == AppConfig.cloudProductionUrl
+            ? AppConfig.defaultLocalUrl
+            : AppConfig.cloudProductionUrl;
+        if (await api.health(fallbackUrl)) {
+          api.updateBaseUrl(fallbackUrl);
+          isHealthy = true;
+        }
+      }
+
+      if (isHealthy) {
         await api.login(username, password);
         final context = await api.sessionContext();
         await auth.applyBackendSession(context);
@@ -442,6 +586,17 @@ class AppState extends ChangeNotifier {
           (e.statusCode == 401 || e.statusCode == 429 || e.statusCode == 403)) {
         await api.tokens.clear();
         await auth.signOut();
+        if (e.statusCode == 401) {
+          throw Failure(
+            FailureKind.unauthorized,
+            customMessage: _l10n.errInvalidCredentials,
+          );
+        } else if (e.statusCode == 429) {
+          throw Failure(
+            FailureKind.rateLimited,
+            customMessage: _l10n.errAccountLocked,
+          );
+        }
         throw Failure.from(e);
       }
     }
@@ -494,7 +649,7 @@ class AppState extends ChangeNotifier {
       await auth.signInDemo(
         name: 'مدير النظام',
         email: 'admin@epilepsy.local',
-        role: UserRole.doctor,
+        role: UserRole.admin,
       );
       currentSessionUsername = username;
       currentSessionPassword = password;
@@ -508,7 +663,10 @@ class AppState extends ChangeNotifier {
     // If credentials did not match:
     await api.tokens.clear();
     await auth.signOut();
-    throw const Failure(FailureKind.unauthorized);
+    throw const Failure(
+      FailureKind.unauthorized,
+      customMessage: 'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التحقق وإعادة المحاولة.',
+    );
   }
 
   static const _lastUserKey = 'last_logged_in_username';
@@ -590,7 +748,15 @@ class AppState extends ChangeNotifier {
         await care.loadFor(patientId);
         await messages.loadFor(patientId);
       } catch (_) {}
-      await monitoring.start(patientId);
+
+      // Hardware signal simulation & continuous vital monitoring is exclusive to
+      // the PATIENT account. Doctors & caregivers are clinical observers who read
+      // cloud & SQLite records without triggering local alert generators.
+      if (user.role == UserRole.patient) {
+        await monitoring.start(patientId);
+      } else {
+        await monitoring.stop();
+      }
     }
     apiOnline = await api.health();
   }

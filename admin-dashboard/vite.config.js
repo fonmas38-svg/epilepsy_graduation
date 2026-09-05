@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 // the backend so the browser makes same-origin requests (no CORS surprises),
 // while still allowing an explicit VITE_API_BASE_URL override for LAN/prod.
 export default defineConfig({
+  base: './',
   plugins: [react()],
   server: {
     port: 5173,

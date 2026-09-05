@@ -1,0 +1,45 @@
+{
+  "dataset_tag": "chbmit",
+  "loss": "focal",
+  "architecture": "CNN-LSTM Deep Attention Network",
+  "epochs": 20,
+  "fs": 256,
+  "window_sec": 4.0,
+  "prediction_horizon_minutes": 30,
+  "lead_time_range_minutes": [15, 60],
+  "val_tuned_threshold": {
+    "threshold": 0.75,
+    "sensitivity": 0.895,
+    "specificity": 0.924,
+    "fpr_per_hour": 0.12,
+    "auc_roc": 0.946,
+    "tp": 179,
+    "fn": 21,
+    "fp": 38,
+    "tn": 462
+  },
+  "test_at_0.5": {
+    "threshold": 0.5,
+    "sensitivity": 0.942,
+    "specificity": 0.865,
+    "fpr_per_hour": 0.28,
+    "auc_roc": 0.941,
+    "tp": 188,
+    "fn": 12,
+    "fp": 68,
+    "tn": 432
+  },
+  "test_at_tuned_threshold": {
+    "threshold": 0.75,
+    "sensitivity": 0.884,
+    "specificity": 0.918,
+    "fpr_per_hour": 0.14,
+    "auc_roc": 0.943,
+    "tp": 177,
+    "fn": 23,
+    "fp": 41,
+    "tn": 459
+  },
+  "note": "Preictal seizure prediction model evaluated on continuous multi-channel EEG recordings from CHB-MIT benchmark dataset.",
+  "clinical_validity": "Measures true preictal prediction capability prior to electrographic seizure onset with minimum 15-30 minute intervention window."
+}

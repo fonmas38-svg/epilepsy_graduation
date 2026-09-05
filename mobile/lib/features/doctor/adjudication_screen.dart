@@ -71,12 +71,12 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
   @override
   void initState() {
     super.initState();
-    // ignore: discarded_futures
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _load();
+    });
   }
 
   Future<void> _load() async {
-    final l = AppLocalizations.of(context);
     final app = context.read<AppState>();
     setState(() {
       _loading = true;
@@ -91,7 +91,7 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
           if (decided.contains(a.id)) continue;
           // `safe` means informational. Everything else — including a severity
           // string this build does not recognise — is worth a human look.
-          if (alertSeverity(a.severity, l).view == RiskView.safe) continue;
+          if (alertRiskView(a.severity) == RiskView.safe) continue;
           out.add(_Pending(alert: a, patientName: p.name));
         }
       }

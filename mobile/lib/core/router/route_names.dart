@@ -17,6 +17,7 @@ abstract final class Routes {
   static const patientTriggers = '/patient/triggers';
   static const patientSettings = '/patient/settings';
   static const patientConsents = '/patient/consents';
+  static const patientSimulator = '/patient/simulator';
 
   // Family (§4)
   static const family = '/family';

@@ -13,6 +13,7 @@ import '../../features/patient/history_screen.dart';
 import '../../features/patient/medication_screen.dart';
 import '../../features/patient/patient_home_screen.dart';
 import '../../features/patient/patient_settings_screen.dart';
+import '../../features/patient/patient_simulator_screen.dart';
 import '../../features/patient/triggers_screen.dart';
 import '../../features/shared/active_alert_screen.dart';
 import '../../features/shared/clinical_messages_screen.dart';
@@ -108,6 +109,10 @@ class AppRouter {
     ),
     Routes.patientConsents: _Spec(
       build: (_) => const ConsentsScreen(),
+      roles: _patientOnly,
+    ),
+    Routes.patientSimulator: _Spec(
+      build: (_) => const PatientSimulatorScreen(),
       roles: _patientOnly,
     ),
 

@@ -21,6 +21,7 @@ import '../../services/report_service.dart';
 import '../../widgets/signal_chart.dart';
 import '../caregiver/alert_response_screen.dart'
     show seizureDurationLabel, seizureTypeLabel;
+import '../patient/medication_screen.dart';
 import '../shared/alerts_list.dart';
 import 'adjudication_screen.dart' show verdictIcon, verdictLabel, verdictView;
 
@@ -72,8 +73,9 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
   @override
   void initState() {
     super.initState();
-    // ignore: discarded_futures
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _load();
+    });
   }
 
   Future<void> _load() async {
@@ -295,6 +297,19 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
             icon: const Icon(Icons.gavel_outlined),
           ),
           IconButton(
+            tooltip: 'إدارة ووصف أدوية المريض',
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => MedicationScreen(patientId: pid),
+                ),
+              );
+              if (mounted) _load();
+            },
+            icon: const Icon(Icons.medication_outlined),
+          ),
+          IconButton(
             tooltip: l.refresh,
             onPressed: _loading ? null : _load,
             icon: const Icon(Icons.refresh),
@@ -318,7 +333,18 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
                 lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
                 pendingCount: app.care.pendingCount,
               ),
-              _SummarySection(data: d),
+              _SummarySection(
+                data: d,
+                onManageMeds: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => MedicationScreen(patientId: pid),
+                    ),
+                  );
+                  if (mounted) _load();
+                },
+              ),
               Gap.vMd,
               _TimelineSection(data: d),
               Gap.vMd,
@@ -441,9 +467,10 @@ String _pct(double v) => '${(v * 100).round()}%';
 // ------------------------------------------------------------------ sections
 
 class _SummarySection extends StatelessWidget {
-  const _SummarySection({required this.data});
+  const _SummarySection({required this.data, this.onManageMeds});
 
   final _FileData data;
+  final VoidCallback? onManageMeds;
 
   @override
   Widget build(BuildContext context) {
@@ -527,6 +554,14 @@ class _SummarySection extends StatelessWidget {
               ),
             ],
           ),
+          if (onManageMeds != null) ...[
+            Gap.vMd,
+            FilledButton.tonalIcon(
+              onPressed: onManageMeds,
+              icon: const Icon(Icons.medication_liquid_outlined),
+              label: const Text('إدارة ووصف أدوية المريض السريرية'),
+            ),
+          ],
         ],
       ),
     );

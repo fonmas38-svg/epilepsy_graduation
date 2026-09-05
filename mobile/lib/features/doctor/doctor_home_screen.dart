@@ -13,6 +13,7 @@ import '../../core/utils/time_ago.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
+import '../../widgets/app_drawer.dart';
 import '../../widgets/metrics_panel.dart';
 import '../shared/alerts_list.dart';
 
@@ -70,8 +71,9 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
   @override
   void initState() {
     super.initState();
-    // ignore: discarded_futures
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _load();
+    });
   }
 
   @override
@@ -81,7 +83,6 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
   }
 
   Future<void> _load() async {
-    final l = AppLocalizations.of(context);
     final app = context.read<AppState>();
     setState(() {
       _loading = true;
@@ -98,7 +99,7 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
         final pending = alerts
             .where((a) =>
                 !decided.contains(a.id) &&
-                alertSeverity(a.severity, l).view != RiskView.safe)
+                alertRiskView(a.severity) != RiskView.safe)
             .length;
         rows.add(_Row(
           profile: p,
@@ -126,6 +127,17 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
     final app = context.read<AppState>();
     await app.refreshFromCloud();
     await _load();
+  }
+
+  Future<void> _showAddPatientDialog() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const _AddPatientDialog(),
+    );
+    if (ok == true) {
+      await _load();
+    }
   }
 
   /// Select, then open. The file screen loads that patient's notes and consents,
@@ -183,7 +195,6 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
     final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
     final rows = _visible();
-    final pending = _rows.fold<int>(0, (n, r) => n + r.pendingAdjudications);
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -207,49 +218,52 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
         );
         if (shouldExit == true && context.mounted) {
           await app.signOut();
+          if (context.mounted) {
+            Navigator.pushNamedAndRemoveUntil(context, Routes.login, (r) => false);
+          }
         }
       },
       child: Scaffold(
+      drawer: const AppDrawer(),
       appBar: AppBar(
-        title: Text(l.doctorHome),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'منظومة مراقبة الصرع الذكية',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                  ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'مرحباً د. ${app.auth.currentUser?.name ?? 'العمري'}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
-            tooltip: l.adjudicationTitle,
-            onPressed: () =>
-                Navigator.pushNamed(context, Routes.doctorAdjudication),
-            icon: Badge(
-              isLabelVisible: pending > 0,
-              label: Text('$pending'),
-              child: const Icon(Icons.gavel_outlined),
-            ),
+            tooltip: 'إضافة مريض جديد',
+            onPressed: _busy ? null : () => _showAddPatientDialog(),
+            icon: const Icon(Icons.person_add_alt_1_rounded),
           ),
           IconButton(
             tooltip: l.refresh,
             onPressed: _loading || _busy ? null : _refresh,
-            icon: const Icon(Icons.cloud_download_outlined),
-          ),
-          IconButton(
-            tooltip: 'توجيهات ورسائل المرضى',
-            onPressed: () => Navigator.pushNamed(context, Routes.messages),
-            icon: const Icon(Icons.chat_bubble_outline),
-          ),
-          IconButton(
-            tooltip: 'التقارير الطبية وتصدير Excel',
-            onPressed: () => Navigator.pushNamed(context, Routes.reports),
-            icon: const Icon(Icons.table_chart_outlined),
-          ),
-          IconButton(
-            tooltip: l.settingsTitle,
-            onPressed: () =>
-                Navigator.pushNamed(context, Routes.patientSettings),
-            icon: const Icon(Icons.settings_outlined),
-          ),
-          IconButton(
-            tooltip: l.logout,
-            onPressed: app.signOut,
-            icon: const Icon(Icons.logout),
+            icon: const Icon(Icons.refresh_rounded),
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _busy ? null : () => _showAddPatientDialog(),
+        icon: const Icon(Icons.person_add_alt_1_rounded),
+        label: const Text('إضافة مريض جديد'),
       ),
       body: AsyncView<List<_Row>>(
         loading: _loading,
@@ -258,7 +272,7 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
         isEmpty: (v) => v.isEmpty,
         onRetry: _load,
         emptyTitle: l.noPatientsYet,
-        emptyBody: l.emptyBody,
+        emptyBody: 'يمكنك إضافة مريضك الأول الآن للبدء بمتابعة حالته السريرية وإشاراته الحيوية',
         emptyIcon: Icons.people_outline,
         builder: (context, _) => RefreshIndicator(
           onRefresh: _refresh,
@@ -609,5 +623,415 @@ class _Row {
     if (notReporting) score += 60;
     if (adherence < _lowAdherence) score += 30;
     return score;
+  }
+}
+
+class _AddPatientDialog extends StatefulWidget {
+  const _AddPatientDialog();
+
+  @override
+  State<_AddPatientDialog> createState() => _AddPatientDialogState();
+}
+
+class _AddPatientDialogState extends State<_AddPatientDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _ageCtrl = TextEditingController();
+  final _diagnosisCtrl =
+      TextEditingController(text: 'صرع بؤري وتشنجات متكررة');
+  final _notesCtrl = TextEditingController();
+
+  bool _addCaregiver = false;
+  final _cgNameCtrl = TextEditingController();
+  final _cgPhoneCtrl = TextEditingController();
+  final _cgPasswordCtrl = TextEditingController();
+  String _cgRelation = 'أب / ولي أمر';
+
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _usernameCtrl.dispose();
+    _passwordCtrl.dispose();
+    _phoneCtrl.dispose();
+    _ageCtrl.dispose();
+    _diagnosisCtrl.dispose();
+    _notesCtrl.dispose();
+    _cgNameCtrl.dispose();
+    _cgPhoneCtrl.dispose();
+    _cgPasswordCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+
+    final app = context.read<AppState>();
+    final patUser = _usernameCtrl.text.trim().toLowerCase();
+    final generatedPatientPass = _passwordCtrl.text.trim().isEmpty
+        ? 'pat${DateTime.now().millisecondsSinceEpoch % 100000}'
+        : _passwordCtrl.text.trim();
+    final generatedCgPass =
+        _addCaregiver && _cgPasswordCtrl.text.trim().isEmpty
+            ? 'cg${DateTime.now().millisecondsSinceEpoch % 100000}'
+            : _cgPasswordCtrl.text.trim();
+
+    try {
+      final profile = await app.createDoctorPatient(
+        name: _nameCtrl.text.trim(),
+        username: patUser,
+        password: generatedPatientPass,
+        phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
+        age: int.tryParse(_ageCtrl.text.trim()),
+        diagnosis: _diagnosisCtrl.text.trim(),
+        notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        caregiverName:
+            _addCaregiver && _cgNameCtrl.text.trim().isNotEmpty
+                ? _cgNameCtrl.text.trim()
+                : null,
+        caregiverUsername: _addCaregiver ? 'cg_$patUser' : null,
+        caregiverPhone:
+            _addCaregiver && _cgPhoneCtrl.text.trim().isNotEmpty
+                ? _cgPhoneCtrl.text.trim()
+                : null,
+        caregiverRelation: _addCaregiver ? _cgRelation : null,
+        caregiverPassword: _addCaregiver ? generatedCgPass : null,
+      );
+
+      if (!mounted) return;
+      Navigator.pop(context, true);
+
+      // Show credentials confirmation
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.check_circle_rounded, color: Colors.green, size: 28),
+              SizedBox(width: 8),
+              Text(
+                'تم إنشاء ملف المريض بنجاح',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'المريض: ${profile.name}',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text('اسم المستخدم: $patUser'),
+              Text('كلمة المرور: $generatedPatientPass'),
+              if (_addCaregiver && _cgNameCtrl.text.trim().isNotEmpty) ...[
+                const Divider(height: 24),
+                Text(
+                  'المرافق الأسري: ${_cgNameCtrl.text.trim()} ($_cgRelation)',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                Text('اسم المستخدم: cg_$patUser'),
+                Text('كلمة المرور: $generatedCgPass'),
+              ],
+            ],
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('تم'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 540),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primaryContainer,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.person_add_alt_1_rounded,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'إضافة مريض جديد للعيادة',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              'تسجيل المريض وإسناده فوراً تحت رعايتك السريرية',
+                              style: TextStyle(fontSize: 12, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 24),
+                  if (_error != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(color: Colors.red, fontSize: 13),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+
+                  // Patient Section
+                  const Text(
+                    'البيانات الأساسية للمريض (مطلوبة)',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: _nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'اسم المريض الكامل *',
+                      prefixIcon: Icon(Icons.person_outline),
+                    ),
+                    validator: (v) =>
+                        (v == null || v.trim().isEmpty) ? 'يرجى إدخال اسم المريض' : null,
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _usernameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'اسم المستخدم / المعرف الطبي *',
+                      prefixIcon: Icon(Icons.badge_outlined),
+                      hintText: 'e.g. pat_ahmed',
+                    ),
+                    validator: (v) =>
+                        (v == null || v.trim().length < 3)
+                            ? 'اسم المستخدم يجب ألا يقل عن 3 أحرف'
+                            : null,
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _passwordCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'كلمة المرور (اختياري - يتم التوليد تلقائياً إذا تركت فارغة)',
+                      prefixIcon: Icon(Icons.lock_outline),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Clinical info
+                  const Text(
+                    'البيانات السريرية والاتصال (اختيارية)',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _phoneCtrl,
+                          keyboardType: TextInputType.phone,
+                          decoration: const InputDecoration(
+                            labelText: 'رقم هاتف المريض',
+                            prefixIcon: Icon(Icons.phone_outlined),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 100,
+                        child: TextFormField(
+                          controller: _ageCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'العمر',
+                            prefixIcon: Icon(Icons.cake_outlined),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _diagnosisCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'التشخيص ونوع الصرع',
+                      prefixIcon: Icon(Icons.medical_information_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _notesCtrl,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'ملاحظات وتوجيهات سريرية أولية',
+                      prefixIcon: Icon(Icons.notes_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Optional Family Caregiver Section
+                  Container(
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _addCaregiver
+                            ? theme.colorScheme.primary
+                            : Colors.transparent,
+                      ),
+                    ),
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          value: _addCaregiver,
+                          onChanged: (v) => setState(() => _addCaregiver = v ?? false),
+                          title: const Text(
+                            'إضافة مرافق أسري معتمد لهذا المريض (اختياري)',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                          subtitle: const Text(
+                            'يتم إنشاء حساب مرافق للأسرة وربطه فوراً لتلقي التنبيهات',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                          controlAffinity: ListTileControlAffinity.leading,
+                        ),
+                        if (_addCaregiver) ...[
+                          const SizedBox(height: 8),
+                          TextFormField(
+                            controller: _cgNameCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'اسم المرافق الكامل',
+                              prefixIcon: Icon(Icons.family_restroom_outlined),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextFormField(
+                                  controller: _cgPhoneCtrl,
+                                  keyboardType: TextInputType.phone,
+                                  decoration: const InputDecoration(
+                                    labelText: 'رقم هاتف المرافق',
+                                    prefixIcon: Icon(Icons.phone_outlined),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              DropdownButton<String>(
+                                value: _cgRelation,
+                                onChanged: (v) => setState(() => _cgRelation = v ?? _cgRelation),
+                                items: const [
+                                  DropdownMenuItem(value: 'أب / ولي أمر', child: Text('أب / ولي أمر')),
+                                  DropdownMenuItem(value: 'أم', child: Text('أم')),
+                                  DropdownMenuItem(value: 'أخ / أخت', child: Text('أخ / أخت')),
+                                  DropdownMenuItem(value: 'زوج / زوجة', child: Text('زوج / زوجة')),
+                                  DropdownMenuItem(value: 'مرافق قانوني', child: Text('مرافق قانوني')),
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          TextFormField(
+                            controller: _cgPasswordCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'كلمة مرور المرافق (اختياري - توليد تلقائي)',
+                              prefixIcon: Icon(Icons.lock_outline),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Actions
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: _busy ? null : () => Navigator.pop(context, false),
+                        child: const Text('إلغاء'),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        onPressed: _busy ? null : _submit,
+                        icon: _busy
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.check, size: 18),
+                        label: Text(_busy ? 'جارٍ الإنشاء...' : 'حفظ وإنشاء السجل'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

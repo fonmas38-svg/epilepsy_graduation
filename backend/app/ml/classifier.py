@@ -170,6 +170,8 @@ class RiskClassifier:
 
         preictal_prob = None
         source = None
+        horizon = HORIZON_MIN
+        thr = PREICTAL_PREALERT_THR
         if self.preictal is not None and getattr(self.preictal, "available", False):
             try:
                 preictal_prob = self.preictal.predict_proba(window)
@@ -177,19 +179,21 @@ class RiskClassifier:
                 log.warning("preictal predict failed (%s); using heuristic", e)
                 preictal_prob = None
             if preictal_prob is not None:
-                source = "cnn_lstm_preictal"
+                source = getattr(self.preictal, "engine_name", "cloud_preictal_net")
+                horizon = float(getattr(self.preictal, "meta", {}).get("horizon_min", HORIZON_MIN))
+                thr = float(getattr(self.preictal, "meta", {}).get("decision_threshold", PREICTAL_PREALERT_THR))
 
         if preictal_prob is None:
             preictal_prob = self._preictal_score(features)
             source = "simulated_heuristic"
 
         preictal_prob = float(min(max(preictal_prob, 0.0), 1.0))
-        lead_time = self._lead_time(preictal_prob, HORIZON_MIN)
+        lead_time = self._lead_time(preictal_prob, horizon)
 
         result.preictal_prob = round(preictal_prob, 4)
         result.lead_time_min = round(lead_time, 2)
-        result.horizon_min = HORIZON_MIN
-        result.predicted = preictal_prob >= PREICTAL_PREALERT_THR
+        result.horizon_min = horizon
+        result.predicted = preictal_prob >= thr
         result.prediction_source = source
         # Surface the auditable drivers of the forecast (never overwrites the
         # detection components already set by the fusion engine).
@@ -292,9 +296,12 @@ class RiskClassifier:
         deep = self.deep.info() if self.deep is not None else {
             "engine": "cnn_lstm", "available": False, "error": "disabled"}
         preictal = self.preictal.info() if self.preictal is not None else {
-            "engine": "cnn_lstm_preictal", "available": False, "error": "disabled"}
-        prediction_source = ("cnn_lstm_preictal" if preictal.get("available")
+            "engine": "cloud_preictal_net", "available": False, "error": "disabled"}
+        prediction_source = (preictal.get("engine", "cloud_preictal_net") if preictal.get("available")
                              else "simulated_heuristic")
+        meta = preictal.get("meta") or {}
+        horizon = float(meta.get("horizon_min", HORIZON_MIN))
+        thr = float(meta.get("decision_threshold", PREICTAL_PREALERT_THR))
         return {
             "active_engine": "cnn_lstm_fusion" if deep.get("available")
             else ("sklearn" if self.model is not None else "rules"),
@@ -306,7 +313,7 @@ class RiskClassifier:
             "prediction": {
                 "enabled": USE_PREICTAL,
                 "source": prediction_source,
-                "horizon_min": HORIZON_MIN,
-                "prealert_threshold": PREICTAL_PREALERT_THR,
+                "horizon_min": horizon,
+                "prealert_threshold": thr,
             },
         }

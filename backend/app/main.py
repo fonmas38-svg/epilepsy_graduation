@@ -26,6 +26,7 @@ from app.routers import (
     model_info,
     notifications,
     simulate,
+    messages,
 )
 
 
@@ -144,4 +145,6 @@ app.include_router(device.router)
 app.include_router(cloud_dataset.router)
 app.include_router(model_info.router)
 app.include_router(clinical.router)
+app.include_router(messages.router)
 app.include_router(notifications.router)
+

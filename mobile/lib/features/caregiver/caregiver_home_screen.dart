@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/enums.dart';
 import '../../core/errors/failure.dart';
@@ -14,6 +15,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/care_models.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
+import '../../widgets/app_drawer.dart';
 import '../patient/consents_screen.dart' show consentLevelDesc, consentLevelLabel;
 import '../shared/alerts_list.dart';
 
@@ -50,8 +52,9 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   @override
   void initState() {
     super.initState();
-    // ignore: discarded_futures
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _load();
+    });
   }
 
   Future<void> _load() async {
@@ -163,37 +166,40 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         );
         if (shouldExit == true && context.mounted) {
           await app.signOut();
+          if (context.mounted) {
+            Navigator.pushNamedAndRemoveUntil(context, Routes.login, (r) => false);
+          }
         }
       },
       child: Scaffold(
+      drawer: const AppDrawer(),
       appBar: AppBar(
-        title: Text(l.familyHome),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'منظومة مراقبة الصرع الذكية',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                  ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'مرحباً ${app.auth.currentUser?.name ?? 'المرافق'} (المرافق السريري)',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: l.refresh,
             onPressed: _loading || _busy ? null : _refresh,
-            icon: const Icon(Icons.cloud_download_outlined),
-          ),
-          IconButton(
-            tooltip: 'توجيهات ورسائل الطبيب',
-            onPressed: () => Navigator.pushNamed(context, Routes.messages),
-            icon: const Icon(Icons.chat_bubble_outline),
-          ),
-          IconButton(
-            tooltip: 'التقارير الطبية وتصدير Excel',
-            onPressed: () => Navigator.pushNamed(context, Routes.reports),
-            icon: const Icon(Icons.table_chart_outlined),
-          ),
-          IconButton(
-            tooltip: l.settingsTitle,
-            onPressed: () =>
-                Navigator.pushNamed(context, Routes.patientSettings),
-            icon: const Icon(Icons.settings_outlined),
-          ),
-          IconButton(
-            tooltip: l.logout,
-            onPressed: app.signOut,
-            icon: const Icon(Icons.logout),
+            icon: const Icon(Icons.refresh_rounded),
           ),
         ],
       ),
@@ -216,6 +222,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                 lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
                 pendingCount: app.care.pendingCount,
               ),
+              const _CaregiverLocationTrackerCard(),
+              Gap.vMd,
               SectionCard(
                 title: l.linkedPatients,
                 icon: Icons.people_outline,
@@ -723,6 +731,122 @@ class _DeviceRow extends StatelessWidget {
         label: l.lastUpdate,
         value: TimeAgo.since(lastSeen, l),
         icon: Icons.schedule,
+      ),
+    );
+  }
+}
+
+class _CaregiverLocationTrackerCard extends StatelessWidget {
+  const _CaregiverLocationTrackerCard();
+
+  Future<void> _openMap(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri != null && await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final app = context.watch<AppState>();
+    final loc = app.messages.lastSharedLocation;
+
+    return Container(
+      padding: Insets.card,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: Radii.rMd,
+        border: Border.all(color: Colors.teal.withValues(alpha: 0.4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(Gap.sm),
+                decoration: BoxDecoration(
+                  color: Colors.teal.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.location_on, color: Colors.teal, size: 20),
+              ),
+              Gap.hSm,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'الموقع الجغرافي للمريض (مباشر)',
+                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      loc != null
+                          ? 'آخر إحداثيات تم مشاركتها من جهاز المريض'
+                          : 'لم يقم المريض بمشاركة موقعه بعد',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (loc != null) ...[
+            Gap.vSm,
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(Gap.sm),
+              decoration: BoxDecoration(
+                color: Colors.teal.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(Radii.sm),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.pin_drop, size: 16, color: Colors.teal),
+                  Gap.hXs,
+                  Expanded(
+                    child: Text(
+                      'الإحداثيات: ${(loc['latitude'] as num).toStringAsFixed(4)}, ${(loc['longitude'] as num).toStringAsFixed(4)}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.teal.shade800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Gap.vSm,
+            SizedBox(
+              width: double.infinity,
+              height: A11y.minTouchTarget,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () {
+                  final url = loc['mapsUrl'] as String? ??
+                      'https://maps.google.com/?q=${loc['latitude']},${loc['longitude']}';
+                  _openMap(url);
+                },
+                icon: const Icon(Icons.directions, size: 18),
+                label: const Text('الاتجاهات والملاحة عبر Google Maps'),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

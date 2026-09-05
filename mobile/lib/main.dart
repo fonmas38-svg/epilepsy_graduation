@@ -9,6 +9,7 @@ import 'core/config.dart';
 import 'core/enums.dart';
 import 'core/errors/failure.dart';
 import 'core/router/app_router.dart';
+import 'core/router/route_names.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_spacing.dart';
 import 'core/theme/app_theme.dart';
@@ -16,6 +17,7 @@ import 'core/theme/risk_view.dart';
 import 'features/auth/login_screen.dart';
 import 'features/caregiver/caregiver_home_screen.dart';
 import 'features/doctor/doctor_home_screen.dart';
+import 'features/onboarding/permissions_onboarding_screen.dart';
 import 'features/patient/patient_home_screen.dart';
 import 'l10n/app_localizations.dart';
 import 'providers/app_state.dart';
@@ -24,6 +26,21 @@ import 'widgets/inactivity_watcher.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Filter out known Flutter Windows duplicate Alt-key platform repeat assertion:
+  // 'Failed assertion: line 516 pos 11: !_pressedKeys.containsKey(event.physicalKey)'
+  FlutterError.onError = (FlutterErrorDetails details) {
+    final msg = details.exception.toString();
+    final stack = details.stack.toString();
+    if (msg.contains('hardware_keyboard.dart') ||
+        msg.contains('!_pressedKeys.containsKey') ||
+        stack.contains('hardware_keyboard.dart')) {
+      debugPrint('Suppressed hardware keyboard platform repeat assertion');
+      return;
+    }
+    FlutterError.presentError(details);
+  };
+
   // FCM is currently an Android-only integration. The Android native config
   // comes from google-services.json, so no generated Dart options file is
   // required for this target. Windows remains usable through backend polling.
@@ -154,10 +171,10 @@ class _AppOverlayState extends State<_AppOverlay> {
                     view: RiskView.caution,
                     icon: Icons.online_prediction,
                     title: state.preAlert!.message,
-                    subtitle: l.cancelWindow,
+                    subtitle: 'تنفس بهدوء واسترخِ — اضغط إن كنت بخير لإلغاء التنبيه',
                     action: FilledButton.tonal(
                       onPressed: state.cancelPreAlert,
-                      child: Text('${l.cancel} (${state.preAlertSecondsLeft})'),
+                      child: Text('أنا بخير (${state.preAlertSecondsLeft})'),
                     ),
                   )
                 else if (state.lastAlert != null)
@@ -193,7 +210,9 @@ class _AppOverlayState extends State<_AppOverlay> {
     _autoOpenedAlertId = null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final nav = AppRouter.navigatorKey.currentState;
-      if (nav != null && nav.canPop()) nav.popUntil((r) => r.isFirst);
+      if (nav != null) {
+        nav.pushNamedAndRemoveUntil(Routes.login, (r) => false);
+      }
       AppRouter.observer.clearSaved();
     });
   }
@@ -327,14 +346,41 @@ class RootShell extends StatefulWidget {
 
 class _RootShellState extends State<RootShell> {
   bool _splashFinished = false;
+  bool _onboardingCompleted = true;
+  bool _checkedOnboarding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkOnboarding();
+  }
+
+  Future<void> _checkOnboarding() async {
+    final state = context.read<AppState>();
+    final completed = await state.hasCompletedPermissionsOnboarding();
+    if (mounted) {
+      setState(() {
+        _onboardingCompleted = completed;
+        _checkedOnboarding = true;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    if (!state.ready || !_splashFinished) {
+    if (!state.ready || !_splashFinished || !_checkedOnboarding) {
       return AnimatedSplashScreen(
         onFinished: () {
           if (mounted) setState(() => _splashFinished = true);
+        },
+      );
+    }
+
+    if (!_onboardingCompleted) {
+      return PermissionsOnboardingScreen(
+        onFinished: () {
+          if (mounted) setState(() => _onboardingCompleted = true);
         },
       );
     }

@@ -50,6 +50,7 @@ from app.database import (  # noqa: E402  (import after sys.path fix)
     database_path,
     devices,
     is_sqlite_url,
+    messages,
     normalize_database_url,
     outcomes,
     patients,
@@ -76,6 +77,7 @@ COPY_ORDER: tuple[Table, ...] = (
     outcomes,
     alert_outbox,
     store_imports,
+    messages,
 )
 
 BATCH_SIZE = 500

@@ -532,4 +532,47 @@ class ApiClient {
       return null;
     }
   }
+
+  Future<Map<String, dynamic>> createDoctorPatient({
+    required String username,
+    required String name,
+    String? password,
+    String? phone,
+    int? age,
+    String? diagnosis,
+    String? notes,
+    String? caregiverName,
+    String? caregiverUsername,
+    String? caregiverPhone,
+    String? caregiverRelation,
+    String? caregiverPassword,
+  }) async {
+    final payload = <String, dynamic>{
+      'username': username,
+      'name': name,
+      if (password != null && password.isNotEmpty) 'password': password,
+      if (phone != null && phone.isNotEmpty) 'phone': phone,
+      'age': ?age,
+      if (diagnosis != null && diagnosis.isNotEmpty) 'diagnosis': diagnosis,
+      if (notes != null && notes.isNotEmpty) 'notes': notes,
+      if (caregiverName != null && caregiverName.isNotEmpty)
+        'caregiver_name': caregiverName,
+      if (caregiverUsername != null && caregiverUsername.isNotEmpty)
+        'caregiver_username': caregiverUsername,
+      if (caregiverPhone != null && caregiverPhone.isNotEmpty)
+        'caregiver_phone': caregiverPhone,
+      if (caregiverRelation != null && caregiverRelation.isNotEmpty)
+        'caregiver_relation': caregiverRelation,
+      if (caregiverPassword != null && caregiverPassword.isNotEmpty)
+        'caregiver_password': caregiverPassword,
+    };
+    final r = await _postAuthed('/doctor/patients', payload);
+    if (r.statusCode != 201) {
+      throw ApiException(
+        _detail(r, 'تعذّر إنشاء حساب المريض'),
+        statusCode: r.statusCode,
+      );
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
 }

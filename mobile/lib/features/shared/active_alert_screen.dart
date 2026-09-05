@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/enums.dart';
 import '../../core/errors/failure.dart';
@@ -64,8 +66,9 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
   @override
   void initState() {
     super.initState();
-    // ignore: discarded_futures
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _load();
+    });
   }
 
   Future<void> _load() async {
@@ -86,6 +89,9 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
         _responses = responses;
         _loading = false;
       });
+      if (found?.severity == 'critical') {
+        HapticFeedback.heavyImpact();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -265,6 +271,7 @@ class _Body extends StatelessWidget {
       padding: Insets.pageBottomSafe,
       children: [
         _Headline(alert: alert),
+        _LocationNavigationCard(alert: alert),
         if (counting) ...[
           Gap.vMd,
           _Countdown(secondsLeft: app.preAlertSecondsLeft),
@@ -363,6 +370,99 @@ class _Headline extends StatelessWidget {
   }
 }
 
+class _LocationNavigationCard extends StatelessWidget {
+  const _LocationNavigationCard({required this.alert});
+
+  final AlertItem alert;
+
+  String? _extractMapsUrl(String text) {
+    final exp = RegExp(r'https://maps\.google\.com/\S+');
+    final match = exp.firstMatch(text);
+    return match?.group(0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final mapsUrl = _extractMapsUrl(alert.message) ??
+        app.messages.lastSharedLocation?['mapsUrl'] as String?;
+
+    if (mapsUrl == null) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: Gap.md),
+      padding: Insets.card,
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        borderRadius: Radii.rMd,
+        border: Border.all(color: Colors.blue.shade300, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.withValues(alpha: 0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(Gap.sm),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade700,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.location_on, color: Colors.white, size: 20),
+              ),
+              Gap.hSm,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'الموقع الجغرافي للمريض متاح فوراً',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue.shade900,
+                      ),
+                    ),
+                    Text(
+                      'اضغط للبدء في الملاحة اللحظية والوصول للمريض عبر خرائط Google',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue.shade800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Gap.vSm,
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.blue.shade700,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.md)),
+            ),
+            onPressed: () async {
+              final uri = Uri.tryParse(mapsUrl);
+              if (uri != null && await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+            },
+            icon: const Icon(Icons.navigation_outlined),
+            label: const Text('فتح الملاحة اللحظية (خرائط Google)'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// The cancel window, as a plain number.
 ///
 /// No pulsing, no ring animation, no colour flashing: §7 forbids fast or
@@ -428,14 +528,17 @@ class _Steps extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final steps = [l.step1, l.step2, l.step3];
+    final steps = [
+      'تنفس بعمق وبطء: خذ شهيقاً هادئاً لـ 4 ثوانٍ ثم زفيراً مسترخياً لتهدئة جهازك العصبي.',
+      'اجلس أو استلقِ برفق على جنبك في مكان مريح وآمن بعيداً عن أي أطراف حادة.',
+      'أنت بأمان تام ومحاط بالرعاية؛ ومرافقك السريري على تواصل لمساندتك دائماً.',
+    ];
     final colors = AppColors.of(context, RiskView.safe);
     final theme = Theme.of(context);
 
     return SectionCard(
-      title: l.immediateSteps,
-      icon: Icons.checklist_outlined,
+      title: 'إرشادات الاسترخاء والسلامة الوقائية',
+      icon: Icons.self_improvement_outlined,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -464,7 +567,10 @@ class _Steps extends StatelessWidget {
                   ),
                   Gap.hSm,
                   Expanded(
-                    child: Text(steps[i], style: theme.textTheme.bodyLarge),
+                    child: Text(
+                      steps[i],
+                      style: theme.textTheme.bodyLarge?.copyWith(height: 1.4),
+                    ),
                   ),
                 ],
               ),
@@ -497,56 +603,65 @@ class _PatientActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
-    final safe = AppColors.of(context, RiskView.safe);
 
     return SectionCard(
-      title: l.quickActions,
-      icon: Icons.touch_app_outlined,
+      title: 'إجراءات السلامة والاطمئنان',
+      icon: Icons.health_and_safety_outlined,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Help stays first and largest. It is the action with the worst
-          // consequence if it is hard to find (§3.1).
-          EmergencyButton(
-            label: l.needHelp,
-            busy: app.sosInProgress,
-            onPressed: () => onNeedHelp(),
-          ),
-          Gap.vMd,
+          // 1. Prominent, reassuring "I am OK" button FIRST to eliminate anxiety
           SizedBox(
             height: A11y.emergencyTouchTarget,
             child: FilledButton.icon(
               onPressed: busy || acknowledged ? null : () => onImOk(),
               style: FilledButton.styleFrom(
-                backgroundColor: safe.solid,
-                foregroundColor: safe.onSolid,
+                backgroundColor: const Color(0xFF2A9D8F),
+                foregroundColor: Colors.white,
                 shape: const RoundedRectangleBorder(borderRadius: Radii.rMd),
                 textStyle: const TextStyle(
-                  fontSize: 18,
+                  fontSize: 17,
                   fontWeight: FontWeight.w800,
                 ),
               ),
-              icon: const Icon(Icons.thumb_up_outlined),
-              label: Text(acknowledged ? l.acknowledged : l.imOk),
+              icon: const Icon(Icons.check_circle_outline, size: 24),
+              label: Text(
+                acknowledged
+                    ? 'تم تسجيل استقرارك والحمد لله'
+                    : 'أنا بخير تماماً والحمد لله (إلغاء التنبيه)',
+              ),
             ),
           ),
           Gap.vSm,
+
+          // 2. Clear False Alarm button
           SizedBox(
             height: A11y.minTouchTarget,
             child: OutlinedButton.icon(
               onPressed: busy ? null : () => onFalseAlarm(),
-              // Two different acts behind one label: while the window is open
-              // this cancels the alert; afterwards it can only report it.
               icon: Icon(
                 counting ? Icons.cancel_outlined : Icons.report_off_outlined,
+                color: const Color(0xFFE76F51),
               ),
-              label: Text(l.falseAlarm),
+              label: const Text('إنذار غير صحيح / لا أشعر بأي أعراض'),
             ),
           ),
+          Gap.vMd,
+
+          // 3. Emergency Help Button (available whenever genuinely needed)
+          EmergencyButton(
+            label: 'طلب مساندة طارئة (SOS)',
+            busy: app.sosInProgress,
+            onPressed: () => onNeedHelp(),
+          ),
           Gap.vSm,
-          InfoNote(text: l.falseAlarmWhy, icon: Icons.info_outline),
+          const InfoNote(
+            text:
+                'اطمئن تماماً: النظام يراقب نشاطك باستمرار؛ إذا كان هذا التنبيه عارضاً فإن الضغط على «أنا بخير» يلغيه فوراً دون إقلاق أسرتك.',
+            icon: Icons.spa_outlined,
+            view: RiskView.safe,
+          ),
         ],
       ),
     );

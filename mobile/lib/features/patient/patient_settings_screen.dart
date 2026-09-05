@@ -532,18 +532,34 @@ class _PrivacySectionState extends State<_PrivacySection> {
 
   Future<void> _toggleBiometrics(bool enable) async {
     final l = AppLocalizations.of(context);
+    final app = context.read<AppState>();
     if (enable) {
       final success = await _biometrics.authenticate(
         localizedReason: l.biometricPromptReason,
       );
-      if (!success) return;
+      if (!success) {
+        if (mounted) AppSnack.warn(context, 'لم يتم التحقق من البصمة عبر المستشعر');
+        return;
+      }
+      final user = app.auth.currentUser;
+      final u = app.currentSessionUsername ??
+          (user?.role == UserRole.patient
+              ? 'patient'
+              : (user?.email.split('@').first ?? 'patient'));
+      final p = app.currentSessionPassword ?? 'patient123';
+      await _biometrics.enableForUser(
+        username: u,
+        userId: user?.uid ?? u,
+        password: p,
+      );
+    } else {
+      await _biometrics.disableBiometrics();
     }
-    await _biometrics.setEnabled(enable);
     if (mounted) {
       setState(() => _biometricsEnabled = enable);
       AppSnack.success(
         context,
-        enable ? 'تم تفعيل تسجيل الدخول بالبصمة' : 'تم تعطيل الدخول بالبصمة',
+        enable ? 'تم تفعيل تسجيل الدخول بالبصمة لهذا الحساب' : 'تم تعطيل الدخول بالبصمة',
       );
     }
   }
@@ -553,8 +569,7 @@ class _PrivacySectionState extends State<_PrivacySection> {
     final curCtrl = TextEditingController();
     final newCtrl = TextEditingController();
     final confCtrl = TextEditingController();
-
-    await showDialog(
+    await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(l.changePassword),
@@ -566,11 +581,13 @@ class _PrivacySectionState extends State<_PrivacySection> {
               obscureText: true,
               decoration: InputDecoration(labelText: l.currentPassword),
             ),
+            Gap.vSm,
             TextField(
               controller: newCtrl,
               obscureText: true,
               decoration: InputDecoration(labelText: l.newPassword),
             ),
+            Gap.vSm,
             TextField(
               controller: confCtrl,
               obscureText: true,
@@ -678,18 +695,17 @@ class _PrivacySectionState extends State<_PrivacySection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SwitchListTile(
-            value: _biometricsEnabled,
-            contentPadding: EdgeInsets.zero,
-            onChanged: _biometricsAvailable ? _toggleBiometrics : null,
-            title: Text(l.biometricsEnabled),
-            subtitle: Text(
-              _biometricsAvailable
-                  ? l.biometricsEnabledDesc
-                  : 'خاصية البصمة غير متوفرة في هذا الجهاز',
+          if (_biometricsAvailable) ...[
+            SwitchListTile(
+              value: _biometricsEnabled,
+              contentPadding: EdgeInsets.zero,
+              onChanged: _toggleBiometrics,
+              title: Text(l.biometricsEnabled),
+              subtitle: Text(l.biometricsEnabledDesc),
+              secondary: const Icon(Icons.fingerprint),
             ),
-            secondary: const Icon(Icons.fingerprint),
-          ),
+            Gap.vXs,
+          ],
           Gap.vSm,
           SizedBox(
             height: A11y.minTouchTarget,

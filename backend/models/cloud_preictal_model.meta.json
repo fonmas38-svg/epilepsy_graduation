@@ -1,0 +1,21 @@
+{
+  "arch": "CloudPreictalNet",
+  "in_ch": 1,
+  "n_classes": 2,
+  "hidden_dim": 64,
+  "num_heads": 4,
+  "input_len": 262,
+  "fs": 256,
+  "channel": "eeg",
+  "task": "prediction(preictal_vs_interictal)",
+  "dataset": "chbmit_preictal_temporal",
+  "decision_threshold": 0.60,
+  "horizon_min": 30.0,
+  "preictal_min": 30,
+  "safety_gap_min": 5,
+  "sensitivity": 1.0,
+  "specificity": 0.9989,
+  "accuracy": 0.9991,
+  "f1_score": 0.9984,
+  "notes": "Deep Multi-scale Conv1D (k=3,5,7) + Multihead Self-Attention + BiLSTM. Cloud Preictal Forecasting Engine."
+}

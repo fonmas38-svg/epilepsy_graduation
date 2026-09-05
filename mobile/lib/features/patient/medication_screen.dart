@@ -13,6 +13,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
 import '../../services/medication_service.dart';
+import '../../widgets/app_drawer.dart';
 
 /// §3.4 — medication adherence.
 ///
@@ -232,14 +233,67 @@ class _MedicationScreenState extends State<MedicationScreen> {
     final pid = widget.patientId ?? app.activePatientId;
 
     if (pid == null) {
-      return EmptyState(
-        title: l.noPatientSelected,
-        body: l.noLinkedPatientsBody,
-        icon: Icons.person_search_outlined,
+      return Scaffold(
+        drawer: const AppDrawer(),
+        appBar: AppBar(title: Text(l.medsTitle)),
+        body: EmptyState(
+          title: l.noPatientSelected,
+          body: l.noLinkedPatientsBody,
+          icon: Icons.person_search_outlined,
+        ),
       );
     }
 
+    final canPop = Navigator.canPop(context);
+    final profile = app.auth.patientById(pid);
+    final isOtherPatient = widget.patientId != null &&
+        widget.patientId != app.auth.currentUser?.uid;
+
     return Scaffold(
+      drawer: const AppDrawer(),
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              l.medsTitle,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+            ),
+            if (isOtherPatient && profile != null)
+              Text(
+                'المريض: ${profile.name}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+          ],
+        ),
+        leading: canPop
+            ? const BackButton()
+            : Builder(
+                builder: (ctx) => IconButton(
+                  tooltip: 'القائمة الجانبية',
+                  icon: const Icon(Icons.menu),
+                  onPressed: () => Scaffold.of(ctx).openDrawer(),
+                ),
+              ),
+        actions: [
+          IconButton(
+            tooltip: l.addMedication,
+            onPressed: _busy ? null : () => _addOrEdit(),
+            icon: const Icon(Icons.add_circle_outline),
+          ),
+          IconButton(
+            tooltip: l.refresh,
+            onPressed: _loading ? null : _load,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _busy ? null : () => _addOrEdit(),
         icon: const Icon(Icons.add),

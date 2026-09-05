@@ -21,10 +21,8 @@ class AuthService {
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_userKey);
-    if (raw != null) {
-      currentUser = AppUser.fromMap(jsonDecode(raw) as Map<String, dynamic>);
-    }
+    // Do not restore session automatically on cold app start: require login on each startup.
+    currentUser = null;
     final patientsRaw = prefs.getString(_patientsKey);
     if (patientsRaw != null) {
       final map = jsonDecode(patientsRaw) as Map<String, dynamic>;
@@ -43,11 +41,14 @@ class AuthService {
   void _seedDemoPatients() {
     _patients['patient-demo'] = PatientProfile(
       patientId: 'patient-demo',
-      name: 'أحمد المريض',
-      diagnosis: 'صرع بؤري',
+      name: 'أحمد محمود',
+      diagnosis: 'صرع بؤري وتشنجات متكررة',
+      phone: '+966 50 123 4567',
       medications: const ['Levetiracetam 500mg', 'Carbamazepine 200mg'],
       caregivers: const ['caregiver-demo'],
       doctors: const ['doctor-demo'],
+      currentStatus: RiskLabel.stable,
+      lastUpdated: DateTime.now(),
     );
   }
 
@@ -56,7 +57,10 @@ class AuthService {
     required String email,
     required UserRole role,
   }) async {
-    // TODO(firebase): FirebaseAuth.instance.signInWithEmailAndPassword(...)
+    // Ensure demo patients exist
+    if (!_patients.containsKey('patient-demo')) {
+      _seedDemoPatients();
+    }
     final uid = switch (role) {
       UserRole.patient => 'patient-demo',
       UserRole.caregiver => 'caregiver-demo',
@@ -64,7 +68,7 @@ class AuthService {
     };
     final linked = role == UserRole.patient
         ? <String>[]
-        : <String>['patient-demo'];
+        : _patients.keys.toList();
     final user = AppUser(
       uid: uid,
       name: name,
@@ -78,8 +82,13 @@ class AuthService {
       _patients[uid] = PatientProfile(
         patientId: uid,
         name: name,
+        diagnosis: 'صرع بؤري وتشنجات متكررة',
+        phone: '+966 50 123 4567',
+        medications: const ['Levetiracetam 500mg', 'Carbamazepine 200mg'],
         caregivers: const ['caregiver-demo'],
         doctors: const ['doctor-demo'],
+        currentStatus: RiskLabel.stable,
+        lastUpdated: DateTime.now(),
       );
     }
     await _persistUser();
@@ -118,6 +127,10 @@ class AuthService {
       final profile = PatientProfile.fromMap(normalized);
       _patients[profile.patientId] = profile;
     }
+    // If backend returns no patients for doctor in demo/local setup, preserve default patient
+    if (_patients.isEmpty && role != UserRole.patient) {
+      _seedDemoPatients();
+    }
     final linked = role == UserRole.patient
         ? <String>[]
         : _patients.keys.toList(growable: false);
@@ -146,13 +159,55 @@ class AuthService {
       final p = _patients[user.uid];
       return p == null ? [] : [p];
     }
-    return user.linkedPatientIds
+    final mapped = user.linkedPatientIds
         .map((id) => _patients[id])
         .whereType<PatientProfile>()
         .toList();
+    if (mapped.isEmpty && (user.role == UserRole.doctor || user.role == UserRole.caregiver)) {
+      return _patients.values.toList();
+    }
+    return mapped;
   }
 
   PatientProfile? patientById(String id) => _patients[id];
+
+  Future<PatientProfile> addDoctorPatient({
+    required String name,
+    String? patientId,
+    String? diagnosis,
+    String? phone,
+    List<String> medications = const [],
+    String? caregiverId,
+  }) async {
+    final pid = patientId ?? 'pat-${_uuid.v4().substring(0, 8)}';
+    final docUid = currentUser?.uid ?? 'doctor-demo';
+    final profile = PatientProfile(
+      patientId: pid,
+      name: name,
+      diagnosis: diagnosis ?? 'صرع عام',
+      phone: phone ?? '',
+      medications: medications,
+      caregivers: caregiverId != null ? [caregiverId] : const [],
+      doctors: [docUid],
+      currentStatus: RiskLabel.stable,
+      lastUpdated: DateTime.now(),
+    );
+    _patients[pid] = profile;
+    if (currentUser != null && !currentUser!.linkedPatientIds.contains(pid)) {
+      final updatedLinked = [...currentUser!.linkedPatientIds, pid];
+      currentUser = AppUser(
+        uid: currentUser!.uid,
+        name: currentUser!.name,
+        email: currentUser!.email,
+        role: currentUser!.role,
+        linkedPatientIds: updatedLinked,
+        fcmToken: currentUser!.fcmToken,
+      );
+      await _persistUser();
+    }
+    await _persistPatients();
+    return profile;
+  }
 
   Future<void> updatePatientStatus(String patientId, RiskLabel status) async {
     final existing = _patients[patientId];
@@ -161,6 +216,7 @@ class AuthService {
       patientId: existing.patientId,
       name: existing.name,
       diagnosis: existing.diagnosis,
+      phone: existing.phone,
       medications: existing.medications,
       caregivers: existing.caregivers,
       doctors: existing.doctors,

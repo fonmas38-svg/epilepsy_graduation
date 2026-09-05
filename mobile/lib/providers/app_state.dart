@@ -15,6 +15,7 @@ import '../services/care_service.dart';
 import '../services/local_database.dart';
 import '../services/location_service.dart';
 import '../services/medication_service.dart';
+import '../services/message_service.dart';
 import '../services/monitoring_service.dart';
 import '../services/notification_service.dart';
 import '../services/prealert_controller.dart';
@@ -24,6 +25,7 @@ import '../services/report_export_service.dart';
 import '../services/settings_service.dart';
 import '../services/signal_simulator.dart';
 import '../services/sync_service.dart';
+import '../services/edge_model_service.dart';
 
 class AppState extends ChangeNotifier {
   AppState() {
@@ -35,6 +37,7 @@ class AppState extends ChangeNotifier {
     notifications = NotificationService(fallbackTitle: _l10n.notificationFallbackTitle);
     medication = MedicationService(db: db, notifications: notifications);
     care = CareService(api: api, db: db);
+    messages = MessageService(db: db, api: api, auth: auth);
     monitoring = MonitoringService(
       db: db,
       simulator: SignalSimulator(),
@@ -63,8 +66,20 @@ class AppState extends ChangeNotifier {
     preAlerts.onEscalate = (pre) async {
       final reading = _preAlertReading;
       if (reading != null) {
+        final fix = await location.currentFix();
         final escalated = await sync.escalatePreAlert(reading, pre);
         lastAlert = escalated;
+        if (fix != null) {
+          try {
+            await messages.shareLocation(
+              patientId: reading.patientId,
+              latitude: fix.latitude,
+              longitude: fix.longitude,
+              accuracy: fix.accuracy,
+              note: '⚠️ تصعيد طارئ: لم يستجب المريض لإنذار ما قبل النوبة، الموقع الحالي مرفق فوراً.',
+            );
+          } catch (_) {}
+        }
       }
       await _logPredictionEvent('escalated');
       notifyListeners();
@@ -81,6 +96,7 @@ class AppState extends ChangeNotifier {
     // Same for the care store: a contact saved offline, or an outbox item that
     // finally went out, changes what several screens must show.
     care.addListener(notifyListeners);
+    messages.addListener(notifyListeners);
   }
 
   /// Localised strings for code paths that have no `BuildContext`.
@@ -113,6 +129,9 @@ class AppState extends ChangeNotifier {
   /// clinical documentation (§3.3–§3.6, §4, §5.4).
   late final CareService care;
 
+  /// Secure messaging store for private doctor-patient and family channels.
+  late final MessageService messages;
+
   /// Best-effort GPS for SOS (isolated; degrades to no coordinates).
   final LocationService location = LocationService();
 
@@ -134,6 +153,28 @@ class AppState extends ChangeNotifier {
   bool ready = false;
   bool apiOnline = false;
   AlertItem? lastAlert;
+
+  String? currentSessionUsername;
+  String? currentSessionPassword;
+
+  static const _onboardingCompletedKey = 'has_completed_permissions_onboarding';
+
+  Future<bool> hasCompletedPermissionsOnboarding() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(_onboardingCompletedKey) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> setPermissionsOnboardingCompleted() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_onboardingCompletedKey, true);
+      notifyListeners();
+    } catch (_) {}
+  }
 
   /// The last non-fatal problem, as a typed [Failure] rather than a prebuilt
   /// sentence. Screens render it through `ErrorState` / `AppSnack`, which is what
@@ -268,6 +309,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     await auth.init();
+    try {
+      await EdgeModelService.instance.initialize();
+    } catch (_) {}
     // Load persisted prediction settings (SPH/horizon, #21) and apply them to
     // the offline forecast heuristic. Best-effort — defaults stay on failure.
     try {
@@ -331,6 +375,7 @@ class AppState extends ChangeNotifier {
             await sync.syncPending(pid);
           }
           await care.flushOutbox();
+          await messages.flushPendingMessages();
         }
       }
     });
@@ -383,6 +428,8 @@ class AppState extends ChangeNotifier {
         await api.login(username, password);
         final context = await api.sessionContext();
         await auth.applyBackendSession(context);
+        currentSessionUsername = username;
+        currentSessionPassword = password;
         await _registerCurrentPushToken();
         await _startForUser();
         await saveLastLoggedInUser(username);
@@ -410,6 +457,8 @@ class AppState extends ChangeNotifier {
         email: 'doctor@epilepsy.local',
         role: UserRole.doctor,
       );
+      currentSessionUsername = username;
+      currentSessionPassword = password;
       await _startForUser();
       await saveLastLoggedInUser(username);
       apiOnline = false;
@@ -421,6 +470,8 @@ class AppState extends ChangeNotifier {
         email: 'patient@epilepsy.local',
         role: UserRole.patient,
       );
+      currentSessionUsername = username;
+      currentSessionPassword = password;
       await _startForUser();
       await saveLastLoggedInUser(username);
       apiOnline = false;
@@ -432,6 +483,8 @@ class AppState extends ChangeNotifier {
         email: 'caregiver@epilepsy.local',
         role: UserRole.caregiver,
       );
+      currentSessionUsername = username;
+      currentSessionPassword = password;
       await _startForUser();
       await saveLastLoggedInUser(username);
       apiOnline = false;
@@ -443,6 +496,8 @@ class AppState extends ChangeNotifier {
         email: 'admin@epilepsy.local',
         role: UserRole.doctor,
       );
+      currentSessionUsername = username;
+      currentSessionPassword = password;
       await _startForUser();
       await saveLastLoggedInUser(username);
       apiOnline = false;
@@ -479,6 +534,11 @@ class AppState extends ChangeNotifier {
     await preAlerts.cancel();
     _preAlertReading = null;
     _preAlertPrediction = null;
+    monitoring.latestReading = null;
+    monitoring.latestAssessment = null;
+    monitoring.latestPrediction = null;
+    currentSessionUsername = null;
+    currentSessionPassword = null;
     final pushToken = notifications.token;
     if (!AppConfig.demoMode && pushToken != null && api.tokens.hasSession) {
       try {
@@ -513,6 +573,10 @@ class AppState extends ChangeNotifier {
         ? user.uid
         : (patients.isNotEmpty ? patients.first.patientId : null);
 
+    for (final p in patients) {
+      await _seedPatientTelemetry(p.patientId);
+    }
+
     if (patientId != null) {
       // Seed the medication plan from the patient profile (idempotent).
       try {
@@ -524,10 +588,120 @@ class AppState extends ChangeNotifier {
       // stop monitoring from starting.
       try {
         await care.loadFor(patientId);
+        await messages.loadFor(patientId);
       } catch (_) {}
       await monitoring.start(patientId);
     }
     apiOnline = await api.health();
+  }
+
+  Future<void> _seedPatientTelemetry(String pid) async {
+    try {
+      final existing = await db.assessmentsFor(pid, limit: 1);
+      if (existing.isEmpty) {
+        final now = DateTime.now();
+        final reading = VitalReading(
+          id: auth.newId(),
+          patientId: pid,
+          timestamp: now.subtract(const Duration(minutes: 1)),
+          eeg: List.generate(64, (i) => 18.0 + (i % 6) * 1.5),
+          ecg: List.generate(64, (i) => 12.0),
+          motion: List.generate(64, (i) => 1.2),
+          hr: 76.0,
+          synced: true,
+        );
+        await db.insertReading(reading);
+
+        final assessment = RiskAssessment(
+          id: auth.newId(),
+          patientId: pid,
+          timestamp: now.subtract(const Duration(minutes: 1)),
+          label: RiskLabel.stable,
+          confidence: 0.95,
+          features: const {'baseline': true},
+          processingMs: 6.0,
+        );
+        await db.insertAssessment(assessment);
+      }
+    } catch (_) {}
+  }
+
+  Future<PatientProfile> createDoctorPatient({
+    required String name,
+    required String username,
+    String? password,
+    String? phone,
+    int? age,
+    String? diagnosis,
+    String? notes,
+    String? caregiverName,
+    String? caregiverUsername,
+    String? caregiverPhone,
+    String? caregiverRelation,
+    String? caregiverPassword,
+  }) async {
+    failure = null;
+    PatientProfile? profile;
+    String? backendPatientId;
+
+    if (apiOnline && api.tokens.hasSession) {
+      try {
+        final res = await api.createDoctorPatient(
+          username: username,
+          name: name,
+          password: password,
+          phone: phone,
+          age: age,
+          diagnosis: diagnosis,
+          notes: notes,
+          caregiverName: caregiverName,
+          caregiverUsername: caregiverUsername,
+          caregiverPhone: caregiverPhone,
+          caregiverRelation: caregiverRelation,
+          caregiverPassword: caregiverPassword,
+        );
+        final userMap = res['user'] as Map<String, dynamic>?;
+        if (userMap != null) {
+          backendPatientId = userMap['id'] as String?;
+        }
+      } catch (e) {
+        debugPrint('Cloud patient creation notice: $e');
+      }
+    }
+
+    profile = await auth.addDoctorPatient(
+      name: name,
+      patientId: backendPatientId,
+      diagnosis: diagnosis,
+      phone: phone,
+      caregiverId: caregiverName != null ? 'cg-$username' : null,
+    );
+
+    // Seed baseline telemetry and assessment for this patient
+    await _seedPatientTelemetry(profile.patientId);
+    notifyListeners();
+    return profile;
+  }
+
+  /// Explicit 1-tap action for the patient to broadcast their real-time location to family.
+  Future<bool> shareMyLocationWithFamily({String? note}) async {
+    final pid = monitoring.activePatientId ?? auth.currentUser?.uid;
+    if (pid == null) return false;
+    try {
+      final fix = await location.currentFix();
+      if (fix == null) return false;
+      await messages.shareLocation(
+        patientId: pid,
+        latitude: fix.latitude,
+        longitude: fix.longitude,
+        accuracy: fix.accuracy,
+        note: note,
+      );
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _registerCurrentPushToken() async {
@@ -594,6 +768,57 @@ class AppState extends ChangeNotifier {
     // every screen that reads those fields showing whoever happened to be last.
     final active = monitoring.activePatientId;
     if (active != null) await monitoring.refresh(active);
+    await messages.flushPendingMessages();
+    notifyListeners();
+  }
+
+  /// Simulate a realistic pre-ictal forecast event with 30s countdown for live clinical demonstration.
+  Future<void> simulatePreIctalForecast() async {
+    final pid = monitoring.activePatientId ?? auth.currentUser?.uid;
+    if (pid == null) return;
+    final now = DateTime.now();
+    final reading = VitalReading(
+      id: auth.newId(),
+      patientId: pid,
+      timestamp: now,
+      eeg: List.generate(64, (i) => (i % 8 == 0) ? 95.0 : 15.0),
+      ecg: List.generate(64, (i) => 10.0),
+      motion: List.generate(64, (i) => 4.0),
+      hr: 112.0,
+      synced: false,
+    );
+    await db.insertReading(reading);
+    monitoring.latestReading = reading;
+
+    final prediction = PredictionState(
+      predicted: true,
+      preictalProb: 0.89,
+      leadTimeMin: 12.0,
+      horizonMin: settings.horizonMin,
+      source: 'simulator',
+      trajectory: const [0.2, 0.45, 0.72, 0.89],
+    );
+    monitoring.latestPrediction = prediction;
+
+    final assessment = RiskAssessment(
+      id: auth.newId(),
+      patientId: pid,
+      timestamp: now,
+      label: RiskLabel.watch,
+      confidence: 0.89,
+      features: prediction.toMap(),
+      processingMs: 12.0,
+    );
+    await db.insertAssessment(assessment);
+    monitoring.latestAssessment = assessment;
+
+    final preAlert = sync.buildPreAlert(reading, assessment, prediction);
+    if (preAlert != null) {
+      _preAlertReading = reading;
+      _preAlertPrediction = prediction;
+      notifications.showLocal(_l10n.severityPreAlert, preAlert.message);
+      preAlerts.start(preAlert);
+    }
     notifyListeners();
   }
 

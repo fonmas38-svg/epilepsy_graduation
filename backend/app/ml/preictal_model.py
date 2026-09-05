@@ -41,32 +41,64 @@ import numpy as np
 log = logging.getLogger("epilepsy.preictal_model")
 
 _MODELS_DIR = Path(__file__).resolve().parents[2] / "models"
-DEFAULT_WEIGHTS = _MODELS_DIR / "cnn_lstm_chbmit.pt"
-DEFAULT_META = _MODELS_DIR / "cnn_lstm_chbmit.meta.json"
+if (_MODELS_DIR / "cloud_preictal_model.pt").exists():
+    DEFAULT_WEIGHTS = _MODELS_DIR / "cloud_preictal_model.pt"
+    DEFAULT_META = _MODELS_DIR / "cloud_preictal_model.meta.json"
+else:
+    DEFAULT_WEIGHTS = _MODELS_DIR / "cnn_lstm_chbmit.pt"
+    DEFAULT_META = _MODELS_DIR / "cnn_lstm_chbmit.meta.json"
 
-# Fallbacks used only when the .meta.json is absent/corrupt. The real values come
-# from the hand-authored meta (reconciled with train.py's printed ``in_ch`` and
-# the window_sec*fs input length) when the Phase-3 weights are produced.
+# Fallbacks used only when the .meta.json is absent/corrupt.
 _FALLBACK_META = {
-    "in_ch": 16,
+    "arch": "CloudPreictalNet",
+    "in_ch": 1,
     "n_classes": 2,
-    "hidden": 64,
-    "input_len": 1280,      # window_sec (5.0) * fs (256)
+    "hidden_dim": 64,
+    "num_heads": 4,
+    "input_len": 262,
     "fs": 256,
-    "decision_threshold": 0.5,
+    "decision_threshold": 0.60,
+    "horizon_min": 30.0,
     "dataset": "chbmit",
     "task": "prediction(preictal_vs_interictal)",
 }
 
 
+def _build_cloud_preictal_net(torch, nn, in_ch: int = 1, n_classes: int = 2, hidden_dim: int = 64, num_heads: int = 4):
+    """Deep Cloud Preictal Forecasting Engine: Multi-scale Conv1D + Self-Attention + BiLSTM."""
+    class CloudPreictalNet(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.c1 = nn.Conv1d(in_ch, 24, kernel_size=3, padding=1)
+            self.c2 = nn.Conv1d(in_ch, 24, kernel_size=5, padding=2)
+            self.c3 = nn.Conv1d(in_ch, 24, kernel_size=7, padding=3)
+            self.bn = nn.BatchNorm1d(72)
+            self.relu = nn.ReLU()
+            self.pool = nn.MaxPool1d(2)
+            self.attn = nn.MultiheadAttention(embed_dim=72, num_heads=num_heads, batch_first=True)
+            self.lstm = nn.LSTM(72, hidden_dim, batch_first=True, bidirectional=True)
+            self.head = nn.Sequential(
+                nn.Dropout(0.3),
+                nn.Linear(hidden_dim * 2, 64),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(64, n_classes),
+            )
+
+        def forward(self, x):
+            z = torch.cat([self.c1(x), self.c2(x), self.c3(x)], dim=1)
+            z = self.pool(self.relu(self.bn(z)))
+            z_t = z.transpose(1, 2)
+            attn_out, _ = self.attn(z_t, z_t, z_t)
+            lstm_out, _ = self.lstm(attn_out)
+            pooled = lstm_out.mean(dim=1)
+            return self.head(pooled)
+
+    return CloudPreictalNet()
+
+
 def _build_model(torch, nn, in_ch: int, n_classes: int, hidden: int):
-    """Re-declaration of research/scripts/train.py::CNN1D_LSTM (must match keys).
-
-    Identical architecture to ``deep_model._build_model`` — only ``in_ch`` differs
-    (multichannel here). Kept as a separate copy so this engine never imports the
-    detection engine and the two evolve independently.
-    """
-
+    """Legacy research multichannel CNN1D_LSTM."""
     class CNN1D_LSTM(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -84,7 +116,7 @@ def _build_model(torch, nn, in_ch: int, n_classes: int, hidden: int):
                 nn.Dropout(0.3), nn.Linear(64, n_classes),
             )
 
-        def forward(self, x):                 # x: (B, C, L)
+        def forward(self, x):
             z = self.features(x)
             z = z.transpose(1, 2)
             out, _ = self.lstm(z)
@@ -108,6 +140,8 @@ class PreictalModel:
         self._loaded = False
         self.error: str | None = None
         self.meta: dict = dict(_FALLBACK_META)
+        self.engine_name = "cloud_preictal_net"
+        self._weights_name = DEFAULT_WEIGHTS.name
 
     # ------------------------------------------------------------------ load
     @classmethod
@@ -132,18 +166,32 @@ class PreictalModel:
             import torch.nn as nn
 
             self._torch = torch
-            model = _build_model(
-                torch, nn,
-                int(self.meta["in_ch"]), int(self.meta["n_classes"]), int(self.meta["hidden"]),
-            )
+            self._weights_name = weights.name
             state = torch.load(weights, map_location="cpu")
+            arch = self.meta.get("arch", "")
+            if arch == "CloudPreictalNet" or "attn.in_proj_weight" in state:
+                model = _build_cloud_preictal_net(
+                    torch, nn,
+                    in_ch=int(self.meta.get("in_ch", 1)),
+                    n_classes=int(self.meta.get("n_classes", 2)),
+                    hidden_dim=int(self.meta.get("hidden_dim", 64)),
+                    num_heads=int(self.meta.get("num_heads", 4)),
+                )
+                self.engine_name = "cloud_preictal_net"
+            else:
+                model = _build_model(
+                    torch, nn,
+                    int(self.meta.get("in_ch", 16)), int(self.meta.get("n_classes", 2)), int(self.meta.get("hidden", 64)),
+                )
+                self.engine_name = "cnn_lstm_preictal"
+
             model.load_state_dict(state)
             model.eval()
             self._model = model
             self._loaded = True
-            log.info("preictal_model: loaded %s (in_ch=%s, input_len=%s, thr=%s)",
-                     weights.name, self.meta["in_ch"], self.meta["input_len"],
-                     self.meta["decision_threshold"])
+            log.info("preictal_model: loaded %s (arch=%s, in_ch=%s, input_len=%s, thr=%s)",
+                     weights.name, self.engine_name, self.meta.get("in_ch"),
+                     self.meta.get("input_len"), self.meta.get("decision_threshold"))
         except Exception as e:  # noqa: BLE001
             self.error = f"load failed: {e}"
             log.warning("preictal_model: %s -> preictal engine disabled", self.error)
@@ -252,9 +300,9 @@ class PreictalModel:
 
     def info(self) -> dict:
         return {
-            "engine": "cnn_lstm_preictal",
+            "engine": getattr(self, "engine_name", "cloud_preictal_net"),
             "available": self.available,
             "error": self.error,
-            "weights": DEFAULT_WEIGHTS.name,
+            "weights": getattr(self, "_weights_name", DEFAULT_WEIGHTS.name),
             "meta": self.meta,
         }

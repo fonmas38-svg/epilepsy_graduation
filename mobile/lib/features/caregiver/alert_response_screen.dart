@@ -103,8 +103,9 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
   @override
   void initState() {
     super.initState();
-    // ignore: discarded_futures
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _load();
+    });
   }
 
   Future<void> _load() async {
@@ -441,6 +442,7 @@ class _Body extends StatelessWidget {
         _ActionsSection(
           alert: alert,
           patientName: profile?.name ?? '',
+          patientPhone: profile?.phone ?? '',
           contacts: level.allowsLiveStatus ? care.contacts : const [],
           doctorPhone: level.allowsLiveStatus
               ? (care.medicalCard?.doctorPhone ?? '')
@@ -681,6 +683,7 @@ class _ActionsSection extends StatelessWidget {
   const _ActionsSection({
     required this.alert,
     required this.patientName,
+    this.patientPhone = '',
     required this.contacts,
     required this.doctorPhone,
     required this.coords,
@@ -693,6 +696,7 @@ class _ActionsSection extends StatelessWidget {
 
   final AlertItem alert;
   final String patientName;
+  final String patientPhone;
   final List<EmergencyContact> contacts;
   final String doctorPhone;
   final _Coords? coords;
@@ -746,7 +750,7 @@ class _ActionsSection extends StatelessWidget {
             ),
           ),
           Gap.vMd,
-          if (contacts.isEmpty && doctorPhone.isEmpty)
+          if (contacts.isEmpty && doctorPhone.isEmpty && patientPhone.isEmpty)
             EmptyState(
               title: l.noRespondersYet,
               body: l.contactsHint,
@@ -754,6 +758,15 @@ class _ActionsSection extends StatelessWidget {
               compact: true,
             )
           else ...[
+            if (patientPhone.isNotEmpty)
+              _ContactRow(
+                name: 'هاتف المريض المباشر',
+                subtitle: patientPhone,
+                phone: patientPhone,
+                icon: Icons.phone_android_outlined,
+                onDial: onDial,
+                onSms: (phone) => onSms(phone, _smsBody(l)),
+              ),
             for (final c in contacts)
               _ContactRow(
                 name: c.name.isEmpty ? c.phone : c.name,

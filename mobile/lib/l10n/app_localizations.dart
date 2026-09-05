@@ -613,6 +613,15 @@ class AppLocalizations {
   String get messagesTitle => _s('messagesTitle');
   String get typeMessage => _s('typeMessage');
   String get repliesDisabledByDoctor => _s('repliesDisabledByDoctor');
+  String get logoutConfirmBody => _s('logoutConfirmBody');
+  String get simulatorTitle => _s('simulatorTitle');
+  String get openPatientNavigation => _s('openPatientNavigation');
+  String get patientLocationAvailable => _s('patientLocationAvailable');
+  String get patientLocationAvailableSub => _s('patientLocationAvailableSub');
+  String get patientDirectPhone => _s('patientDirectPhone');
+  String get preAlertSimulatorStarted => _s('preAlertSimulatorStarted');
+  String get preAlertActiveBanner => _s('preAlertActiveBanner');
+  String get preAlertCountdownSuffix => _s('preAlertCountdownSuffix');
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,9 +1170,18 @@ const Map<String, String> _ar = {
   'exitApp': 'إغلاق التطبيق',
 
   // clinical messages
-  'messagesTitle': 'الرسائل السريرية',
+  'messagesTitle': 'الرسائل والتوجيهات',
   'typeMessage': 'اكتب رسالة…',
   'repliesDisabledByDoctor': 'الردود معطلة من قبل الطبيب لهذا التوجيه',
+  'logoutConfirmBody': 'هل أنت متأكد من رغبتك في تسجيل الخروج من هذا الحساب؟',
+  'simulatorTitle': 'محاكي الإشارات الحيوية والتصعيد',
+  'openPatientNavigation': 'فتح الملاحة اللحظية (خرائط Google)',
+  'patientLocationAvailable': 'الموقع الجغرافي للمريض متاح فوراً',
+  'patientLocationAvailableSub': 'اضغط للبدء في الملاحة اللحظية والوصول للمريض عبر خرائط Google',
+  'patientDirectPhone': 'هاتف المريض المباشر',
+  'preAlertSimulatorStarted': 'تم تفعيل إنذار ما قبل النوبة وبدء عداد الـ 30 ثانية!',
+  'preAlertActiveBanner': 'إنذار ما قبل النوبة نشط (Pre-Ictal)',
+  'preAlertCountdownSuffix': 'سيتم التصعيد التلقائي للأسرة والطبيب إذا لم يتم الإلغاء',
 };
 
 // ---------------------------------------------------------------------------
@@ -1715,9 +1733,18 @@ const Map<String, String> _en = {
   'exitApp': 'Exit App',
 
   // clinical messages
-  'messagesTitle': 'Clinical Messages',
+  'messagesTitle': 'Messages & Directives',
   'typeMessage': 'Type a message…',
   'repliesDisabledByDoctor': 'Replies are disabled by the doctor for this directive',
+  'logoutConfirmBody': 'Are you sure you want to log out of this account?',
+  'simulatorTitle': 'Vital Signs Simulator & Escalation',
+  'openPatientNavigation': 'Open Live Navigation (Google Maps)',
+  'patientLocationAvailable': 'Patient GPS Location Available',
+  'patientLocationAvailableSub': 'Tap to start live turn-by-turn navigation via Google Maps',
+  'patientDirectPhone': 'Direct Patient Phone',
+  'preAlertSimulatorStarted': 'Pre-Ictal forecast triggered and 30s countdown started!',
+  'preAlertActiveBanner': 'Pre-Ictal Forecast Active',
+  'preAlertCountdownSuffix': 'Will automatically escalate to family & doctor if not cancelled',
 };
 
 class _AppLocalizationsDelegate

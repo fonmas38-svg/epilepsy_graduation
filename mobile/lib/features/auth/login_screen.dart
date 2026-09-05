@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/errors/failure.dart';
+import '../../core/router/app_router.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/ui/common.dart';
 import '../../l10n/app_localizations.dart';
@@ -28,18 +30,44 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   Failure? _failure;
   bool _biometricsAvailable = false;
+  String? _boundBiometricUser;
+  bool _rememberMe = false;
+
+  static const _rememberMeKey = 'remember_me_pref';
+  static const _rememberedUsernameKey = 'remembered_username_pref';
 
   @override
   void initState() {
     super.initState();
+    _loadSavedUsername();
     _checkBiometrics();
+  }
+
+  Future<void> _loadSavedUsername() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rem = prefs.getBool(_rememberMeKey) ?? false;
+      final saved = prefs.getString(_rememberedUsernameKey);
+      if (mounted && rem && saved != null && saved.isNotEmpty) {
+        setState(() {
+          _rememberMe = true;
+          _usernameCtrl.text = saved;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkBiometrics() async {
     final app = context.read<AppState>();
     final available = await app.biometrics.isAvailable;
     final enabled = await app.biometrics.isEnabled();
-    if (mounted) setState(() => _biometricsAvailable = available && enabled);
+    final bound = await app.biometrics.getBoundUsername();
+    if (mounted) {
+      setState(() {
+        _boundBiometricUser = bound;
+        _biometricsAvailable = available && enabled && bound != null && bound.isNotEmpty;
+      });
+    }
   }
 
   @override
@@ -60,10 +88,25 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_rememberMe) {
+        await prefs.setBool(_rememberMeKey, true);
+        await prefs.setString(_rememberedUsernameKey, u);
+      } else {
+        await prefs.setBool(_rememberMeKey, false);
+        await prefs.remove(_rememberedUsernameKey);
+      }
+
+      if (!mounted) return;
       await context.read<AppState>().signInWithPassword(
         username: u,
         password: p,
       );
+      if (mounted) {
+        final role = context.read<AppState>().auth.currentUser?.role;
+        final target = AppRouter.rootFor(role);
+        Navigator.pushNamedAndRemoveUntil(context, target, (r) => false);
+      }
     } catch (e) {
       if (mounted) setState(() => _failure = Failure.from(e));
     } finally {
@@ -74,25 +117,32 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _loginWithBiometrics() async {
     final app = context.read<AppState>();
 
-    // Must be enabled in settings, not just available on hardware
-    final enabled = await app.biometrics.isEnabled();
-    if (!enabled) {
+    if (_boundBiometricUser == null || !_biometricsAvailable) {
+      if (mounted) {
+        AppSnack.warn(context, 'لم يتم تفعيل البصمة لأي حساب على هذا الجهاز');
+      }
+      return;
+    }
+
+    // Prevent cross-account biometric login
+    final entered = _usernameCtrl.text.trim();
+    if (entered.isNotEmpty &&
+        entered.toLowerCase() != _boundBiometricUser!.toLowerCase()) {
       if (mounted) {
         AppSnack.warn(
           context,
-          'يجب تفعيل تسجيل الدخول بالبصمة من الإعدادات أولاً',
+          'خاصية البصمة مقيدة بحساب «$_boundBiometricUser» فقط. يرجى تسجيل الدخول بكلمة المرور لحساب «$entered».',
         );
       }
       return;
     }
 
     final ok = await app.biometrics.authenticate(
-      localizedReason: 'تسجيل الدخول السريع عبر المصادقة الحيوية',
+      localizedReason: 'المصادقة بمستشعر البصمة لحساب $_boundBiometricUser',
     );
     if (!ok || !mounted) return;
 
-    // Retrieve the last successfully logged-in user
-    final lastUser = await app.getLastLoggedInUser();
+    final boundPass = await app.biometrics.getBoundPassword();
     final demoCredentials = <String, String>{
       'doctor': 'doctor123',
       'patient': 'patient123',
@@ -100,17 +150,10 @@ class _LoginScreenState extends State<LoginScreen> {
       'admin': 'admin123',
     };
 
-    final user = lastUser ?? 'patient';
-    final pass = demoCredentials[user];
-    if (pass == null) {
-      if (mounted) {
-        AppSnack.error(context, 'تعذّر استرجاع بيانات الحساب السابق');
-      }
-      return;
-    }
+    final pass = boundPass ?? demoCredentials[_boundBiometricUser] ?? 'password123';
 
     setState(() {
-      _usernameCtrl.text = user;
+      _usernameCtrl.text = _boundBiometricUser!;
       _passwordCtrl.text = pass;
     });
     await _submitAccount();
@@ -244,6 +287,32 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                         ),
+                        Gap.vXs,
+                        InkWell(
+                          onTap: () => setState(() => _rememberMe = !_rememberMe),
+                          borderRadius: BorderRadius.circular(Radii.sm),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: Gap.xs),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: Checkbox(
+                                    value: _rememberMe,
+                                    onChanged: (v) =>
+                                        setState(() => _rememberMe = v ?? false),
+                                  ),
+                                ),
+                                Gap.hSm,
+                                Text(
+                                  'تذكر اسم المستخدم على هذا الجهاز',
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                         if (_failure != null) ...[
                           Gap.vMd,
                           InfoNote(
@@ -252,7 +321,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             view: _failure!.tone,
                           ),
                         ],
-                        Gap.vLg,
+                        Gap.vMd,
                         SizedBox(
                           height: 48,
                           child: FilledButton.icon(
@@ -274,15 +343,18 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
 
-                        // Biometrics Login Button (if device supports it)
-                        if (_biometricsAvailable) ...[
+                        // Biometrics Login Button (strictly for the enrolled single account)
+                        if (_biometricsAvailable && _boundBiometricUser != null) ...[
                           Gap.vSm,
                           SizedBox(
-                            height: 44,
+                            height: 46,
                             child: OutlinedButton.icon(
                               onPressed: _loading ? null : _loginWithBiometrics,
-                              icon: const Icon(Icons.fingerprint),
-                              label: const Text('تسجيل الدخول بالبصمة'),
+                              icon: const Icon(Icons.fingerprint, color: Color(0xFF1B4965)),
+                              label: Text(
+                                'تسجيل الدخول بالبصمة (حساب: $_boundBiometricUser)',
+                                style: const TextStyle(fontWeight: FontWeight.w700),
+                              ),
                             ),
                           ),
                         ],

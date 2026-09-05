@@ -15,23 +15,27 @@ import '../../models/models.dart';
 /// `pre_alert` / `info`). It is mapped here rather than in the model so the
 /// model stays free of presentation, and an unrecognised severity degrades to
 /// «غير معروف» instead of silently rendering as safe (§11.1).
-({RiskView view, String label}) alertSeverity(String raw, AppLocalizations l) =>
-    switch (raw.trim().toLowerCase()) {
-      'critical' || 'danger' || 'high_risk' => (
-        view: RiskView.danger,
-        label: l.severityCritical,
-      ),
-      'warning' || 'watch' => (
-        view: RiskView.caution,
-        label: l.severityWarning,
-      ),
-      'pre_alert' || 'prealert' || 'preictal' => (
-        view: RiskView.caution,
-        label: l.severityPreAlert,
-      ),
-      'info' || 'stable' => (view: RiskView.safe, label: l.severityInfo),
-      _ => (view: RiskView.unknown, label: l.unknown),
+/// Pure risk-view mapping from severity string without requiring Localizations.
+RiskView alertRiskView(String raw) => switch (raw.trim().toLowerCase()) {
+      'critical' || 'danger' || 'high_risk' => RiskView.danger,
+      'warning' || 'watch' => RiskView.caution,
+      'pre_alert' || 'prealert' || 'preictal' => RiskView.caution,
+      'info' || 'stable' => RiskView.safe,
+      _ => RiskView.unknown,
     };
+
+({RiskView view, String label}) alertSeverity(String raw, AppLocalizations l) {
+  final v = alertRiskView(raw);
+  final label = switch (v) {
+    RiskView.danger => l.severityCritical,
+    RiskView.caution => raw.trim().toLowerCase().contains('pre')
+        ? l.severityPreAlert
+        : l.severityWarning,
+    RiskView.safe => l.severityInfo,
+    _ => l.unknown,
+  };
+  return (view: v, label: label);
+}
 
 /// A card for a single alert (§2.4's `AlertCard`).
 class AlertCard extends StatelessWidget {

@@ -93,6 +93,16 @@ class PredictionState {
     );
   }
 
+  Map<String, dynamic> toMap() => {
+        'preictal_prob': preictalProb,
+        'lead_time_min': leadTimeMin,
+        'horizon_min': horizonMin,
+        'predicted': predicted,
+        'prediction_source': source,
+        'preictal_trajectory': trajectory,
+        if (drivers != null) 'preictal_drivers': drivers,
+      };
+
   PredictionState copyWith({List<double>? trajectory}) => PredictionState(
         preictalProb: preictalProb,
         leadTimeMin: leadTimeMin,

@@ -355,11 +355,11 @@ def seed_demo_accounts() -> None:
             password_hash=security.hash_password("patient123"),
             created_by="system",
         )
-        if doc and pat:
-            try:
-                assign_patient(pat["id"], doc["id"], by="system")
-            except Exception:
-                pass
+    if doc and pat:
+        try:
+            assign_patient(pat["id"], doc["id"], by="system")
+        except Exception:
+            pass
     cg = get_by_username("caregiver")
     if not cg:
         cg = create_user(
@@ -369,11 +369,11 @@ def seed_demo_accounts() -> None:
             password_hash=security.hash_password("caregiver123"),
             created_by="system",
         )
-        if pat and cg:
-            try:
-                link_caregiver(pat["id"], cg["id"], by="system")
-            except Exception:
-                pass
+    if pat and cg:
+        try:
+            link_caregiver(pat["id"], cg["id"], by="system")
+        except Exception:
+            pass
 
 
 def seed_admin() -> dict | None:

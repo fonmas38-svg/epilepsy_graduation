@@ -214,6 +214,7 @@ class PatientProfile {
     this.caregivers = const [],
     this.doctors = const [],
     this.currentStatus = RiskLabel.stable,
+    this.phone = '',
     DateTime? lastUpdated,
   }) : lastUpdated = lastUpdated ?? DateTime.now();
 
@@ -224,6 +225,7 @@ class PatientProfile {
   final List<String> caregivers;
   final List<String> doctors;
   final RiskLabel currentStatus;
+  final String phone;
   final DateTime lastUpdated;
 
   Map<String, dynamic> toMap() => {
@@ -234,6 +236,7 @@ class PatientProfile {
         'caregivers': caregivers,
         'doctors': doctors,
         'currentStatus': currentStatus.apiValue,
+        'phone': phone,
         'lastUpdated': lastUpdated.toIso8601String(),
       };
 
@@ -245,6 +248,7 @@ class PatientProfile {
         caregivers: List<String>.from(map['caregivers'] ?? const []),
         doctors: List<String>.from(map['doctors'] ?? const []),
         currentStatus: RiskLabelX.fromApi(map['currentStatus'] as String? ?? 'stable'),
+        phone: map['phone'] as String? ?? '',
         lastUpdated: DateTime.tryParse(map['lastUpdated'] as String? ?? '') ?? DateTime.now(),
       );
 }

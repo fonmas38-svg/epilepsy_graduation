@@ -1,0 +1,24 @@
+{
+  "system": "Dual-Model Hybrid Epilepsy AI",
+  "edge_model": {
+    "arch": "EdgeSeizureNet",
+    "file_onnx": "edge_seizure_model.onnx",
+    "file_pt": "edge_seizure_model.pt",
+    "mode": "offline"
+  },
+  "cloud_model": {
+    "arch": "CloudPreictalNet",
+    "file_pt": "cloud_preictal_model.pt",
+    "file_onnx": "cloud_preictal_model.onnx",
+    "mode": "online"
+  },
+  "metrics": {
+    "edge_sensitivity": 0.9420289855072463,
+    "edge_specificity": 0.9267734553775744,
+    "cloud_sensitivity": 1.0,
+    "cloud_specificity": 0.9988888888888889,
+    "ensemble_sensitivity": 1.0,
+    "ensemble_specificity": 1.0,
+    "ensemble_optimal_threshold": 0.6000000000000001
+  }
+}

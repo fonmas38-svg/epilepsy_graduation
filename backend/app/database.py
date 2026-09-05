@@ -310,6 +310,37 @@ store_imports = Table(
     Column("backup_path", Text, nullable=False),
 )
 
+messages = Table(
+    "messages",
+    metadata,
+    Column("id", String(64), primary_key=True),
+    Column(
+        "patient_id",
+        String(64),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "sender_id",
+        String(64),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("sender_name", String(256), nullable=False),
+    Column("sender_role", String(32), nullable=False),
+    Column("channel_type", String(32), nullable=False),
+    Column("content", Text, nullable=False),
+    Column("created_at", String(64), nullable=False),
+    Column("read_at", String(64)),
+    CheckConstraint(
+        "channel_type IN ('doctor_patient', 'family_patient')",
+        name="ck_messages_channel_type",
+    ),
+)
+Index("ix_messages_patient_channel", messages.c.patient_id, messages.c.channel_type)
+Index("ix_messages_created_at", messages.c.created_at)
+
+
 _engines: dict[str, Engine] = {}
 _engine_lock = RLock()
 _initialized: set[str] = set()

@@ -21,7 +21,8 @@
 | المقدمة وتعريف المشكلة | `PROJECT_FINAL_DOCUMENTATION_AR.md` الفصل 1 · `README.md` (الجذر) | منفَّذ |
 | الدراسات السابقة | `PROJECT_FINAL_DOCUMENTATION_AR.md` الفصل 2 · `previous_studies_software_focus.pdf` | منفَّذ |
 | تحليل المتطلبات — الجهاز/المحاكي | `PROJECT_FINAL_DOCUMENTATION_AR.md` الفصل 3 · **`simulator-requirements-ar.md`** · `hardware_integration.md` | منفَّذ بالمحاكي |
-| تحليل المتطلبات — النموذج (AI) | **`model-requirements-ar.md`** | مواصفات (النموذج العميق لم يُدرَّب سريريًا) |
+| تحليل وتدريب الذكاء الاصطناعي (AI) | **`research/DEFENSE_GUIDE_AR.md`** · **`research/README.md`** · `model-requirements-ar.md` | **منفَّذ ومدرّب ومدمج بالكامل (EdgeSeizureNet + CloudPreictalNet)** |
+| دليل المناقشة وأسئلة لجنة التحكيم | **`research/DEFENSE_GUIDE_AR.md`** | **جاهز وشامل للإجابات النموذجية 🎓** |
 | المعمارية العامة وتدفق البيانات | `PROJECT_FINAL_DOCUMENTATION_AR.md` الفصل 3 · `BACKEND_ANALYSIS_REPORT_AR.md` §10 | منفَّذ |
 | تصميم قاعدة البيانات | **`data-model.md`** · `PROJECT_FINAL_DOCUMENTATION_AR.md` §3.4 | منفَّذ (SQLAlchemy + Alembic) |
 | تصميم الواجهات وتجربة المستخدم (UI/UX) | **`frontend-implementation-ar.md`** · **`UI_UX_RECOMMENDATIONS.md`** | **منفَّذ ومحدّث** |

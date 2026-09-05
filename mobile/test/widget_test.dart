@@ -1,5 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:epilepsy_monitor/core/enums.dart';
+import 'package:epilepsy_monitor/models/message_model.dart';
+import 'package:epilepsy_monitor/models/models.dart';
+import 'package:epilepsy_monitor/models/prediction_state.dart';
 import 'package:epilepsy_monitor/services/signal_simulator.dart';
 
 void main() {
@@ -17,4 +20,63 @@ void main() {
     expect(sim.patternForTick(4), RiskLabel.highRisk);
     expect(sim.patternForTick(0), RiskLabel.stable);
   });
+
+  test('ChatMessage correctly maps to/from json and channel properties', () {
+    final now = DateTime.now();
+    final msg = ChatMessage(
+      id: 'msg-101',
+      patientId: 'pat-1',
+      senderId: 'doc-1',
+      senderName: 'Dr. Test',
+      senderRole: UserRole.doctor,
+      channelType: 'doctor_patient',
+      content: 'Medical directive message',
+      createdAt: now,
+      synced: true,
+    );
+
+    expect(msg.isDoctorPatient, isTrue);
+    expect(msg.isFamilyPatient, isFalse);
+
+    final map = msg.toMap();
+    expect(map['channelType'], 'doctor_patient');
+    expect(map['senderRole'], 'doctor');
+
+    final restored = ChatMessage.fromMap(map);
+    expect(restored.id, 'msg-101');
+    expect(restored.senderName, 'Dr. Test');
+    expect(restored.senderRole, UserRole.doctor);
+    expect(restored.content, 'Medical directive message');
+    expect(restored.isDoctorPatient, isTrue);
+  });
+
+  test('PatientProfile correctly maps phone field', () {
+    final profile = PatientProfile(
+      patientId: 'pat-10',
+      name: 'Test Patient',
+      phone: '+966500000000',
+    );
+    expect(profile.phone, '+966500000000');
+    final map = profile.toMap();
+    expect(map['phone'], '+966500000000');
+    final restored = PatientProfile.fromMap(map);
+    expect(restored.phone, '+966500000000');
+  });
+
+  test('PredictionState toMap correctly reflects fields', () {
+    const ps = PredictionState(
+      preictalProb: 0.88,
+      leadTimeMin: 12.0,
+      horizonMin: 15.0,
+      predicted: true,
+      source: 'simulator',
+      trajectory: [0.1, 0.4, 0.88],
+    );
+    final map = ps.toMap();
+    expect(map['preictal_prob'], 0.88);
+    expect(map['lead_time_min'], 12.0);
+    expect(map['predicted'], isTrue);
+    expect(map['prediction_source'], 'simulator');
+  });
 }
+

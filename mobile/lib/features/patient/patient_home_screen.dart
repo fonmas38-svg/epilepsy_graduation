@@ -22,6 +22,7 @@ import 'device_link_screen.dart';
 import 'emergency_plan_screen.dart';
 import 'history_screen.dart';
 import 'medication_screen.dart';
+import '../../widgets/app_drawer.dart';
 
 /// §3.1 — the patient's shell: five destinations, one of which is the dashboard.
 ///
@@ -86,6 +87,9 @@ class _PatientHomeScreenState extends State<PatientHomeScreen> {
         );
         if (shouldExit == true && context.mounted) {
           await app.signOut();
+          if (context.mounted) {
+            Navigator.pushNamedAndRemoveUntil(context, Routes.login, (r) => false);
+          }
         }
       },
       child: Scaffold(
@@ -266,8 +270,29 @@ class _DashboardTabState extends State<_DashboardTab> {
     final prediction = app.monitoring.latestPrediction;
 
     return Scaffold(
+      drawer: const AppDrawer(),
       appBar: AppBar(
-        title: Text(name.isEmpty ? l.patientHome : name),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'منظومة مراقبة الصرع الذكية',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                  ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              name.isEmpty ? 'مرحباً بك' : 'مرحباً $name',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ],
+        ),
         actions: [
           // Demo-only. On a real build a patient must not be able to fabricate
           // a high-risk reading — the people it would notify cannot tell the
@@ -280,25 +305,16 @@ class _DashboardTabState extends State<_DashboardTab> {
               icon: const Icon(Icons.science_outlined),
             ),
           IconButton(
-            tooltip: 'توجيهات ورسائل الطبيب',
-            onPressed: () => Navigator.pushNamed(context, Routes.messages),
-            icon: const Icon(Icons.chat_bubble_outline),
-          ),
-          IconButton(
-            tooltip: 'التقارير الطبية وتصدير Excel',
-            onPressed: () => Navigator.pushNamed(context, Routes.reports),
-            icon: const Icon(Icons.table_chart_outlined),
-          ),
-          IconButton(
-            tooltip: l.settings,
-            onPressed: () =>
-                Navigator.pushNamed(context, Routes.patientSettings),
-            icon: const Icon(Icons.settings_outlined),
-          ),
-          IconButton(
-            tooltip: l.logout,
-            onPressed: app.signOut,
-            icon: const Icon(Icons.logout),
+            tooltip: 'مشاركة الموقع المباشر مع الأسرة',
+            onPressed: () async {
+              final ok = await app.shareMyLocationWithFamily();
+              if (context.mounted) {
+                ok
+                    ? AppSnack.success(context, 'تم إرسال موقعك للأسرة بنجاح')
+                    : AppSnack.error(context, 'تعذّر تحديد أو إرسال الموقع');
+              }
+            },
+            icon: const Icon(Icons.my_location_rounded),
           ),
         ],
       ),
@@ -334,6 +350,10 @@ class _DashboardTabState extends State<_DashboardTab> {
               busy: app.sosInProgress,
             ),
             Gap.vLg,
+            const _FamilyLocationCard(),
+            Gap.vMd,
+            const _SimulatorBannerCard(),
+            Gap.vMd,
             _NextDoseSection(
               entry: _nextDose,
               enabled: !_busy,
@@ -385,30 +405,29 @@ class _PreAlertCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    final tone = AppColors.of(context, RiskView.danger);
+    final tone = AppColors.of(context, RiskView.caution);
     final headline = leadTimeMin != null && leadTimeMin! > 0
-        ? l.activeAlertHeadline(leadTimeMin!.round())
-        : l.activeAlertHeadlineNoLead;
+        ? 'مؤشرات تغير طفيفة في النشاط — احتمالية نوبة خلال ~${leadTimeMin!.round()} دقيقة'
+        : 'رصد نشاط عصبي غير معتاد — نوصيك بالجلوس والاسترخاء';
 
     return Container(
       padding: Insets.card,
       decoration: BoxDecoration(
         color: tone.container,
         borderRadius: Radii.rMd,
-        border: Border.all(color: tone.solid, width: 2),
+        border: Border.all(color: tone.border, width: 1.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(Icons.notifications_active_outlined, color: tone.foreground),
+              Icon(Icons.self_improvement_outlined, color: tone.foreground),
               Gap.hSm,
               Expanded(
                 child: Text(
-                  l.activeAlertTitle,
+                  'ملاحظة وقائية استباقية — تنفس بهدوء',
                   style: theme.textTheme.titleMedium?.copyWith(
                     color: tone.foreground,
                     fontWeight: FontWeight.w800,
@@ -420,7 +439,10 @@ class _PreAlertCard extends StatelessWidget {
           Gap.vXs,
           Text(
             headline,
-            style: theme.textTheme.bodyLarge?.copyWith(color: tone.foreground),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: tone.foreground,
+              height: 1.4,
+            ),
           ),
           Gap.vSm,
           SizedBox(
@@ -431,8 +453,8 @@ class _PreAlertCard extends StatelessWidget {
                 foregroundColor: tone.onSolid,
               ),
               onPressed: onOpen,
-              icon: const Icon(Icons.arrow_forward),
-              label: Text(l.immediateSteps),
+              icon: const Icon(Icons.spa_outlined),
+              label: const Text('عرض إرشادات الاسترخاء والسلامة والاطمئنان'),
             ),
           ),
         ],
@@ -846,3 +868,198 @@ class _AlertsTab extends StatelessWidget {
     );
   }
 }
+
+class _FamilyLocationCard extends StatefulWidget {
+  const _FamilyLocationCard();
+
+  @override
+  State<_FamilyLocationCard> createState() => _FamilyLocationCardState();
+}
+
+class _FamilyLocationCardState extends State<_FamilyLocationCard> {
+  bool _sharing = false;
+
+  Future<void> _share(AppState app) async {
+    setState(() => _sharing = true);
+    final ok = await app.shareMyLocationWithFamily();
+    if (!mounted) return;
+    setState(() => _sharing = false);
+    if (ok) {
+      AppSnack.success(context, 'تم إرسال وتحديث موقعك الجغرافي لأفراد أسرتك بنجاح.');
+    } else {
+      AppSnack.error(context, 'تعذّر تحديد الموقع. يرجى التأكد من تفعيل الـ GPS ومنح الصلاحيات.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final app = context.watch<AppState>();
+    final lastLoc = app.messages.lastSharedLocation;
+
+    return Container(
+      padding: Insets.card,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: Radii.rMd,
+        border: Border.all(color: Colors.teal.withValues(alpha: 0.5), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(Gap.sm),
+                decoration: BoxDecoration(
+                  color: Colors.teal.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.location_on, color: Colors.teal, size: 22),
+              ),
+              Gap.hSm,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'مشاركة الموقع مع الأسرة لسلامتك',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      'مهم جداً: يتيح لعائلتك معرفة مكانك فوراً وإسعافك عند حدوث نوبة.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Gap.vSm,
+          if (lastLoc != null) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(Gap.sm),
+              decoration: BoxDecoration(
+                color: Colors.teal.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(Radii.sm),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.check_circle, size: 14, color: Colors.teal),
+                  Gap.hXs,
+                  Expanded(
+                    child: Text(
+                      'آخر موقع مسجل: ${(lastLoc['latitude'] as num).toStringAsFixed(4)}, ${(lastLoc['longitude'] as num).toStringAsFixed(4)}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.teal.shade800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Gap.vSm,
+          ],
+          SizedBox(
+            width: double.infinity,
+            height: A11y.minTouchTarget,
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.teal,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _sharing ? null : () => _share(app),
+              icon: _sharing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.my_location),
+              label: Text(_sharing ? 'جارٍ تحديد وإرسال الموقع...' : 'إرسال وتحديث موقعي للأسرة الآن'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SimulatorBannerCard extends StatelessWidget {
+  const _SimulatorBannerCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: () => Navigator.pushNamed(context, Routes.patientSimulator),
+      borderRadius: BorderRadius.circular(Radii.md),
+      child: Container(
+        padding: Insets.card,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              theme.colorScheme.primaryContainer.withValues(alpha: 0.7),
+              theme.colorScheme.surface,
+            ],
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+          ),
+          borderRadius: Radii.rMd,
+          border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(Gap.sm),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.monitor_heart, color: Colors.white, size: 22),
+            ),
+            Gap.hMd,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'محاكي الإشارات الحيوية والتصعيد',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                  Text(
+                    'عرض نبض القلب الحي، تخطيط موجات الدماغ EEG، وتصعيد درجات التنبيه.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_forward_ios_rounded, size: 14, color: theme.colorScheme.primary),
+          ],
+        ),
+      ),
+    );
+  }
+}
+

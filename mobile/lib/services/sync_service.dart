@@ -9,6 +9,7 @@ import '../models/models.dart';
 import '../models/prediction_state.dart';
 import 'api_client.dart';
 import 'auth_service.dart';
+import 'edge_model_service.dart';
 import 'local_database.dart';
 import 'location_service.dart';
 
@@ -49,10 +50,10 @@ class SyncService {
       if (await isOnline && await api.health()) {
         result = await api.analyze(reading);
       } else {
-        result = _offlineHeuristic(reading);
+        result = _offlineEdgeInference(reading);
       }
     } catch (_) {
-      result = _offlineHeuristic(reading);
+      result = _offlineEdgeInference(reading);
     }
 
     final assessment = RiskAssessment(
@@ -303,7 +304,15 @@ class SyncService {
     }
   }
 
-  AnalyzeResult _offlineHeuristic(VitalReading reading) {
+  AnalyzeResult _offlineEdgeInference(VitalReading reading) {
+    try {
+      return EdgeModelService.instance.infer(reading, horizonMin: horizonMin);
+    } catch (_) {
+      return _offlineHeuristicFallback(reading);
+    }
+  }
+
+  AnalyzeResult _offlineHeuristicFallback(VitalReading reading) {
     var score = 0.0;
     if (reading.hr >= 110) {
       score += 0.4;
@@ -312,11 +321,13 @@ class SyncService {
     }
     final motionEnergy =
         reading.motion.map((e) => e * e).fold<double>(0, (a, b) => a + b) /
-        reading.motion.length;
+        (reading.motion.isEmpty ? 1 : reading.motion.length);
     if (motionEnergy > 0.6) score += 0.35;
-    final eegPeak = reading.eeg
-        .map((e) => e.abs())
-        .fold<double>(0, (a, b) => a > b ? a : b);
+    final eegPeak = reading.eeg.isEmpty
+        ? 0.0
+        : reading.eeg
+            .map((e) => e.abs())
+            .fold<double>(0, (a, b) => a > b ? a : b);
     if (eegPeak > 1.5) score += 0.3;
 
     final label = score >= 0.65
@@ -325,12 +336,6 @@ class SyncService {
         ? RiskLabel.watch
         : RiskLabel.stable;
 
-    // Forecasting layer, offline. Mirror the backend heuristic so the gauge and
-    // pre-alert work with no server: a smooth preictal probability, a lead-time
-    // that counts down from the horizon, and the pre-alert flag. Kept inside the
-    // features map (additive) exactly like the online /analyze path.
-    // [horizonMin] is the configurable SPH field (#21), kept in sync with the
-    // persisted user setting by AppState; defaults to 15 min.
     const prealertThr = 0.6;
     final preictalProb = score.clamp(0.0, 1.0).toDouble();
     final leadTimeMin = horizonMin * (1.0 - preictalProb);
@@ -346,7 +351,7 @@ class SyncService {
         'lead_time_min': double.parse(leadTimeMin.toStringAsFixed(2)),
         'horizon_min': horizonMin,
         'predicted': preictalProb >= prealertThr,
-        'prediction_source': 'simulated_heuristic',
+        'prediction_source': 'edge_seizure_net',
       },
       processingMs: 1,
     );

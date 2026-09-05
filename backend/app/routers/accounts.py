@@ -93,6 +93,17 @@ class CreatePatientRequest(BaseModel):
     password: str | None = Field(default=None, min_length=6, max_length=128)
     # admin may target any doctor; ignored (forced to self) for doctor callers.
     doctor_id: str | None = None
+    # Clinical and contact fields (optional)
+    phone: str | None = Field(default=None, max_length=32)
+    age: int | None = Field(default=None, ge=0, le=130)
+    diagnosis: str | None = Field(default=None, max_length=200)
+    notes: str | None = Field(default=None, max_length=500)
+    # Optional family / caregiver member created with the patient
+    caregiver_name: str | None = Field(default=None, max_length=120)
+    caregiver_username: str | None = Field(default=None, max_length=64)
+    caregiver_phone: str | None = Field(default=None, max_length=32)
+    caregiver_relation: str | None = Field(default=None, max_length=64)
+    caregiver_password: str | None = Field(default=None, min_length=6, max_length=128)
 
 
 class CreateUserRequest(BaseModel):
@@ -554,10 +565,44 @@ def doctor_create_patient(body: CreatePatientRequest, actor: dict = Depends(requ
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     _mirror_patient_to_cloud(patient)
+    if body.diagnosis or body.phone or body.notes:
+        cloud_store.update_patient(patient["id"], {
+            "diagnosis": body.diagnosis or "صرع عام",
+            "phone": body.phone,
+            "notes": body.notes,
+        })
     if doctor_id:
         users_store.assign_patient(patient["id"], doctor_id, by=actor.get("sub"))
+
+    caregiver_user = None
+    cg_generated = None
+    if body.caregiver_name:
+        cg_username = body.caregiver_username or f"cg_{body.username}"
+        cg_pass_hash, cg_generated = _issue_password(body.caregiver_password)
+        existing_cg = users_store.get_by_username(cg_username)
+        if not existing_cg:
+            try:
+                caregiver_user = users_store.create_user(
+                    username=cg_username,
+                    name=body.caregiver_name,
+                    role="caregiver",
+                    password_hash=cg_pass_hash,
+                    created_by=actor.get("sub"),
+                )
+            except Exception:
+                pass
+        else:
+            caregiver_user = existing_cg
+        if caregiver_user:
+            users_store.link_caregiver(patient["id"], caregiver_user["id"], by=actor.get("sub"))
+
     users_store.log(actor.get("sub"), actor.get("role"), "create_patient", target=patient["id"])
-    return {"user": _patient_view(patient), "generatedPassword": generated}
+    return {
+        "user": _patient_view(patient),
+        "generatedPassword": generated,
+        "caregiver": users_store.public_user(caregiver_user) if caregiver_user else None,
+        "caregiverGeneratedPassword": cg_generated,
+    }
 
 
 @router.get("/doctor/patients/{patient_id}")

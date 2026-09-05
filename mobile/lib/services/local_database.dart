@@ -9,6 +9,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 import '../core/config.dart';
 import '../core/enums.dart';
 import '../models/care_models.dart';
+import '../models/message_model.dart';
 import '../models/models.dart';
 import 'secure_store.dart';
 import 'signal_simulator.dart';
@@ -38,10 +39,10 @@ class LocalDatabase {
   /// care tables the offline requirement in `docs/frontend-plan-ar.md` §2.5 asks
   /// for (emergency contacts, medical card, trigger diary, consents, access log,
   /// seizure logs, adjudications, alert responses, clinical notes) plus the
-  /// outgoing `outbox` queue. Bumping this triggers [_onUpgrade], which only
-  /// CREATEs new tables — existing tables are never altered, so no patient data
-  /// is touched.
-  static const _dbVersion = 3;
+  /// outgoing `outbox` queue. v4 = + messages table for doctor and family channels.
+  /// Bumping this triggers [_onUpgrade], which only CREATEs new tables — existing
+  /// tables are never altered, so no patient data is touched.
+  static const _dbVersion = 4;
 
   /// True on desktop platforms where SQLCipher is unavailable.
   static bool get _isDesktop =>
@@ -125,10 +126,11 @@ class LocalDatabase {
             acknowledgedBy TEXT
           )
         ''');
-    // v2/v3 tables are created here for fresh installs and in _onUpgrade for
+    // v2/v3/v4 tables are created here for fresh installs and in _onUpgrade for
     // existing ones. Same idempotent DDL is used in both paths.
     await _createV2Tables(db);
     await _createV3Tables(db);
+    await _createV4Tables(db);
   }
 
   /// Additive migrations. Only ever CREATE new tables — never ALTER or DROP the
@@ -139,6 +141,9 @@ class LocalDatabase {
     }
     if (oldVersion < 3) {
       await _createV3Tables(db);
+    }
+    if (oldVersion < 4) {
+      await _createV4Tables(db);
     }
   }
 
@@ -942,5 +947,73 @@ class LocalDatabase {
       where: table == 'medical_card' ? 'patientId = ?' : 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // v4: Messages
+  // ---------------------------------------------------------------------------
+
+  Future<void> _createV4Tables(Database db) async {
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS messages (
+            id TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            senderId TEXT NOT NULL,
+            senderName TEXT NOT NULL,
+            senderRole TEXT NOT NULL,
+            channelType TEXT NOT NULL,
+            content TEXT NOT NULL,
+            createdAt TEXT NOT NULL,
+            readAt TEXT,
+            synced INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS ix_local_messages_patient_channel ON messages(patientId, channelType)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS ix_local_messages_created_at ON messages(createdAt)',
+    );
+  }
+
+  Future<void> insertMessage(ChatMessage msg) async {
+    final db = await database;
+    await db.insert(
+      'messages',
+      msg.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<ChatMessage>> messagesForChannel(
+    String patientId,
+    String channelType, {
+    int limit = 100,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'messages',
+      where: 'patientId = ? AND channelType = ?',
+      whereArgs: [patientId, channelType],
+      orderBy: 'createdAt ASC',
+      limit: limit,
+    );
+    return rows.map((r) => ChatMessage.fromMap(Map<String, dynamic>.from(r))).toList();
+  }
+
+  Future<List<ChatMessage>> unsyncedMessages() async {
+    final db = await database;
+    final rows = await db.query(
+      'messages',
+      where: 'synced = 0',
+      orderBy: 'createdAt ASC',
+      limit: 50,
+    );
+    return rows.map((r) => ChatMessage.fromMap(Map<String, dynamic>.from(r))).toList();
+  }
+
+  Future<void> markMessageSynced(String id) async {
+    final db = await database;
+    await db.update('messages', {'synced': 1}, where: 'id = ?', whereArgs: [id]);
   }
 }

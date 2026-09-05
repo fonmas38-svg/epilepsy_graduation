@@ -3,17 +3,15 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 class AppConfig {
-  /// Base URL of the analysis backend, resolved per platform:
-  ///   * Android emulator  -> 10.0.2.2 (the host loopback bridge)
-  ///   * Windows / desktop -> 127.0.0.1 (the app and server share the machine)
-  ///   * anything else     -> 127.0.0.1
-  /// Override for a physical device on the LAN with:
-  ///   flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8000
+  static const cloudProductionUrl = 'https://epilepsy-graduation.onrender.com';
+
+  /// Base URL of the analysis backend. Defaults to the live cloud backend.
+  /// Override for local development with:
+  ///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000
   static String get apiBaseUrl {
     const override = String.fromEnvironment('API_BASE_URL');
     if (override.isNotEmpty) return override;
-    if (!kIsWeb && Platform.isAndroid) return 'http://10.0.2.2:8000';
-    return 'http://127.0.0.1:8000';
+    return cloudProductionUrl;
   }
 
   /// Demo mode works fully offline without a real Firebase project.

@@ -255,6 +255,19 @@ class AppState extends ChangeNotifier {
       final fix = await location.currentFix();
       lastAlert = await sync.sendSos(pid, fix: fix, patientName: user?.name);
 
+      // Broadcast live location to family & cloud channels
+      if (fix != null) {
+        try {
+          await api.sharePatientLocation(
+            patientId: pid,
+            latitude: fix.latitude,
+            longitude: fix.longitude,
+            accuracy: fix.accuracy,
+            note: 'نداء استغاثة طارئ (SOS)',
+          );
+        } catch (_) {}
+      }
+
       // Offline Emergency SMS Fallback: if offline, dispatch SMS to contacts directly
       if (!await sync.isOnline) {
         try {
@@ -574,6 +587,15 @@ class AppState extends ChangeNotifier {
         await auth.applyBackendSession(context);
         currentSessionUsername = username;
         currentSessionPassword = password;
+        // ── Cross-account FCM isolation: tell the notification service which
+        // patient owns this session so it can discard foreign alerts.
+        final user = auth.currentUser;
+        final patientId = user?.role == UserRole.patient
+            ? user?.uid
+            : (auth.accessiblePatients().isNotEmpty
+                ? auth.accessiblePatients().first.patientId
+                : null);
+        notifications.setActivePatient(patientId);
         await _registerCurrentPushToken();
         await _startForUser();
         await saveLastLoggedInUser(username);
@@ -697,6 +719,8 @@ class AppState extends ChangeNotifier {
     monitoring.latestPrediction = null;
     currentSessionUsername = null;
     currentSessionPassword = null;
+    // Clear FCM patient-filter so no stale alerts show after sign-out.
+    notifications.setActivePatient(null);
     final pushToken = notifications.token;
     if (!AppConfig.demoMode && pushToken != null && api.tokens.hasSession) {
       try {
@@ -1049,6 +1073,8 @@ class AppState extends ChangeNotifier {
     try {
       await care.loadFor(patientId);
     } catch (_) {}
+    // Update FCM filter to the newly selected patient.
+    notifications.setActivePatient(patientId);
     await monitoring.start(patientId);
     notifyListeners();
   }

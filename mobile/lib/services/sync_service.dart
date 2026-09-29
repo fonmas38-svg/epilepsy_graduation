@@ -219,11 +219,20 @@ class SyncService {
     synced: true,
   );
 
+  DateTime? _lastAlertAt;
+  static const _alertCooldown = Duration(minutes: 2);
+
   Future<AlertItem?> maybeCreateAlert(
     VitalReading reading,
     RiskAssessment assessment,
   ) async {
     if (assessment.label != RiskLabel.highRisk) return null;
+
+    final now = DateTime.now();
+    if (_lastAlertAt != null && now.difference(_lastAlertAt!) < _alertCooldown) {
+      return null;
+    }
+    _lastAlertAt = now;
 
     Map<String, dynamic>? remote;
     try {

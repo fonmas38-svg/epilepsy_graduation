@@ -356,9 +356,38 @@ abstract final class AppSnack {
   static void success(BuildContext context, String message) =>
       show(context, message, view: RiskView.safe, icon: Icons.check_circle_outline);
 
+  static void info(BuildContext context, String message) =>
+      show(context, message, view: RiskView.unknown, icon: Icons.info_outline);
+
   static void warn(BuildContext context, String message) =>
       show(context, message, view: RiskView.caution);
 
   static void error(BuildContext context, String message) =>
       show(context, message, view: RiskView.danger, icon: Icons.error_outline);
 }
+
+/// Centers content and caps width on tablets and desktop monitors (Windows/macOS/iPad)
+/// so layouts do not stretch across wide screens (>850-950dp), while remaining 100%
+/// fluid and responsive on mobile phones.
+class ResponsiveContent extends StatelessWidget {
+  const ResponsiveContent({
+    super.key,
+    required this.child,
+    this.maxWidth = 900,
+  });
+
+  final Widget child;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: child,
+      ),
+    );
+  }
+}
+

@@ -28,7 +28,8 @@ class AppConfig {
   /// Demo mode works fully offline without a real Firebase project.
   static const demoMode = bool.fromEnvironment('DEMO_MODE', defaultValue: true);
 
-  static const simulationInterval = Duration(seconds: 60);
+  static const simulationInterval = Duration(minutes: 5);
+
   static const devicePollInterval = Duration(seconds: 3);
   static const localRetention = Duration(hours: 24);
   static const deviceDemoToken = 'headband-demo-token';

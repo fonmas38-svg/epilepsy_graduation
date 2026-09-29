@@ -689,4 +689,161 @@ class ApiClient {
     final list = data['audit'] as List? ?? [];
     return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
+
+  // ─────────────────────────────────────── Patient caregiver self-management
+
+  Future<List<Map<String, dynamic>>> patientGetCaregivers() async {
+    final r = await _client
+        .get(_u('/patient/caregivers'), headers: await _headers())
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) {
+      throw ApiException(_detail(r, 'تعذّر تحميل قائمة الأسرة'), statusCode: r.statusCode);
+    }
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    return (data['caregivers'] as List? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> patientAddCaregiver({
+    required String name,
+    required String username,
+    String? phone,
+    String? relation,
+    String? password,
+  }) async {
+    final payload = jsonEncode({
+      'name': name,
+      'username': username,
+      'phone': ?phone,
+      'relation': ?relation,
+      'password': ?password,
+    });
+    final r = await _client
+        .post(_u('/patient/caregivers'), headers: await _headers(), body: payload)
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 201) {
+      throw ApiException(_detail(r, 'تعذّر إضافة فرد الأسرة'), statusCode: r.statusCode);
+    }
+    return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
+  }
+
+  Future<Map<String, dynamic>> patientUpdateCaregiver({
+    required String caregiverId,
+    String? name,
+    String? phone,
+    String? relation,
+  }) async {
+    final payload = jsonEncode({
+      'name': ?name,
+      'phone': ?phone,
+      'relation': ?relation,
+    });
+    final r = await _client
+        .patch(_u('/patient/caregivers/$caregiverId'), headers: await _headers(), body: payload)
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) {
+      throw ApiException(_detail(r, 'تعذّر تعديل بيانات الفرد'), statusCode: r.statusCode);
+    }
+    return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
+  }
+
+  Future<void> patientSetCaregiverDisabled(String caregiverId, {required bool disabled}) async {
+    final action = disabled ? 'disable' : 'enable';
+    final r = await _client
+        .post(_u('/patient/caregivers/$caregiverId/$action'), headers: await _headers())
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, disabled ? 'تعذّر تعطيل الفرد' : 'تعذّر تفعيل الفرد'),
+        statusCode: r.statusCode,
+      );
+    }
+  }
+
+  // ─────────────────────────────────────────── Doctor prescriptions
+
+  Future<List<Map<String, dynamic>>> getDoctorPatientTriggers(String patientId) async {
+    final r = await _client
+        .get(_u('/patients/$patientId/triggers'), headers: await _headers())
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) {
+      throw ApiException(_detail(r, 'تعذّر تحميل محفزات المريض'), statusCode: r.statusCode);
+    }
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    return (data['triggers'] as List? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> prescribeMedication({
+    required String patientId,
+    required String name,
+    required String dose,
+    required String schedule,
+    String? notes,
+  }) async {
+    final payload = jsonEncode({
+      'patient_id': patientId,
+      'name': name,
+      'dose': dose,
+      'schedule': schedule,
+      'notes': ?notes,
+    });
+    final r = await _client
+        .post(_u('/doctor/patients/$patientId/prescriptions'), headers: await _headers(), body: payload)
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 201) {
+      throw ApiException(_detail(r, 'تعذّر وصف الدواء'), statusCode: r.statusCode);
+    }
+    return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
+  }
+
+  Future<List<Map<String, dynamic>>> getDoctorPrescriptions(String patientId) async {
+    final r = await _client
+        .get(_u('/doctor/patients/$patientId/prescriptions'), headers: await _headers())
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) return [];
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    return (data['prescriptions'] as List? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<List<Map<String, dynamic>>> patientGetPrescriptions({String? patientId}) async {
+    final query = patientId != null ? '?patient_id=$patientId' : '';
+    final r = await _client
+        .get(_u('/patient/prescriptions$query'), headers: await _headers())
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) {
+      throw ApiException(_detail(r, 'تعذّر تحميل الوصفات الطبية'), statusCode: r.statusCode);
+    }
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    return (data['prescriptions'] as List? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> sharePatientLocation({
+    required String patientId,
+    required double latitude,
+    required double longitude,
+    double? accuracy,
+    String? note,
+  }) async {
+    final payload = jsonEncode({
+      'latitude': latitude,
+      'longitude': longitude,
+      'accuracy': ?accuracy,
+      'note': ?note,
+    });
+    final r = await _client
+        .post(_u('/patients/$patientId/location'), headers: await _headers(), body: payload)
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) {
+      throw ApiException(_detail(r, 'تعذّر مشاركة الموقع الجغرافي'), statusCode: r.statusCode);
+    }
+    return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
+  }
 }
+

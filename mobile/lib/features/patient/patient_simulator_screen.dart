@@ -8,7 +8,9 @@ import '../../core/ui/common.dart';
 import '../../core/ui/risk_indicator.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/app_state.dart';
+import '../../services/signal_simulator.dart';
 import '../../widgets/app_drawer.dart';
+
 
 /// Flagship Real-time Vital Telemetry Simulator & Interactive Alert Escalation Screen.
 class PatientSimulatorScreen extends StatefulWidget {
@@ -34,11 +36,25 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
     _pulseScale = Tween<double>(begin: 1.0, end: 1.25).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+
+    // Disable automatic pre-alerts while the user is on this screen.
+    // The user has full manual control here; automatic alerts would be annoying.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        context.read<AppState>().monitoring.disableAutoAlerts();
+      }
+    });
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    // Re-enable automatic alerts when the user leaves the simulator screen.
+    // Use a post-frame callback because dispose() is called after the widget
+    // is removed from the tree but the context may still be accessible.
+    try {
+      context.read<AppState>().monitoring.enableAutoAlerts();
+    } catch (_) {}
     super.dispose();
   }
 
@@ -58,6 +74,38 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
       RiskLabel.highRisk => 'تم تصعيد الحالة: إنذار حرج / خطر مرتفع',
     };
     AppSnack.success(context, msg);
+  }
+
+  /// Run a complete seizure cycle automatically:
+  /// Interictal → Pre-Ictal (with pre-alert) → Ictal → Post-Ictal
+  /// Each phase takes [phaseDuration] seconds so the demo is fast.
+  bool _cycleRunning = false;
+  Future<void> _runFullCycle(AppState app) async {
+    if (_cycleRunning) return;
+    setState(() => _cycleRunning = true);
+    // Re-enable alerts just for the cycle so pre-ictal fires properly,
+    // then restore the suppressed state afterward.
+    app.monitoring.enableAutoAlerts();
+    // Reset the cooldown for a clean demo by forcing forcePhase.
+    const phaseDuration = Duration(seconds: 4);
+    final phases = [
+      (SeizurePhase.interictal, RiskLabel.stable, 'بين النوبات — الحالة هادئة'),
+      (SeizurePhase.preIctal,   RiskLabel.watch,   'ما قبل النوبة — تنبيه مبكر'),
+      (SeizurePhase.ictal,      RiskLabel.highRisk, 'أثناء النوبة — إنذار حرج'),
+      (SeizurePhase.postIctal,  RiskLabel.stable,   'ما بعد النوبة — تعافٍ'),
+    ];
+    for (final (phase, label, msg) in phases) {
+      if (!mounted) break;
+      app.monitoring.cycleController.forcePhase(phase);
+      await app.monitoring.tick(forcePattern: label);
+      if (mounted) AppSnack.info(context, msg);
+      await Future<void>.delayed(phaseDuration);
+    }
+    if (mounted) {
+      app.monitoring.disableAutoAlerts();
+      setState(() => _cycleRunning = false);
+      AppSnack.success(context, 'اكتملت محاكاة دورة النوبة الكاملة ✓');
+    }
   }
 
   @override
@@ -466,6 +514,93 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
             icon: Icons.notification_important,
             isCritical: true,
             onPressed: () => _escalate(app, RiskLabel.highRisk),
+          ),
+          Gap.vLg,
+
+          // ── Full Seizure Cycle ─────────────────────────────────────────
+          const Divider(),
+          Gap.vSm,
+          _SeizurePhaseIndicator(phase: app.monitoring.cycleController.currentPhase),
+          Gap.vMd,
+
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _cycleRunning
+                    ? theme.colorScheme.surfaceContainerHighest
+                    : const Color(0xFF6C3483),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(Radii.md),
+                ),
+              ),
+              icon: _cycleRunning
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.auto_mode_rounded),
+              label: Text(
+                _cycleRunning
+                    ? 'جاري محاكاة الدورة الكاملة...'
+                    : 'محاكاة دورة نوبة كاملة (4 مراحل)',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              onPressed: _cycleRunning ? null : () => _runFullCycle(app),
+            ),
+          ),
+          Gap.vXs,
+          Text(
+            'بين النوبات ← ما قبل النوبة ← أثناء النوبة ← ما بعد النوبة',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SeizurePhaseIndicator extends StatelessWidget {
+  const _SeizurePhaseIndicator({required this.phase});
+  final SeizurePhase phase;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final (color, icon, label) = switch (phase) {
+      SeizurePhase.interictal => (Colors.green, Icons.check_circle_outline, 'المرحلة: بين النوبات'),
+      SeizurePhase.preIctal   => (Colors.orange, Icons.warning_amber_rounded, 'المرحلة: ما قبل النوبة'),
+      SeizurePhase.ictal      => (Colors.red, Icons.notification_important, 'المرحلة: أثناء النوبة'),
+      SeizurePhase.postIctal  => (Colors.blue, Icons.bedtime_rounded, 'المرحلة: ما بعد النوبة (تعافٍ)'),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 22),
+          Gap.hMd,
+          Expanded(
+            child: Text(
+              label,
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: color,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          Container(
+            width: 10, height: 10,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
         ],
       ),

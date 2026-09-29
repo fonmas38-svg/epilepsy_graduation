@@ -50,6 +50,8 @@ class PatientSettingsScreen extends StatelessWidget {
             Gap.vMd,
             _NotifySection(settings: s),
             Gap.vMd,
+            _FamilyCaregiversSection(app: app),
+            Gap.vMd,
           ],
           _AppearanceSection(settings: s),
           Gap.vMd,
@@ -343,6 +345,565 @@ class _NotifySection extends StatelessWidget {
             title: Text(l.shareLocation),
             secondary: const Icon(Icons.my_location_outlined),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// --- family caregivers ------------------------------------------------------
+
+class _FamilyCaregiversSection extends StatefulWidget {
+  const _FamilyCaregiversSection({required this.app});
+
+  final AppState app;
+
+  @override
+  State<_FamilyCaregiversSection> createState() => _FamilyCaregiversSectionState();
+}
+
+class _FamilyCaregiversSectionState extends State<_FamilyCaregiversSection> {
+  bool _loading = true;
+  bool _busy = false;
+  List<Map<String, dynamic>> _caregivers = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final list = await widget.app.api.patientGetCaregivers();
+      if (mounted) {
+        setState(() {
+          _caregivers = list;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _showAddDialog() async {
+    final nameCtrl = TextEditingController();
+    final usernameCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final relationCtrl = TextEditingController();
+    final passwordCtrl = TextEditingController();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.person_add_alt_1_outlined),
+            Gap.hSm,
+            Text('إضافة فرد أسرة جديد'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'الاسم الكامل *',
+                  hintText: 'مثال: سارة أحمد',
+                  prefixIcon: Icon(Icons.badge_outlined),
+                ),
+              ),
+              Gap.vSm,
+              TextField(
+                controller: usernameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'اسم المستخدم (لتسجيل الدخول) *',
+                  hintText: 'مثال: sarah_care',
+                  prefixIcon: Icon(Icons.alternate_email),
+                ),
+              ),
+              Gap.vSm,
+              TextField(
+                controller: phoneCtrl,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'رقم الهاتف',
+                  hintText: '+966500000000',
+                  prefixIcon: Icon(Icons.phone_outlined),
+                ),
+              ),
+              Gap.vSm,
+              TextField(
+                controller: relationCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'صلة القرابة',
+                  hintText: 'مثال: أم / أب / أخ / زوجة',
+                  prefixIcon: Icon(Icons.family_restroom_outlined),
+                ),
+              ),
+              Gap.vSm,
+              TextField(
+                controller: passwordCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'كلمة المرور (اختياري - 6 خانات على الأقل)',
+                  hintText: 'اتركه فارغاً للتوليد التلقائي',
+                  prefixIcon: Icon(Icons.lock_outline),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (nameCtrl.text.trim().isEmpty || usernameCtrl.text.trim().isEmpty) {
+                AppSnack.warn(context, 'يرجى إدخال الاسم واسم المستخدم');
+                return;
+              }
+              Navigator.pop(ctx, true);
+            },
+            child: const Text('إضافة'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final res = await widget.app.api.patientAddCaregiver(
+        name: nameCtrl.text.trim(),
+        username: usernameCtrl.text.trim(),
+        phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
+        relation: relationCtrl.text.trim().isEmpty ? null : relationCtrl.text.trim(),
+        password: passwordCtrl.text.trim().isEmpty ? null : passwordCtrl.text.trim(),
+      );
+      final genPass = res['generatedPassword'];
+      if (mounted) {
+        if (genPass != null) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('تم إنشاء الحساب بنجاح'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('اسم المستخدم: ${usernameCtrl.text.trim()}'),
+                  Gap.vXs,
+                  Text('كلمة المرور المُنشأة: $genPass',
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Gap.vSm,
+                  const Text('احتفظ بكلمة المرور لتسليمها لفرد الأسرة.'),
+                ],
+              ),
+              actions: [
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('تم'),
+                ),
+              ],
+            ),
+          );
+        } else {
+          AppSnack.success(context, 'تمت إضافة فرد الأسرة بنجاح');
+        }
+        _load();
+      }
+    } catch (e) {
+      if (mounted) AppSnack.error(context, e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _showEditDialog(Map<String, dynamic> member) async {
+    final nameCtrl = TextEditingController(text: member['name']?.toString() ?? '');
+    final phoneCtrl = TextEditingController(text: member['phone']?.toString() ?? '');
+    final relationCtrl = TextEditingController(text: member['relation']?.toString() ?? '');
+    final memberId = member['id']?.toString() ?? '';
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.edit_outlined),
+            Gap.hSm,
+            Text('تعديل بيانات فرد الأسرة'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'الاسم الكامل *',
+                  prefixIcon: Icon(Icons.badge_outlined),
+                ),
+              ),
+              Gap.vSm,
+              TextField(
+                controller: phoneCtrl,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'رقم الهاتف',
+                  prefixIcon: Icon(Icons.phone_outlined),
+                ),
+              ),
+              Gap.vSm,
+              TextField(
+                controller: relationCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'صلة القرابة',
+                  prefixIcon: Icon(Icons.family_restroom_outlined),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (nameCtrl.text.trim().isEmpty) {
+                AppSnack.warn(context, 'الاسم مطلوب');
+                return;
+              }
+              Navigator.pop(ctx, true);
+            },
+            child: const Text('حفظ التعديلات'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await widget.app.api.patientUpdateCaregiver(
+        caregiverId: memberId,
+        name: nameCtrl.text.trim(),
+        phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
+        relation: relationCtrl.text.trim().isEmpty ? null : relationCtrl.text.trim(),
+      );
+      if (mounted) {
+        AppSnack.success(context, 'تم تحديث بيانات فرد الأسرة بنجاح');
+        _load();
+      }
+    } catch (e) {
+      if (mounted) AppSnack.error(context, e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _toggleDisabled(Map<String, dynamic> member) async {
+    final memberId = member['id']?.toString() ?? '';
+    final isCurrentlyDisabled = member['disabled'] == true;
+    final name = member['name']?.toString() ?? 'فرد الأسرة';
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isCurrentlyDisabled ? 'إعادة تفعيل الحساب' : 'تعطيل الحساب مؤقتاً'),
+        content: Text(
+          isCurrentlyDisabled
+              ? 'هل تريد إعادة تفعيل حساب «$name»؟ سيتمكن من تسجيل الدخول وتلقي إشعارات الطوارئ مجدداً.'
+              : 'هل تريد تعطيل حساب «$name»؟ لن يتلقى إشعارات الطوارئ ولن يتمكن من الدخول حتى تعيد تفعيله.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: isCurrentlyDisabled
+                ? null
+                : FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(isCurrentlyDisabled ? 'تفعيل' : 'تعطيل'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await widget.app.api.patientSetCaregiverDisabled(
+        memberId,
+        disabled: !isCurrentlyDisabled,
+      );
+      if (mounted) {
+        AppSnack.success(
+          context,
+          isCurrentlyDisabled ? 'تمت إعادة تفعيل الحساب' : 'تم تعطيل الحساب بنجاح',
+        );
+        _load();
+      }
+    } catch (e) {
+      if (mounted) AppSnack.error(context, e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return SectionCard(
+      title: 'أفراد الأسرة والمرافقين',
+      subtitle: 'إدارة أفراد العائلة الذين يتلقون إشعارات الطوارئ عند حدوث نوبة',
+      icon: Icons.family_restroom_outlined,
+      trailing: IconButton.filledTonal(
+        icon: const Icon(Icons.person_add_outlined),
+        tooltip: 'إضافة فرد أسرة جديد',
+        onPressed: _busy ? null : _showAddDialog,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_loading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(Gap.md),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (_caregivers.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(Gap.md),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.group_off_outlined,
+                    size: 40,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  Gap.vSm,
+                  Text(
+                    'لا يوجد أفراد أسرة مسجلين حالياً',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  Gap.vXs,
+                  Text(
+                    'أضف أفراد عائلتك أو المرافقين ليتلقوا تنبيهات فورية وموقعك الجغرافي عند الاشتباه بحدوث نوبة.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Gap.vMd,
+                  FilledButton.icon(
+                    onPressed: _showAddDialog,
+                    icon: const Icon(Icons.person_add_outlined),
+                    label: const Text('إضافة فرد أسرة'),
+                  ),
+                ],
+              ),
+            )
+          else
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _caregivers.length,
+              separatorBuilder: (_, _) => Gap.vSm,
+              itemBuilder: (context, idx) {
+                final cg = _caregivers[idx];
+                final name = cg['name']?.toString() ?? 'بدون اسم';
+                final username = cg['username']?.toString() ?? '';
+                final phone = cg['phone']?.toString();
+                final relation = cg['relation']?.toString();
+                final isDisabled = cg['disabled'] == true;
+
+                return Container(
+                  padding: const EdgeInsets.all(Gap.sm),
+                  decoration: BoxDecoration(
+                    color: isDisabled
+                        ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4)
+                        : theme.colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isDisabled
+                          ? theme.colorScheme.error.withValues(alpha: 0.3)
+                          : theme.colorScheme.outlineVariant,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            backgroundColor: isDisabled
+                                ? theme.colorScheme.errorContainer
+                                : theme.colorScheme.primaryContainer,
+                            foregroundColor: isDisabled
+                                ? theme.colorScheme.onErrorContainer
+                                : theme.colorScheme.onPrimaryContainer,
+                            child: Text(
+                              name.isNotEmpty ? name[0].toUpperCase() : '؟',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          Gap.hSm,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Text(
+                                      name,
+                                      style: theme.textTheme.titleSmall?.copyWith(
+                                        decoration: isDisabled ? TextDecoration.lineThrough : null,
+                                      ),
+                                    ),
+                                    if (relation != null && relation.isNotEmpty) ...[
+                                      Gap.hXs,
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: theme.colorScheme.secondaryContainer,
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          relation,
+                                          style: theme.textTheme.labelSmall?.copyWith(
+                                            color: theme.colorScheme.onSecondaryContainer,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                Gap.vXs,
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.alternate_email,
+                                      size: 14,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                    const SizedBox(width: 2),
+                                    Text(
+                                      username,
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                    if (phone != null && phone.isNotEmpty) ...[
+                                      Gap.hSm,
+                                      Icon(
+                                        Icons.phone_outlined,
+                                        size: 14,
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                      const SizedBox(width: 2),
+                                      Text(
+                                        phone,
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: isDisabled
+                                  ? theme.colorScheme.errorContainer
+                                  : const Color(0xFFE8F5E9),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  isDisabled ? Icons.block : Icons.check_circle_outline,
+                                  size: 13,
+                                  color: isDisabled
+                                      ? theme.colorScheme.error
+                                      : const Color(0xFF2E7D32),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  isDisabled ? 'معطّل' : 'نشط',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: isDisabled
+                                        ? theme.colorScheme.error
+                                        : const Color(0xFF2E7D32),
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      Gap.vSm,
+                      const Divider(height: 1),
+                      Gap.vXs,
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton.icon(
+                            onPressed: _busy ? null : () => _showEditDialog(cg),
+                            icon: const Icon(Icons.edit_outlined, size: 16),
+                            label: const Text('تعديل'),
+                          ),
+                          Gap.hSm,
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                              foregroundColor: isDisabled
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.error,
+                            ),
+                            onPressed: _busy ? null : () => _toggleDisabled(cg),
+                            icon: Icon(
+                              isDisabled ? Icons.check_circle_outline : Icons.block_outlined,
+                              size: 16,
+                            ),
+                            label: Text(isDisabled ? 'إعادة تفعيل' : 'تعطيل الحساب'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );

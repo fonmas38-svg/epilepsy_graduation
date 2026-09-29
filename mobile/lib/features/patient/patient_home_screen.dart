@@ -320,66 +320,69 @@ class _DashboardTabState extends State<_DashboardTab> {
       ),
       body: RefreshIndicator(
         onRefresh: _loadSchedule,
-        child: ListView(
-          padding: Insets.pageBottomSafe,
-          children: [
-            OfflineBanner(
-              visible: !app.apiOnline,
-              lastUpdateLabel: TimeAgo.since(app.lastObservedAt, l),
-              pendingCount: app.care.pendingCount,
-            ),
-            RiskGauge(
-              view: app.riskView,
-              leadTimeMin: prediction?.leadTimeMin,
-              freshnessLabel:
-                  '${l.lastUpdate}: ${TimeAgo.since(app.lastObservedAt, l)}',
-              reasonLabel: l.riskUnknownWhy,
-            ),
-            if (pre != null) ...[
-              Gap.vMd,
-              _PreAlertCard(
-                alert: pre,
-                leadTimeMin: prediction?.leadTimeMin,
-                onOpen: () => _openAlert(pre),
+        child: ResponsiveContent(
+          maxWidth: 850,
+          child: ListView(
+            padding: Insets.pageBottomSafe,
+            children: [
+              OfflineBanner(
+                visible: !app.apiOnline,
+                lastUpdateLabel: TimeAgo.since(app.lastObservedAt, l),
+                pendingCount: app.care.pendingCount,
               ),
-            ],
-            Gap.vLg,
-            // Below the status, above everything else, and never behind a tab.
-            EmergencyButton(
-              onPressed: app.sosInProgress ? null : _sos,
-              busy: app.sosInProgress,
-            ),
-            Gap.vLg,
-            const _FamilyLocationCard(),
-            Gap.vMd,
-            const _SimulatorBannerCard(),
-            Gap.vMd,
-            _NextDoseSection(
-              entry: _nextDose,
-              enabled: !_busy,
-              onTake: _takeDose,
-            ),
-            Gap.vMd,
-            _DeviceSection(monitoring: app.monitoring),
-            Gap.vMd,
-            _SourceSection(app: app),
-            if (prediction != null) ...[
+              RiskGauge(
+                view: app.riskView,
+                leadTimeMin: prediction?.leadTimeMin,
+                freshnessLabel:
+                    '${l.lastUpdate}: ${TimeAgo.since(app.lastObservedAt, l)}',
+                reasonLabel: l.riskUnknownWhy,
+              ),
+              if (pre != null) ...[
+                Gap.vMd,
+                _PreAlertCard(
+                  alert: pre,
+                  leadTimeMin: prediction?.leadTimeMin,
+                  onOpen: () => _openAlert(pre),
+                ),
+              ],
+              Gap.vLg,
+              // Below the status, above everything else, and never behind a tab.
+              EmergencyButton(
+                onPressed: app.sosInProgress ? null : _sos,
+                busy: app.sosInProgress,
+              ),
+              Gap.vLg,
+              const _FamilyLocationCard(),
               Gap.vMd,
-              PredictionGauge(prediction: prediction),
+              const _SimulatorBannerCard(),
               Gap.vMd,
-              LeadTimeCard(prediction: prediction),
+              _NextDoseSection(
+                entry: _nextDose,
+                enabled: !_busy,
+                onTake: _takeDose,
+              ),
+              Gap.vMd,
+              _DeviceSection(monitoring: app.monitoring),
+              Gap.vMd,
+              _SourceSection(app: app),
+              if (prediction != null) ...[
+                Gap.vMd,
+                PredictionGauge(prediction: prediction),
+                Gap.vMd,
+                LeadTimeCard(prediction: prediction),
+              ],
+              Gap.vMd,
+              _SignalSection(reading: app.monitoring.latestReading),
+              Gap.vMd,
+              _RecentAlertsSection(
+                alerts: app.monitoring.alerts,
+                onAcknowledge: app.acknowledgeAlert,
+                onOpen: _openAlert,
+              ),
+              Gap.vMd,
+              const _QuickActionsSection(),
             ],
-            Gap.vMd,
-            _SignalSection(reading: app.monitoring.latestReading),
-            Gap.vMd,
-            _RecentAlertsSection(
-              alerts: app.monitoring.alerts,
-              onAcknowledge: app.acknowledgeAlert,
-              onOpen: _openAlert,
-            ),
-            Gap.vMd,
-            const _QuickActionsSection(),
-          ],
+          ),
         ),
       ),
     );

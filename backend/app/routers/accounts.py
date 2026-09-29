@@ -199,7 +199,7 @@ def _patient_view(user: dict) -> dict:
     """Public patient dict enriched with live monitoring status from cloud_store."""
     pub = users_store.public_user(user) or {}
     cloud = cloud_store.get_patient(user["id"]) or {}
-    for key in ("diagnosis", "medications"):
+    for key in ("diagnosis", "medications", "phone"):
         if cloud.get(key) is not None:
             pub[key] = cloud[key]
     pub["currentStatus"] = cloud.get("currentStatus") or "stable"
@@ -711,3 +711,139 @@ def _mirror_patient_to_cloud(patient: dict) -> None:
         )
     except Exception:  # pragma: no cover - never block account creation on this
         pass
+
+
+# ---------------------------------------------------------------- patient self-service
+
+
+require_patient = require_role("patient", "admin")
+
+
+class CreateCaregiverRequest(BaseModel):
+    """Payload when a patient adds a new family member from their own account."""
+    name: str = Field(..., min_length=1, max_length=120)
+    username: str = Field(..., min_length=3, max_length=64)
+    phone: str | None = Field(default=None, max_length=32)
+    relation: str | None = Field(default=None, max_length=64)
+    password: str | None = Field(default=None, min_length=6, max_length=128)
+
+
+class UpdateCaregiverRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    phone: str | None = Field(default=None, max_length=32)
+    relation: str | None = Field(default=None, max_length=64)
+
+
+@router.get("/patient/caregivers")
+def patient_list_caregivers(actor: dict = Depends(require_patient)):
+    """List all family / caregiver accounts linked to the calling patient."""
+    patient_id = actor.get("sub")
+    caregiver_ids = users_store.caregivers_for_patient(patient_id)
+    caregivers = []
+    for cg_id in caregiver_ids:
+        cg = users_store.get_user(cg_id)
+        if cg:
+            user_data = users_store.public_user(cg)
+            try:
+                extra = cloud_store.get_patient(cg_id)
+                if extra:
+                    user_data["phone"] = extra.get("phone")
+                    user_data["relation"] = extra.get("relation")
+            except Exception:
+                pass
+            caregivers.append(user_data)
+    return {"caregivers": caregivers}
+
+
+@router.post("/patient/caregivers", status_code=201)
+def patient_add_caregiver(body: CreateCaregiverRequest, actor: dict = Depends(require_patient)):
+    """A patient creates and links a new family member account to themselves.
+
+    This creates a full caregiver account (with username + password) and
+    immediately links it to the calling patient so they can receive alerts.
+    """
+    patient_id = actor.get("sub")
+    if users_store.username_taken(body.username):
+        raise HTTPException(status_code=409, detail="اسم المستخدم مستخدم بالفعل")
+    password_hash, generated = _issue_password(body.password)
+    try:
+        caregiver = users_store.create_user(
+            username=body.username,
+            name=body.name,
+            role="caregiver",
+            password_hash=password_hash,
+            created_by=patient_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    # Store extra fields (phone, relation) in the cloud store if available.
+    if body.phone or body.relation:
+        try:
+            cloud_store.upsert_patient(caregiver["id"], {
+                "phone": body.phone,
+                "relation": body.relation,
+            })
+        except Exception:
+            pass
+    users_store.link_caregiver(patient_id, caregiver["id"], by=patient_id)
+    users_store.log(patient_id, "patient", "add_caregiver", caregiver["id"],
+                    {"username": body.username})
+    return {
+        "caregiver": users_store.public_user(caregiver),
+        "generatedPassword": generated,
+    }
+
+
+@router.patch("/patient/caregivers/{caregiver_id}")
+def patient_update_caregiver(
+    caregiver_id: str,
+    body: UpdateCaregiverRequest,
+    actor: dict = Depends(require_patient),
+):
+    """A patient updates name / phone / relation of one of their caregivers."""
+    patient_id = actor.get("sub")
+    # Verify the caregiver is actually linked to this patient.
+    if caregiver_id not in users_store.caregivers_for_patient(patient_id):
+        raise HTTPException(status_code=403, detail="هذا الفرد غير مرتبط بحسابك")
+    cg = users_store.get_user(caregiver_id)
+    if not cg or cg.get("role") != "caregiver":
+        raise HTTPException(status_code=404, detail="لم يتم العثور على الفرد")
+    try:
+        updated = users_store.update_user(caregiver_id, {"name": body.name})
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if body.phone or body.relation:
+        try:
+            cloud_store.upsert_patient(caregiver_id, {
+                "phone": body.phone,
+                "relation": body.relation,
+            })
+        except Exception:
+            pass
+    users_store.log(patient_id, "patient", "update_caregiver", caregiver_id)
+    return {"caregiver": users_store.public_user(updated)}
+
+
+@router.post("/patient/caregivers/{caregiver_id}/disable")
+def patient_disable_caregiver(caregiver_id: str, actor: dict = Depends(require_patient)):
+    """A patient temporarily disables a family member's access."""
+    patient_id = actor.get("sub")
+    if caregiver_id not in users_store.caregivers_for_patient(patient_id):
+        raise HTTPException(status_code=403, detail="هذا الفرد غير مرتبط بحسابك")
+    if not users_store.set_disabled(caregiver_id, True):
+        raise HTTPException(status_code=404, detail="لم يتم العثور على الفرد")
+    users_store.log(patient_id, "patient", "disable_caregiver", caregiver_id)
+    return {"ok": True}
+
+
+@router.post("/patient/caregivers/{caregiver_id}/enable")
+def patient_enable_caregiver(caregiver_id: str, actor: dict = Depends(require_patient)):
+    """A patient re-enables a previously disabled family member."""
+    patient_id = actor.get("sub")
+    if caregiver_id not in users_store.caregivers_for_patient(patient_id):
+        raise HTTPException(status_code=403, detail="هذا الفرد غير مرتبط بحسابك")
+    if not users_store.set_disabled(caregiver_id, False):
+        raise HTTPException(status_code=404, detail="لم يتم العثور على الفرد")
+    users_store.log(patient_id, "patient", "enable_caregiver", caregiver_id)
+    return {"ok": True}
+

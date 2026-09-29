@@ -73,15 +73,19 @@ firebase_options.dart
 .qwen/
 .windsurf/
 
-# أرشيف توثيق محلي: ملفات قديمة/مستبدَلة أُبقيت على القرص للرجوع إليها فقط،
-# ولا تُرفع إلى GitHub حتى لا تضلّل من يكتب ملف التوثيق النهائي للجامعة.
-# راجع docs/_archive/README.md و docs/README.md.
-docs/_archive/
-
-# ملفات التوثيق الأكاديمي النهائي (Word / Final Book) — غير مرفوعة لـ GitHub
-docs/final_book/
-docs/build_all_thesis_chapters.py
-docs/thesis_docx_base.py
+# ─────────────────────────────────────────────────────────────
+# التوثيق والمخططات (Documentation & Diagrams):
+# يُرفع إلى GitHub فقط ملفات التوثيق الموجودة في جذر مجلد docs/ (*.md, firestore.rules).
+# يُستثنى من الرفع كافة المجلدات الفرعية (المخططات diagrams، كتب التخرج final_book،
+# الأدلة guidelines، الأرشيف _archive، وأي مجلد فرعي آخر)،
+# وكذلك سكربتات التوليد والملفات المضغوطة ومخرجات Word و PowerPoint.
+# ─────────────────────────────────────────────────────────────
+docs/*/
+docs/*.py
+docs/*.zip
+docs/*.pptx
+docs/*.docx
+docs/*.pdf
 
 # Certificates
 *.pfx
@@ -94,6 +98,8 @@ htmlcov/
 .pytest_cache/
 **/__pycache__/
 
-# Scratch files
+# Scratch files & temporary prompts
 اخر عمل مع المتطلبات.txt
+مخططات.txt
+
 

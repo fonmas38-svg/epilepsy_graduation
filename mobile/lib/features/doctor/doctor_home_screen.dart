@@ -276,76 +276,76 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
         emptyIcon: Icons.people_outline,
         builder: (context, _) => RefreshIndicator(
           onRefresh: _refresh,
-          child: ListView(
-            padding: Insets.pageBottomSafe,
-            children: [
-              OfflineBanner(
-                visible: !app.apiOnline,
-                lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
-                pendingCount: app.care.pendingCount,
-              ),
-              TextField(
-                controller: _search,
-                textInputAction: TextInputAction.search,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  labelText: l.searchByName,
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: _search.text.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: l.cancel,
-                          onPressed: () => setState(_search.clear),
-                          icon: const Icon(Icons.close),
+          child: ResponsiveContent(
+            maxWidth: 850,
+            child: ListView(
+              padding: Insets.pageBottomSafe,
+              children: [
+                OfflineBanner(
+                  visible: !app.apiOnline,
+                  lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
+                  pendingCount: app.care.pendingCount,
+                ),
+                TextField(
+                  controller: _search,
+                  textInputAction: TextInputAction.search,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText: l.searchByName,
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _search.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: l.cancel,
+                            onPressed: () => setState(_search.clear),
+                            icon: const Icon(Icons.close),
+                          ),
+                  ),
+                ),
+                Gap.vSm,
+                _Controls(
+                  sort: _sort,
+                  filters: _filters,
+                  onSort: (s) => setState(() => _sort = s),
+                  onToggle: (f) => setState(() {
+                    if (!_filters.remove(f)) _filters.add(f);
+                  }),
+                ),
+                Gap.vMd,
+                SectionCard(
+                  title: l.patientsList,
+                  icon: Icons.people_outline,
+                  trailing: Text(
+                    '${rows.length}/${_rows.length}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  child: rows.isEmpty
+                      ? EmptyState(
+                          title: l.emptyTitle,
+                          body: l.emptyBody,
+                          icon: Icons.filter_alt_off_outlined,
+                          compact: true,
+                        )
+                      : Column(
+                          children: [
+                            for (final r in rows)
+                              _PatientTile(
+                                row: r,
+                                enabled: !_busy,
+                                onOpen: () => _open(r),
+                              ),
+                          ],
                         ),
                 ),
-              ),
-              Gap.vSm,
-              _Controls(
-                sort: _sort,
-                filters: _filters,
-                onSort: (s) => setState(() => _sort = s),
-                onToggle: (f) => setState(() {
-                  if (!_filters.remove(f)) _filters.add(f);
-                }),
-              ),
-              Gap.vMd,
-              SectionCard(
-                title: l.patientsList,
-                icon: Icons.people_outline,
-                trailing: Text(
-                  '${rows.length}/${_rows.length}',
-                  style: Theme.of(context).textTheme.titleMedium,
+                Gap.vMd,
+                SectionCard(
+                  title: l.modelPerformance,
+                  icon: Icons.insights_outlined,
+                  subtitle: l.operatingPointNote,
+                  child: const MetricsPanel(),
                 ),
-                child: rows.isEmpty
-                    // Distinct from the page-level empty state above: there *are*
-                    // patients, they are just all filtered out. Saying «لا مرضى»
-                    // here would look like the list failed to load.
-                    ? EmptyState(
-                        title: l.emptyTitle,
-                        body: l.emptyBody,
-                        icon: Icons.filter_alt_off_outlined,
-                        compact: true,
-                      )
-                    : Column(
-                        children: [
-                          for (final r in rows)
-                            _PatientTile(
-                              row: r,
-                              enabled: !_busy,
-                              onOpen: () => _open(r),
-                            ),
-                        ],
-                      ),
-              ),
-              Gap.vMd,
-              SectionCard(
-                title: l.modelPerformance,
-                icon: Icons.insights_outlined,
-                subtitle: l.operatingPointNote,
-                child: const MetricsPanel(),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

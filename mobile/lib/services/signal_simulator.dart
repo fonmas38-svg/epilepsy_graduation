@@ -6,12 +6,111 @@ import 'package:uuid/uuid.dart';
 import '../core/enums.dart';
 import '../models/models.dart';
 
+/// The four physiological phases of a complete seizure event.
+/// Used to drive the simulator through a realistic timeline rather than
+/// snapping instantly between risk labels.
+enum SeizurePhase {
+  /// Between seizures — calm baseline (RiskLabel.stable).
+  interictal,
+
+  /// Early pre-onset changes — EEG/HR creeping up (RiskLabel.watch).
+  preIctal,
+
+  /// Active seizure — full discharges, tachycardia, movement (RiskLabel.highRisk).
+  ictal,
+
+  /// Recovery — signals returning to baseline (RiskLabel.stable with fatigue pattern).
+  postIctal,
+}
+
+extension SeizurePhaseX on SeizurePhase {
+  RiskLabel get riskLabel => switch (this) {
+        SeizurePhase.interictal => RiskLabel.stable,
+        SeizurePhase.preIctal => RiskLabel.watch,
+        SeizurePhase.ictal => RiskLabel.highRisk,
+        SeizurePhase.postIctal => RiskLabel.stable,
+      };
+
+  String get arabicLabel => switch (this) {
+        SeizurePhase.interictal => 'بين النوبات',
+        SeizurePhase.preIctal => 'ما قبل النوبة',
+        SeizurePhase.ictal => 'أثناء النوبة',
+        SeizurePhase.postIctal => 'ما بعد النوبة',
+      };
+}
+
+/// Controls progression through a complete seizure cycle.
+/// Call [nextPhase] on each tick; the cycle is:
+///   interictal (N ticks) → preIctal (M ticks) → ictal (P ticks)
+///   → postIctal (Q ticks) → interictal …
+class SeizureCycleController {
+  SeizureCycleController({
+    this.interictalTicks = 5,
+    this.preIctalTicks = 2,
+    this.ictalTicks = 3,
+    this.postIctalTicks = 2,
+  });
+
+  final int interictalTicks;
+  final int preIctalTicks;
+  final int ictalTicks;
+  final int postIctalTicks;
+
+  SeizurePhase _phase = SeizurePhase.interictal;
+  int _phaseTickCount = 0;
+
+  SeizurePhase get currentPhase => _phase;
+
+  /// Returns the pattern for the CURRENT tick, then advances the counter.
+  RiskLabel advance() {
+    final label = _phase.riskLabel;
+    _phaseTickCount++;
+    final limit = switch (_phase) {
+      SeizurePhase.interictal => interictalTicks,
+      SeizurePhase.preIctal => preIctalTicks,
+      SeizurePhase.ictal => ictalTicks,
+      SeizurePhase.postIctal => postIctalTicks,
+    };
+    if (_phaseTickCount >= limit) {
+      _phaseTickCount = 0;
+      _phase = switch (_phase) {
+        SeizurePhase.interictal => SeizurePhase.preIctal,
+        SeizurePhase.preIctal => SeizurePhase.ictal,
+        SeizurePhase.ictal => SeizurePhase.postIctal,
+        SeizurePhase.postIctal => SeizurePhase.interictal,
+      };
+    }
+    return label;
+  }
+
+  /// Jump directly to a specific phase (used by the UI escalation buttons).
+  void forcePhase(SeizurePhase phase) {
+    _phase = phase;
+    _phaseTickCount = 0;
+  }
+
+  /// Reset to the beginning of the cycle.
+  void reset() {
+    _phase = SeizurePhase.interictal;
+    _phaseTickCount = 0;
+  }
+}
+
 class SignalSimulator {
   SignalSimulator({Random? random}) : _rng = random ?? Random();
 
   final Random _rng;
   final _uuid = const Uuid();
 
+  /// Deterministic pattern selector used by legacy tests and cyclical runners.
+  RiskLabel patternForTick(int tick) {
+    final mod = tick % 8;
+    if (mod == 3 || mod == 6) return RiskLabel.watch;
+    if (mod == 4 || mod == 5) return RiskLabel.highRisk;
+    return RiskLabel.stable;
+  }
+
+  /// Generates a [VitalReading] for the given [pattern].
   VitalReading generate({
     required String patientId,
     RiskLabel pattern = RiskLabel.stable,
@@ -55,12 +154,48 @@ class SignalSimulator {
     );
   }
 
-  /// Cycles patterns so demos show stable -> watch -> high_risk over time.
-  RiskLabel patternForTick(int tick) {
-    final m = tick % 5;
-    if (m == 4) return RiskLabel.highRisk;
-    if (m == 2 || m == 3) return RiskLabel.watch;
-    return RiskLabel.stable;
+  /// Generates a [VitalReading] for a specific seizure [phase].
+  /// Post-ictal uses a special "fatigue" pattern: low-amplitude slow waves
+  /// and bradycardia (below normal) reflecting post-seizure exhaustion.
+  VitalReading generateForPhase({
+    required String patientId,
+    required SeizurePhase phase,
+    int samples = 64,
+  }) {
+    if (phase == SeizurePhase.postIctal) {
+      return _generatePostIctal(patientId: patientId, samples: samples);
+    }
+    return generate(patientId: patientId, pattern: phase.riskLabel, samples: samples);
+  }
+
+  /// Post-ictal: slow delta waves, suppressed amplitude, HR below normal.
+  VitalReading _generatePostIctal({
+    required String patientId,
+    int samples = 64,
+  }) {
+    final eeg = <double>[];
+    final ecg = <double>[];
+    final motion = <double>[];
+    late double hr;
+
+    for (var i = 0; i < samples; i++) {
+      final t = i / samples * 2 * pi;
+      // Slow delta waves (1-4 Hz), suppressed amplitude — post-ictal exhaustion
+      eeg.add(0.25 * sin(3 * t) + _n(0.08));
+      ecg.add(_synthesizeEcg(t, rate: 1.8, noise: 0.02, ampMultiplier: 0.85));
+      motion.add(_n(0.05)); // nearly motionless
+      hr = 58 + _n(4); // slight bradycardia post-seizure
+    }
+
+    return VitalReading(
+      id: _uuid.v4(),
+      patientId: patientId,
+      timestamp: DateTime.now(),
+      eeg: eeg,
+      ecg: ecg,
+      motion: motion,
+      hr: hr,
+    );
   }
 
   /// One reading on a continuous interictal→preictal→onset ramp, mirroring the
@@ -137,3 +272,5 @@ String encodeSignal(List<double> values) => jsonEncode(values);
 
 List<double> decodeSignal(String raw) =>
     List<double>.from((jsonDecode(raw) as List).map((e) => (e as num).toDouble()));
+
+

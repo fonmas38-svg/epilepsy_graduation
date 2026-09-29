@@ -419,54 +419,64 @@ class _Body extends StatelessWidget {
         .where((r) => myUid.isNotEmpty && r.responderId == myUid)
         .toList();
 
-    return ListView(
-      padding: Insets.pageBottomSafe,
-      children: [
-        OfflineBanner(
-          visible: !app.apiOnline,
-          lastUpdateLabel: care.lastSyncedAt == null
-              ? null
-              : TimeAgo.since(care.lastSyncedAt, l),
-          pendingCount: care.pendingCount,
-        ),
-        _Headline(alert: alert, patientName: profile?.name ?? ''),
-        Gap.vMd,
-        _StatusSection(app: app, level: level),
-        Gap.vMd,
-        _LocationSection(
-          coords: coords,
-          consent: myConsent,
-          onNavigate: onNavigate,
-        ),
-        Gap.vMd,
-        _ActionsSection(
-          alert: alert,
-          patientName: profile?.name ?? '',
-          patientPhone: profile?.phone ?? '',
-          contacts: level.allowsLiveStatus ? care.contacts : const [],
-          doctorPhone: level.allowsLiveStatus
-              ? (care.medicalCard?.doctorPhone ?? '')
-              : '',
-          coords: coords,
-          busy: busy,
-          myStatuses: mine.map((r) => r.status).toSet(),
-          onRespond: onRespond,
-          onDial: onDial,
-          onSms: onSms,
-        ),
-        Gap.vMd,
-        _RespondersSection(responses: responses),
-        Gap.vMd,
-        // Steps before paperwork. Documentation matters, but not while the
-        // seizure is still happening.
-        const FirstAidView(),
-        Gap.vMd,
-        _DocumentSection(
-          logs: _visibleLogs(care, level, myUid),
-          busy: busy,
-          onDocument: onDocument,
-        ),
-      ],
+    return ResponsiveContent(
+      maxWidth: 850,
+      child: ListView(
+        padding: Insets.pageBottomSafe,
+        children: [
+          OfflineBanner(
+            visible: !app.apiOnline,
+            lastUpdateLabel: care.lastSyncedAt == null
+                ? null
+                : TimeAgo.since(care.lastSyncedAt, l),
+            pendingCount: care.pendingCount,
+          ),
+          _Headline(alert: alert, patientName: profile?.name ?? ''),
+          Gap.vMd,
+          _StatusSection(app: app, level: level),
+          Gap.vMd,
+          _LocationSection(
+            coords: coords,
+            consent: myConsent,
+            onNavigate: onNavigate,
+          ),
+          Gap.vMd,
+          _ActionsSection(
+            alert: alert,
+            patientName: profile?.name ?? '',
+            patientPhone: profile?.phone ?? '',
+            contacts: level.allowsLiveStatus ? care.contacts : const [],
+            doctorPhone: level.allowsLiveStatus
+                ? (care.medicalCard?.doctorPhone ?? '')
+                : '',
+            coords: coords,
+            busy: busy,
+            myStatuses: mine.map((r) => r.status).toSet(),
+            onRespond: onRespond,
+            onDial: onDial,
+            onSms: onSms,
+          ),
+          Gap.vMd,
+          _RespondersSection(responses: responses),
+          Gap.vMd,
+          if (care.medicalCard != null && !care.medicalCard!.isEmpty) ...[
+            _CaregiverMedicalCardSection(
+              card: care.medicalCard!,
+              onDial: onDial,
+            ),
+            Gap.vMd,
+          ],
+          // Steps before paperwork. Documentation matters, but not while the
+          // seizure is still happening.
+          const FirstAidView(),
+          Gap.vMd,
+          _DocumentSection(
+            logs: _visibleLogs(care, level, myUid),
+            busy: busy,
+            onDocument: onDocument,
+          ),
+        ],
+      ),
     );
   }
 
@@ -1108,6 +1118,67 @@ class _DocumentSheetState extends State<_DocumentSheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _CaregiverMedicalCardSection extends StatelessWidget {
+  const _CaregiverMedicalCardSection({
+    required this.card,
+    required this.onDial,
+  });
+
+  final MedicalCard card;
+  final void Function(String phone) onDial;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+
+    return SectionCard(
+      title: l.medicalCard,
+      icon: Icons.medical_information_outlined,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (card.bloodType.isNotEmpty)
+            LabeledValue(
+              label: l.bloodType,
+              value: card.bloodType,
+              icon: Icons.bloodtype_outlined,
+            ),
+          if (card.allergies.isNotEmpty)
+            LabeledValue(
+              label: l.allergies,
+              value: card.allergies,
+              valueColor: theme.colorScheme.error,
+              icon: Icons.warning_amber_rounded,
+            ),
+          if (card.doctorName.isNotEmpty)
+            LabeledValue(
+              label: l.treatingDoctor,
+              value: card.doctorName,
+              icon: Icons.medical_services_outlined,
+            ),
+          if (card.notes.isNotEmpty) ...[
+            Gap.vXs,
+            InfoNote(
+              text: 'تعليمات الإنقاذ والجرعات الإسعافية: ${card.notes}',
+              icon: Icons.emergency_outlined,
+              view: RiskView.caution,
+            ),
+          ],
+          if (card.doctorPhone.isNotEmpty) ...[
+            Gap.vSm,
+            OutlinedButton.icon(
+              onPressed: () => onDial(card.doctorPhone),
+              icon: const Icon(Icons.phone),
+              label: Text('اتصال بالطبيب المعالج (${card.doctorPhone})'),
+            ),
+          ],
+        ],
       ),
     );
   }

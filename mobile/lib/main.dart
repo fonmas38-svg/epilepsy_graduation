@@ -42,12 +42,12 @@ Future<void> main() async {
     FlutterError.presentError(details);
   };
 
-  // FCM is currently an Android-only integration. The Android native config
-  // comes from google-services.json, so no generated Dart options file is
-  // required for this target. Windows remains usable through backend polling.
+  // FCM push notifications are enabled on mobile targets (Android & iOS).
+  // Desktop platforms (Windows/Linux/macOS) operate gracefully through backend polling/sync.
   if (!AppConfig.demoMode &&
       !kIsWeb &&
-      defaultTargetPlatform == TargetPlatform.android) {
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS)) {
     try {
       await Firebase.initializeApp();
     } catch (error) {

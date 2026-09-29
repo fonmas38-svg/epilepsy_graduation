@@ -98,6 +98,17 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
       }
       final db = app.db;
       final readings = await db.recentReadings(pid, limit: 1);
+      // Load prescriptions and triggers from API (best-effort).
+      List<Map<String, dynamic>> prescriptions = [];
+      List<Map<String, dynamic>> triggers = [];
+      if (app.apiOnline) {
+        try {
+          prescriptions = await app.api.getDoctorPrescriptions(pid);
+        } catch (_) {}
+        try {
+          triggers = await app.api.getDoctorPatientTriggers(pid);
+        } catch (_) {}
+      }
       final data = _FileData(
         patientId: pid,
         profile: app.auth.patientById(pid),
@@ -113,6 +124,8 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
           pid,
           activeOnly: true,
         )).length,
+        prescriptions: prescriptions,
+        triggers: triggers,
       );
       if (!mounted) return;
       setState(() {
@@ -352,6 +365,16 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
               Gap.vMd,
               _AnalyticsSection(data: d),
               Gap.vMd,
+              // ─── Prescriptions ────────────────────────────────────
+              _PrescriptionSection(
+                patientId: d.patientId,
+                prescriptions: d.prescriptions,
+                onRefresh: _load,
+              ),
+              Gap.vMd,
+              // ─── Trigger Diary ────────────────────────────────────
+              _TriggersSection(triggers: d.triggers),
+              Gap.vMd,
               _NotesSection(
                 notes: d.notes,
                 enabled: !_busy,
@@ -393,6 +416,8 @@ class _FileData {
     required this.reading,
     required this.adherence,
     required this.activeMeds,
+    this.prescriptions = const [],
+    this.triggers = const [],
   });
 
   final String patientId;
@@ -411,9 +436,16 @@ class _FileData {
   final double adherence;
   final int activeMeds;
 
+  /// Prescriptions issued by the doctor for this patient (from backend API).
+  final List<Map<String, dynamic>> prescriptions;
+
+  /// Trigger diary entries recorded by the patient (from backend API).
+  final List<Map<String, dynamic>> triggers;
+
   /// Notes change on this screen; nothing else does. Rebuilding just that list
   /// avoids a full reload — and a full reload would scroll the doctor back to
   /// the top of a long file for the sake of one line of text.
+
   _FileData withNotes(List<ClinicalNote> next) => _FileData(
     patientId: patientId,
     profile: profile,
@@ -426,6 +458,8 @@ class _FileData {
     reading: reading,
     adherence: adherence,
     activeMeds: activeMeds,
+    prescriptions: prescriptions,
+    triggers: triggers,
   );
 
   int get alerts7d {
@@ -1268,6 +1302,293 @@ class _NoteSheetState extends State<_NoteSheet> {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────── Doctor Prescription Section
+
+class _PrescriptionSection extends StatefulWidget {
+  const _PrescriptionSection({
+    required this.patientId,
+    required this.prescriptions,
+    required this.onRefresh,
+  });
+
+  final String patientId;
+  final List<Map<String, dynamic>> prescriptions;
+  final VoidCallback onRefresh;
+
+  @override
+  State<_PrescriptionSection> createState() => _PrescriptionSectionState();
+}
+
+class _PrescriptionSectionState extends State<_PrescriptionSection> {
+  bool _busy = false;
+
+  Future<void> _addPrescription() async {
+    final app = context.read<AppState>();
+    final formKey = GlobalKey<FormState>();
+    final nameCtrl = TextEditingController();
+    final doseCtrl = TextEditingController();
+    final schedCtrl = TextEditingController();
+    final notesCtrl = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('وصف دواء جديد'),
+        content: Form(
+          key: formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'اسم الدواء *',
+                    hintText: 'مثال: Carbamazepine',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (v) => v?.trim().isEmpty == true ? 'مطلوب' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: doseCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'الجرعة *',
+                    hintText: 'مثال: 200mg',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (v) => v?.trim().isEmpty == true ? 'مطلوب' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: schedCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'توقيت الأخذ *',
+                    hintText: 'مثال: مرتين يومياً بعد الأكل',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (v) => v?.trim().isEmpty == true ? 'مطلوب' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: notesCtrl,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'ملاحظات',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState!.validate()) Navigator.pop(ctx, true);
+            },
+            child: const Text('حفظ الوصفة'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await app.api.prescribeMedication(
+        patientId: widget.patientId,
+        name: nameCtrl.text.trim(),
+        dose: doseCtrl.text.trim(),
+        schedule: schedCtrl.text.trim(),
+        notes: notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+      );
+      if (mounted) AppSnack.success(context, 'تم حفظ الوصفة الطبية بنجاح ✓');
+      widget.onRefresh();
+    } catch (e) {
+      if (mounted) AppSnack.error(context, 'تعذّر حفظ الوصفة');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final active = widget.prescriptions.where((p) => p['active'] == true).toList();
+    final inactive = widget.prescriptions.where((p) => p['active'] != true).toList();
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: Insets.card,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: Radii.rMd,
+        border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.medication_rounded, color: theme.colorScheme.primary, size: 20),
+              Gap.hSm,
+              Expanded(
+                child: Text(
+                  'الأدوية الموصوفة (${active.length} نشط)',
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ),
+              if (!_busy)
+                TextButton.icon(
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('وصف دواء'),
+                  onPressed: _addPrescription,
+                )
+              else
+                const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+            ],
+          ),
+          if (widget.prescriptions.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text('لا توجد أدوية موصوفة حتى الآن',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            )
+          else ...[
+            // Active prescriptions
+            ...active.map((rx) => _RxTile(rx: rx, active: true)),
+            // Inactive/cancelled
+            if (inactive.isNotEmpty) ...[
+              const Divider(height: 16),
+              Text('ملغاة / قديمة',
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              ...inactive.take(3).map((rx) => _RxTile(rx: rx, active: false)),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RxTile extends StatelessWidget {
+  const _RxTile({required this.rx, required this.active});
+  final Map<String, dynamic> rx;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(
+            active ? Icons.check_circle_rounded : Icons.cancel_rounded,
+            size: 16,
+            color: active ? Colors.green : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+          ),
+          Gap.hSm,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${rx['name'] ?? ''} — ${rx['dose'] ?? ''}',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: active ? null : theme.colorScheme.onSurfaceVariant,
+                    decoration: active ? null : TextDecoration.lineThrough,
+                  ),
+                ),
+                Text(
+                  rx['schedule'] ?? '',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────── Patient Triggers Section
+
+class _TriggersSection extends StatelessWidget {
+  const _TriggersSection({required this.triggers});
+  final List<Map<String, dynamic>> triggers;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // Group by type
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final t in triggers) {
+      final type = (t['type'] as String?) ?? 'أخرى';
+      (grouped[type] ??= []).add(t);
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: Insets.card,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: Radii.rMd,
+        border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
+              Gap.hSm,
+              Text(
+                'مذكرات المحفزات (${triggers.length})',
+                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          if (triggers.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text('لم يسجّل المريض أي محفزات حتى الآن',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            )
+          else
+            ...grouped.entries.take(5).map((entry) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Container(
+                    width: 8, height: 8,
+                    margin: const EdgeInsets.only(left: 8),
+                    decoration: const BoxDecoration(color: Colors.orange, shape: BoxShape.circle),
+                  ),
+                  Expanded(
+                    child: Text(
+                      '${entry.key} (${entry.value.length})',
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
+            )),
         ],
       ),
     );

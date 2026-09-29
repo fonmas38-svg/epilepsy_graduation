@@ -83,12 +83,19 @@ class _MedicationScreenState extends State<MedicationScreen> {
       return;
     }
     try {
+      List<Map<String, dynamic>> doctorPrescriptions = const [];
+      if (mounted) {
+        try {
+          doctorPrescriptions = await context.read<AppState>().api.patientGetPrescriptions(patientId: pid);
+        } catch (_) {}
+      }
       final data = _MedData(
         meds: await _svc.forPatient(pid),
         schedule: await _svc.todaySchedule(pid),
         week: await _svc.adherence(pid),
         month: await _svc.adherence(pid, days: 30),
         missed: await _svc.missedDoses(pid),
+        doctorPrescriptions: doctorPrescriptions,
       );
       if (!mounted) return;
       setState(() {
@@ -134,14 +141,22 @@ class _MedicationScreenState extends State<MedicationScreen> {
     );
   }
 
-  Future<void> _addOrEdit({Medication? existing}) async {
+  Future<void> _addOrEdit({
+    Medication? existing,
+    String? initialName,
+    String? initialDosage,
+  }) async {
     final l = AppLocalizations.of(context);
     final pid = _pid;
     if (pid == null) return;
     final draft = await showModalBottomSheet<_MedDraft>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _MedSheet(existing: existing),
+      builder: (_) => _MedSheet(
+        existing: existing,
+        initialName: initialName,
+        initialDosage: initialDosage,
+      ),
     );
     if (draft == null || !mounted) return;
     await _guard(
@@ -315,6 +330,17 @@ class _MedicationScreenState extends State<MedicationScreen> {
               OfflineBanner(visible: !app.apiOnline),
               _AdherenceSection(data: d, onShare: () => _share(d)),
               Gap.vMd,
+              if (d.doctorPrescriptions.isNotEmpty) ...[
+                _DoctorPrescriptionsSection(
+                  prescriptions: d.doctorPrescriptions,
+                  existingMeds: d.meds,
+                  onImport: (rx) => _addOrEdit(
+                    initialName: rx['name']?.toString(),
+                    initialDosage: rx['dose']?.toString(),
+                  ),
+                ),
+                Gap.vMd,
+              ],
               _TodaySection(
                 schedule: d.schedule,
                 enabled: !_busy,
@@ -347,6 +373,7 @@ class _MedData {
     required this.week,
     required this.month,
     required this.missed,
+    this.doctorPrescriptions = const [],
   });
 
   final List<Medication> meds;
@@ -354,6 +381,7 @@ class _MedData {
   final double week;
   final double month;
   final int missed;
+  final List<Map<String, dynamic>> doctorPrescriptions;
 }
 
 class _MedDraft {
@@ -794,9 +822,15 @@ class _MedTile extends StatelessWidget {
 // ---------------------------------------------------------------- add / edit
 
 class _MedSheet extends StatefulWidget {
-  const _MedSheet({this.existing});
+  const _MedSheet({
+    this.existing,
+    this.initialName,
+    this.initialDosage,
+  });
 
   final Medication? existing;
+  final String? initialName;
+  final String? initialDosage;
 
   @override
   State<_MedSheet> createState() => _MedSheetState();
@@ -810,8 +844,8 @@ class _MedSheetState extends State<_MedSheet> {
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController(text: widget.existing?.name ?? '');
-    _dosage = TextEditingController(text: widget.existing?.dosage ?? '');
+    _name = TextEditingController(text: widget.existing?.name ?? widget.initialName ?? '');
+    _dosage = TextEditingController(text: widget.existing?.dosage ?? widget.initialDosage ?? '');
     // Two defaults for a new drug, matching `MedicationService.add`. Most
     // anti-epileptics are twice daily, and a plan with no times generates no
     // reminders at all — the one outcome this screen exists to prevent.
@@ -948,3 +982,134 @@ class _MedSheetState extends State<_MedSheet> {
     );
   }
 }
+
+// ---------------------------------------------------------------- doctor prescriptions
+
+class _DoctorPrescriptionsSection extends StatelessWidget {
+  const _DoctorPrescriptionsSection({
+    required this.prescriptions,
+    required this.existingMeds,
+    required this.onImport,
+  });
+
+  final List<Map<String, dynamic>> prescriptions;
+  final List<Medication> existingMeds;
+  final void Function(Map<String, dynamic> rx) onImport;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final activeRx = prescriptions.where((p) => p['active'] == true).toList();
+    if (activeRx.isEmpty) return const SizedBox.shrink();
+
+    return SectionCard(
+      title: 'وصفات الطبيب المعالج',
+      subtitle: 'الأدوية المعتمدة طبياً من طبيبك مع إمكانية إدراجها في جدول التذكيرات اليومي',
+      icon: Icons.medical_services_outlined,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final rx in activeRx) ...[
+            Builder(builder: (context) {
+              final name = rx['name']?.toString() ?? '';
+              final dose = rx['dose']?.toString() ?? '';
+              final schedule = rx['schedule']?.toString() ?? '';
+              final notes = rx['notes']?.toString();
+              final isAlreadyInMeds = existingMeds.any(
+                (m) => m.name.trim().toLowerCase() == name.trim().toLowerCase(),
+              );
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: Gap.sm),
+                padding: const EdgeInsets.all(Gap.sm),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.medication_outlined, color: theme.colorScheme.primary),
+                        Gap.hSm,
+                        Expanded(
+                          child: Text(
+                            '$name · $dose',
+                            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        if (isAlreadyInMeds)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE8F5E9),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.check, size: 14, color: Color(0xFF2E7D32)),
+                                SizedBox(width: 4),
+                                Text(
+                                  'مُدرج في جدولك',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF2E7D32),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        else
+                          FilledButton.tonalIcon(
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            onPressed: () => onImport(rx),
+                            icon: const Icon(Icons.add_task, size: 16),
+                            label: const Text('إدراج في التذكير', style: TextStyle(fontSize: 12)),
+                          ),
+                      ],
+                    ),
+                    if (schedule.isNotEmpty) ...[
+                      Gap.vXs,
+                      Padding(
+                        padding: const EdgeInsets.only(right: 28),
+                        child: Text(
+                          'نظام الجرعات: $schedule',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (notes != null && notes.isNotEmpty) ...[
+                      Gap.vXxs,
+                      Padding(
+                        padding: const EdgeInsets.only(right: 28),
+                        child: Text(
+                          'تعليمات الطبيب: $notes',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            }),
+          ],
+        ],
+      ),
+    );
+  }
+}
+

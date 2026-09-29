@@ -214,40 +214,43 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         emptyIcon: Icons.people_outline,
         builder: (context, rows) => RefreshIndicator(
           onRefresh: _refresh,
-          child: ListView(
-            padding: Insets.pageBottomSafe,
-            children: [
-              OfflineBanner(
-                visible: !app.apiOnline,
-                lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
-                pendingCount: app.care.pendingCount,
-              ),
-              const _CaregiverLocationTrackerCard(),
-              Gap.vMd,
-              SectionCard(
-                title: l.linkedPatients,
-                icon: Icons.people_outline,
-                trailing: Text(
-                  '${rows.length}',
-                  style: Theme.of(context).textTheme.titleMedium,
+          child: ResponsiveContent(
+            maxWidth: 850,
+            child: ListView(
+              padding: Insets.pageBottomSafe,
+              children: [
+                OfflineBanner(
+                  visible: !app.apiOnline,
+                  lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
+                  pendingCount: app.care.pendingCount,
                 ),
-                child: Column(
-                  children: [
-                    for (final r in rows)
-                      _PatientRowTile(
-                        row: r,
-                        enabled: !_busy,
-                        onOpen: () => _open(r),
-                        onRespond: r.newestUnacked == null
-                            ? null
-                            : () => _respond(r.newestUnacked!),
-                      ),
-                  ],
+                const _CaregiverLocationTrackerCard(),
+                Gap.vMd,
+                SectionCard(
+                  title: l.linkedPatients,
+                  icon: Icons.people_outline,
+                  trailing: Text(
+                    '${rows.length}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  child: Column(
+                    children: [
+                      for (final r in rows)
+                        _PatientRowTile(
+                          row: r,
+                          enabled: !_busy,
+                          onOpen: () => _open(r),
+                          onRespond: r.newestUnacked == null
+                              ? null
+                              : () => _respond(r.newestUnacked!),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-              Gap.vMd,
-              _RecentSection(rows: rows, onRespond: _respond),
-            ],
+                Gap.vMd,
+                _RecentSection(rows: rows, onRespond: _respond),
+              ],
+            ),
           ),
         ),
       ),
@@ -591,115 +594,118 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
         onRetry: _load,
         builder: (context, _) => RefreshIndicator(
           onRefresh: _load,
-          child: ListView(
-            padding: Insets.pageBottomSafe,
-            children: [
-              OfflineBanner(
-                visible: !app.apiOnline,
-                lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
-                pendingCount: app.care.pendingCount,
-              ),
-              SectionCard(
-                title: l.consentLevelLabel,
-                icon: Icons.verified_user_outlined,
-                trailing: RiskBadge(
-                  view: RiskView.unknown,
-                  labelOverride: consentLevelLabel(level, l),
-                  dense: true,
+          child: ResponsiveContent(
+            maxWidth: 850,
+            child: ListView(
+              padding: Insets.pageBottomSafe,
+              children: [
+                OfflineBanner(
+                  visible: !app.apiOnline,
+                  lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
+                  pendingCount: app.care.pendingCount,
                 ),
-                child: InfoNote(text: consentLevelDesc(level, l)),
-              ),
-              if (canSeeStatus) ...[
-                Gap.vMd,
-                RiskGauge(
-                  view: row.view,
-                  freshnessLabel:
-                      '${l.lastUpdate}: ${TimeAgo.since(row.observedAt, l)}',
-                  reasonLabel: l.riskUnknownWhy,
+                SectionCard(
+                  title: l.consentLevelLabel,
+                  icon: Icons.verified_user_outlined,
+                  trailing: RiskBadge(
+                    view: RiskView.unknown,
+                    labelOverride: consentLevelLabel(level, l),
+                    dense: true,
+                  ),
+                  child: InfoNote(text: consentLevelDesc(level, l)),
                 ),
+                if (canSeeStatus) ...[
+                  Gap.vMd,
+                  RiskGauge(
+                    view: row.view,
+                    freshnessLabel:
+                        '${l.lastUpdate}: ${TimeAgo.since(row.observedAt, l)}',
+                    reasonLabel: l.riskUnknownWhy,
+                  ),
+                  Gap.vMd,
+                  _DeviceRow(app: app),
+                ],
                 Gap.vMd,
-                _DeviceRow(app: app),
-              ],
-              Gap.vMd,
-              SectionCard(
-                title: l.alertsTitle,
-                icon: Icons.notifications_none_outlined,
-                child: AlertsList(
-                  alerts: row.alerts,
-                  onAcknowledge: _acknowledge,
-                  onOpen: (a) => Navigator.pushNamed(
-                    context,
-                    Routes.familyRespond,
-                    arguments: PatientRouteArgs(
-                      patientId: a.patientId,
-                      alertId: a.id,
+                SectionCard(
+                  title: l.alertsTitle,
+                  icon: Icons.notifications_none_outlined,
+                  child: AlertsList(
+                    alerts: row.alerts,
+                    onAcknowledge: _acknowledge,
+                    onOpen: (a) => Navigator.pushNamed(
+                      context,
+                      Routes.familyRespond,
+                      arguments: PatientRouteArgs(
+                        patientId: a.patientId,
+                        alertId: a.id,
+                      ),
                     ),
+                    padding: EdgeInsets.zero,
+                    shrinkWrap: true,
                   ),
-                  padding: EdgeInsets.zero,
-                  shrinkWrap: true,
                 ),
-              ),
-              if (canSeeRecord) ...[
-                Gap.vMd,
-                SectionCard(
-                  title: l.seizureHistory,
-                  icon: Icons.history_outlined,
-                  trailing: Text(
-                    '${_seizures.length}',
-                    style: Theme.of(context).textTheme.titleMedium,
+                if (canSeeRecord) ...[
+                  Gap.vMd,
+                  SectionCard(
+                    title: l.seizureHistory,
+                    icon: Icons.history_outlined,
+                    trailing: Text(
+                      '${_seizures.length}',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    child: _seizures.isEmpty
+                        ? EmptyState(
+                            title: l.noHistoryYet,
+                            icon: Icons.history_outlined,
+                            compact: true,
+                          )
+                        : Column(
+                            children: [
+                              for (final s in _seizures.take(10))
+                                LabeledValue(
+                                  label: TimeAgo.stamp(s.occurredAt),
+                                  value: s.notes.isEmpty ? l.noteLabel : s.notes,
+                                  icon: Icons.bolt_outlined,
+                                ),
+                            ],
+                          ),
                   ),
-                  child: _seizures.isEmpty
-                      ? EmptyState(
-                          title: l.noHistoryYet,
-                          icon: Icons.history_outlined,
-                          compact: true,
-                        )
-                      : Column(
-                          children: [
-                            for (final s in _seizures.take(10))
-                              LabeledValue(
-                                label: TimeAgo.stamp(s.occurredAt),
-                                value: s.notes.isEmpty ? l.noteLabel : s.notes,
-                                icon: Icons.bolt_outlined,
-                              ),
-                          ],
-                        ),
-                ),
-                Gap.vMd,
-                SectionCard(
-                  title: l.medsTitle,
-                  icon: Icons.medication_outlined,
-                  child: _meds.isEmpty
-                      ? EmptyState(
-                          title: l.noMedsYet,
-                          icon: Icons.medication_outlined,
-                          compact: true,
-                        )
-                      : Column(
-                          children: [
-                            for (final m in _meds)
-                              LabeledValue(
-                                label: m.name,
-                                value: m.dosage.isEmpty ? l.notSet : m.dosage,
-                                icon: Icons.medication_liquid_outlined,
-                              ),
-                          ],
-                        ),
-                ),
+                  Gap.vMd,
+                  SectionCard(
+                    title: l.medsTitle,
+                    icon: Icons.medication_outlined,
+                    child: _meds.isEmpty
+                        ? EmptyState(
+                            title: l.noMedsYet,
+                            icon: Icons.medication_outlined,
+                            compact: true,
+                          )
+                        : Column(
+                            children: [
+                              for (final m in _meds)
+                                LabeledValue(
+                                  label: m.name,
+                                  value: m.dosage.isEmpty ? l.notSet : m.dosage,
+                                  icon: Icons.medication_liquid_outlined,
+                                ),
+                            ],
+                          ),
+                  ),
+                ],
+                if (level == ConsentLevel.guardian) ...[
+                  Gap.vMd,
+                  // Stated rather than implemented. §4.3's guardian tier carries
+                  // edit rights; nothing in this build lets a relative change a
+                  // patient's record, and a card that implied otherwise would be
+                  // worse than one that admits the gap.
+                  InfoNote(
+                    text: l.comingSoon,
+                    icon: Icons.edit_outlined,
+                    view: RiskView.caution,
+                  ),
+                ],
               ],
-              if (level == ConsentLevel.guardian) ...[
-                Gap.vMd,
-                // Stated rather than implemented. §4.3's guardian tier carries
-                // edit rights; nothing in this build lets a relative change a
-                // patient's record, and a card that implied otherwise would be
-                // worse than one that admits the gap.
-                InfoNote(
-                  text: l.comingSoon,
-                  icon: Icons.edit_outlined,
-                  view: RiskView.caution,
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),

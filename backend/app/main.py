@@ -28,6 +28,7 @@ from app.routers import (
     health,
     model_info,
     notifications,
+    prescriptions,
     simulate,
     messages,
 )
@@ -150,6 +151,7 @@ app.include_router(model_info.router)
 app.include_router(clinical.router)
 app.include_router(messages.router)
 app.include_router(notifications.router)
+app.include_router(prescriptions.router)
 
 # Serve React Admin Dashboard at /admin
 _admin_dist = Path(__file__).resolve().parent.parent.parent / "admin-dashboard" / "dist"

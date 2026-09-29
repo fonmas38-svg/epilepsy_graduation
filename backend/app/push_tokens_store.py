@@ -15,11 +15,27 @@ def _now() -> str:
 
 
 def register(user_id: str, token: str, platform: str = "unknown") -> None:
-    """Upsert a token and transfer it to the current account when re-registered."""
+    """Upsert a token and transfer it exclusively to the current account.
+
+    Cross-account isolation guarantee: a physical device token belongs to
+    exactly one user_id at a time.  When account A logs out and account B logs
+    in on the same handset, the FCM token is the same; we must move it from A
+    to B so that B's alerts are delivered and A's are not.  The upsert already
+    does this via on_conflict_do_update, but we make the intent explicit by
+    first removing any *other* user's association with this token inside the
+    same transaction.
+    """
     now = _now()
     with transaction() as conn:
-        # Built inside the transaction: the statement flavour depends on the
-        # engine dialect, which is only resolved once a connection exists.
+        # Step 1: remove association of this token from every OTHER user so the
+        # physical device cannot receive alerts for a previous session's patient.
+        conn.execute(
+            delete(push_tokens).where(
+                push_tokens.c.token == token,
+                push_tokens.c.user_id != user_id,
+            )
+        )
+        # Step 2: upsert for the current user (insert or update timestamp).
         conn.execute(upsert(push_tokens, {
             "id": str(uuid4()), "user_id": user_id, "token": token,
             "platform": platform, "created_at": now, "updated_at": now,
@@ -27,6 +43,7 @@ def register(user_id: str, token: str, platform: str = "unknown") -> None:
             index_elements=["token"],
             set_={"user_id": user_id, "platform": platform, "updated_at": now},
         ))
+
 
 
 def unregister(user_id: str, token: str) -> bool:

@@ -12,6 +12,7 @@ import 'local_database.dart';
 import 'signal_simulator.dart';
 import 'sync_service.dart';
 
+
 enum SignalSource { simulator, headDevice, dataset }
 
 typedef AlertCallback = void Function(AlertItem alert);
@@ -32,9 +33,17 @@ class MonitoringService {
   final ApiClient api;
 
   Timer? _timer;
-  int _tick = 0;
   AlertCallback? onAlert;
   void Function()? onUpdate;
+
+
+  /// Seizure-cycle controller — drives the four-phase timeline.
+  final SeizureCycleController cycleController = SeizureCycleController(
+    interictalTicks: 5, // calm baseline
+    preIctalTicks: 2,   // rising pre-onset
+    ictalTicks: 3,      // active seizure
+    postIctalTicks: 2,  // post-seizure recovery
+  );
 
   /// Fired when a forecast crosses the pre-alert threshold (prediction layer).
   void Function(
@@ -58,6 +67,20 @@ class MonitoringService {
   String? deviceId;
   int deviceBuffered = 0;
   String? lastDeviceSeen;
+
+  /// When false, automatic pre-alerts from the simulator are suppressed.
+  /// The simulator screen sets this to false so the user controls escalation
+  /// manually without being bombarded by auto-alerts every few minutes.
+  bool _autoAlertEnabled = true;
+  void enableAutoAlerts() => _autoAlertEnabled = true;
+  void disableAutoAlerts() => _autoAlertEnabled = false;
+  bool get autoAlertEnabled => _autoAlertEnabled;
+
+  /// Cooldown between consecutive pre-alerts: once a pre-alert fires, the
+  /// rising-edge latch will not re-arm for [_preAlertCooldown]. This prevents
+  /// the 5-minute simulator cycle from spamming the patient.
+  static const _preAlertCooldown = Duration(minutes: 20);
+  DateTime? _lastPreAlertAt;
 
   // Rolling local history of preictal probabilities → sparkline fallback when
   // the backend does not carry a trajectory (e.g. the offline/simulator path).
@@ -110,6 +133,7 @@ class MonitoringService {
     _timer = null;
     running = false;
     _lastPredicted = false;
+    cycleController.reset();
   }
 
   Future<void> refresh(String patientId) async {
@@ -147,10 +171,15 @@ class MonitoringService {
   /// Central, source-agnostic pre-alert check: run after every tick so the
   /// forecast can raise an early pre-alert regardless of signal source. Fires
   /// only on the RISING EDGE of the "forecast predicted, not yet detected"
-  /// condition, so a sustained preictal ramp raises exactly one pre-alert (and
-  /// won't immediately re-fire after a cancel or an escalation). It re-arms once
-  /// the forecast drops back below threshold.
+  /// condition, so a sustained preictal ramp raises exactly one pre-alert.
+  ///
+  /// Additional guards:
+  ///   * [_autoAlertEnabled] — suppressed when the user is controlling the
+  ///     simulator manually (the simulator screen disables auto-alerts).
+  ///   * [_preAlertCooldown] — at most one pre-alert per 20 minutes so a short
+  ///     simulation cycle cannot spam the patient.
   void _maybePreAlert() {
+    if (!_autoAlertEnabled) return;
     final r = latestReading;
     final a = latestAssessment;
     final p = latestPrediction;
@@ -159,6 +188,13 @@ class MonitoringService {
     final rising = now && !_lastPredicted;
     _lastPredicted = now;
     if (!rising) return;
+    // Cooldown guard: do not re-fire within [_preAlertCooldown] of the last one.
+    final lastAt = _lastPreAlertAt;
+    if (lastAt != null &&
+        DateTime.now().difference(lastAt) < _preAlertCooldown) {
+      return;
+    }
+    _lastPreAlertAt = DateTime.now();
     final pre = sync.buildPreAlert(r, a, p);
     if (pre != null) onPreAlert?.call(r, a, pre);
   }
@@ -242,8 +278,15 @@ class MonitoringService {
     String patientId, {
     RiskLabel? forcePattern,
   }) async {
-    final pattern = forcePattern ?? simulator.patternForTick(_tick++);
-    final reading = simulator.generate(patientId: patientId, pattern: pattern);
+    // Use the four-phase cycle controller when running automatically.
+    // forcePattern overrides it (manual escalation from the simulator UI).
+    final pattern = forcePattern ?? cycleController.advance();
+    // Use phase-aware generation so post-ictal gets its distinct fatigue signal.
+    final currentPhase = cycleController.currentPhase;
+    final reading = forcePattern != null
+        ? simulator.generate(patientId: patientId, pattern: pattern)
+        : simulator.generateForPhase(
+            patientId: patientId, phase: currentPhase);
     await db.insertReading(reading);
     latestReading = reading;
 

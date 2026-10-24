@@ -226,11 +226,11 @@ class PreictalModel:
         target_len = int(self.meta["input_len"])
         fs = float(self.meta["fs"])
 
-        # resample the time axis to the training length (channels preserved)
+        # Reject an incompatible duration instead of stretching the time axis.
         if x.shape[-1] != target_len:
-            from scipy import signal as sp
-
-            x = sp.resample(x, target_len, axis=-1)
+            raise ValueError("EEG window length does not match training; implicit time stretching is unsafe")
+        if not np.isfinite(x).all() or np.any(np.ptp(x, axis=-1) <= 1e-8):
+            raise ValueError("Unusable EEG signal")
 
         # band-pass 0.5-40 Hz to mirror harmonize.clean_signal (best-effort; the
         # per-channel z-score below makes the model tolerant of already-filtered
@@ -260,7 +260,7 @@ class PreictalModel:
                 with torch.no_grad():
                     logits = self._model(xb)
                     prob = torch.softmax(logits, dim=1)[0, 1].item()
-                return float(prob)
+                return float(prob) if np.isfinite(prob) and 0 <= prob <= 1 else None
             except Exception as e:  # noqa: BLE001
                 log.warning("preictal_model: inference failed (%s)", e)
                 return None

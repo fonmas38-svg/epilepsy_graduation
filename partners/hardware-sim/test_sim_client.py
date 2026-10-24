@@ -35,3 +35,44 @@ def test_invalid_pattern_raises():
     sim = DeviceSimulator()
     with pytest.raises(ValueError):
         sim.generate_samples(pattern="invalid_pattern")
+
+
+def test_waveform_is_independent_of_packet_size():
+    full = DeviceSimulator(seed=42).generate_samples("stable", n=256)
+    chunked = DeviceSimulator(seed=42)
+    split = sum((chunked.generate_samples("stable", n=32) for _ in range(8)), [])
+    assert full == split
+
+
+@pytest.mark.parametrize("pattern", ["flatline", "mains_noise", "clipping"])
+def test_fault_profiles_are_reproducible(pattern):
+    assert DeviceSimulator(seed=1).generate_samples(pattern) == DeviceSimulator(seed=1).generate_samples(pattern)
+
+
+@pytest.mark.parametrize("size", [0, -1, 513])
+def test_invalid_packet_sizes_rejected(size):
+    with pytest.raises(ValueError):
+        DeviceSimulator().generate_samples("stable", n=size)
+
+
+def test_enrollment_includes_patient_binding(monkeypatch):
+    import httpx
+    sent = []
+    def post(url, **kwargs):
+        sent.append(kwargs["json"])
+        return httpx.Response(200, json={"access_token": "valid"})
+    monkeypatch.setattr(httpx, "post", post)
+    simulator = DeviceSimulator(patient_id="p1")
+    assert simulator.fetch_token() == "valid"
+    assert sent[0]["patient_id"] == "p1"
+
+
+def test_failed_batch_does_not_advance_sequence():
+    import httpx
+    simulator = DeviceSimulator()
+    simulator.access_token = "valid"
+    with httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(500, request=request))) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            simulator.send_batch(simulator.generate_samples("stable"), client)
+    assert simulator.sequence_number == 0

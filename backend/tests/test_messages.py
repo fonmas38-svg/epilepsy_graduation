@@ -160,3 +160,54 @@ def test_location_sharing(client, test_setup):
     )
     assert res.status_code == 200
     assert any("قام" in m["content"] and "موقعه" in m["content"] for m in res.json()["messages"])
+
+
+def test_message_retry_is_idempotent(client, test_setup):
+    from uuid import uuid4
+    patient = test_setup["pat"]["id"]
+    headers = {"Authorization": f"Bearer {test_setup['pat_token']}"}
+    body = {"channel_type": "family_patient", "content": "Hello", "client_message_id": str(uuid4())}
+    first = client.post(f"/patients/{patient}/messages", headers=headers, json=body)
+    second = client.post(f"/patients/{patient}/messages", headers=headers, json=body)
+    assert first.status_code == second.status_code == 201
+    assert first.json() == second.json()
+    rows = client.get(f"/patients/{patient}/messages", headers=headers).json()["messages"]
+    assert len(rows) == 1
+    body["content"] = "Changed payload"
+    assert client.post(f"/patients/{patient}/messages", headers=headers, json=body).status_code == 400
+
+
+def test_messages_reject_unrelated_patient_even_in_demo(client, test_setup):
+    headers = {"Authorization": f"Bearer {test_setup['pat_token']}"}
+    assert client.get("/patients/other-patient/messages", headers=headers).status_code == 403
+
+
+def test_latest_message_page_contains_newest_messages(client, test_setup):
+    from app import messages_store
+    patient = test_setup["pat"]["id"]
+    for i in range(105):
+        messages_store.create_message(patient_id=patient, sender_id=patient,
+            sender_name="Patient", sender_role="patient", channel_type="family_patient", content=str(i))
+    headers = {"Authorization": f"Bearer {test_setup['pat_token']}"}
+    response = client.get(f"/patients/{patient}/messages?latest=true&limit=100", headers=headers)
+    rows = response.json()["messages"]
+    assert len(rows) == 100
+    assert rows[0]["content"] == "5"
+    assert rows[-1]["content"] == "104"
+
+
+@pytest.mark.parametrize("location", [
+    {"latitude": 91, "longitude": 0},
+    {"latitude": 0, "longitude": -181},
+    {"latitude": 0, "longitude": 0, "accuracy": -1},
+])
+def test_location_validation(client, test_setup, location):
+    headers = {"Authorization": f"Bearer {test_setup['pat_token']}"}
+    assert client.post(f"/patients/{test_setup['pat']['id']}/location",
+                       headers=headers, json=location).status_code == 422
+
+
+def test_caregiver_cannot_overwrite_patient_location(client, test_setup):
+    headers = {"Authorization": f"Bearer {test_setup['cg_token']}"}
+    assert client.post(f"/patients/{test_setup['pat']['id']}/location",
+        headers=headers, json={"latitude": 0, "longitude": 0}).status_code == 403

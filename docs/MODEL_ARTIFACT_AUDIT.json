@@ -1,0 +1,79 @@
+{
+  "purpose": "local_artifact_inventory_not_accuracy_evaluation",
+  "clinically_validated": false,
+  "datasets": [
+    {
+      "path": "research/data/bonn_processed.h5",
+      "sha256": "00bcc23b83ed34d52d2fdfdbf6ce38e91223f6289930b832aa1e6a69fc087b19",
+      "shape": [
+        11500,
+        1,
+        262
+      ],
+      "positive_windows": 2300,
+      "negative_windows": 9200,
+      "group_count": 500,
+      "attributes": {
+        "dataset": "bonn",
+        "fs": "256",
+        "task": "detection(ictal_vs_nonictal)"
+      },
+      "independent_holdout_verified": false
+    },
+    {
+      "path": "research/data_processed/bonn.h5",
+      "sha256": "00bcc23b83ed34d52d2fdfdbf6ce38e91223f6289930b832aa1e6a69fc087b19",
+      "shape": [
+        11500,
+        1,
+        262
+      ],
+      "positive_windows": 2300,
+      "negative_windows": 9200,
+      "group_count": 500,
+      "attributes": {
+        "dataset": "bonn",
+        "fs": "256",
+        "task": "detection(ictal_vs_nonictal)"
+      },
+      "independent_holdout_verified": false
+    }
+  ],
+  "weights": [
+    {
+      "path": "backend/models/cloud_preictal_model.pt",
+      "sha256": "fa6c05002e70fc87662f388715250adcd50affed292720400c00942615665f00"
+    },
+    {
+      "path": "backend/models/cnn_lstm_bonn.pt",
+      "sha256": "1cfa82b0d5acb6639ca5332b7e59186e1fee93bf720d9555b4b63df1b8ae7763"
+    },
+    {
+      "path": "backend/models/edge_seizure_model.pt",
+      "sha256": "19d3d03e3113f47743fa9741e531bfc52e5e5c6160119295259438e7f2443062"
+    }
+  ],
+  "continuous_edf_files": 0,
+  "current_sources": [
+    {
+      "path": "research/colab_seizure_detection.ipynb",
+      "sha256": "94b659acba785d3f17b112e62e99ea29e14963b8241cf0355f452bbdfdfab7cd"
+    },
+    {
+      "path": "research/build_notebook.py",
+      "sha256": "c7d14a7098c5bfb9046de48547c18ac0d1722e9a4e826621783c0707ae39db90"
+    },
+    {
+      "path": "research/train_seizure_cloud.py",
+      "sha256": "c81a233886f8f1b48ac007a660bac320ba81c4bbaa4707477f753bae395e0610"
+    }
+  ],
+  "current_sources_proven_to_produce_saved_weights": false,
+  "conclusion": "Prospective seizure prediction accuracy cannot be verified from these local artifacts.",
+  "required_evidence": [
+    "Frozen training notebook/script and dataset version",
+    "Patient-disjoint train/validation/test group lists and predictions",
+    "Weights hash, exact preprocessing, montage, units, sample rate and window duration",
+    "Continuous held-out recordings and seizure onset annotations for event-based metrics"
+  ]
+}

@@ -15,8 +15,7 @@
 1. stable: حالة مستقرة وهادئة (نبض ~72 bpm، إشارة EEG منتظمة ونقية).
 2. watch: حالة متوسطة تتطلب المراقبة (نبض ~95 bpm، قمم متوسطة في EEG).
 3. high_risk: حالة خطر مرتفع / نوبة نشطة (نبض ~125 bpm، قمم حادة ونشاط صرعي متزايد في EEG).
-4. ramp: نمط التدرج المستمر (Interictal -> Preictal -> Seizure Onset) لإظهار قدرة النظام
-   على التنبؤ المبكر (Prediction) وليس فقط الكشف (Detection) أمام لجنة التقييم.
+4. ramp: نمط التدرج المستمر (Interictal -> Preictal -> Seizure Onset) لاختبار مسار التنبيهات ببيانات صناعية؛ لا يثبت القدرة على التنبؤ عند المرضى.
 
 الاستخدام:
 --------
@@ -40,6 +39,7 @@ DEFAULT_PATIENT_ID = "patient-demo"
 DEFAULT_DEVICE_ID = "headband-01"
 DEFAULT_ENROLLMENT_SECRET = "enroll-device-demo"
 DEFAULT_BATCH_SIZE = 32
+SAMPLE_RATE_HZ = 256
 
 
 class DeviceSimulator:
@@ -51,6 +51,7 @@ class DeviceSimulator:
         patient_id: str = DEFAULT_PATIENT_ID,
         device_id: str = DEFAULT_DEVICE_ID,
         secret: str = DEFAULT_ENROLLMENT_SECRET,
+        seed: int | None = None,
     ) -> None:
         self.api_url = api_url.rstrip("/")
         self.patient_id = patient_id
@@ -58,6 +59,8 @@ class DeviceSimulator:
         self.secret = secret
         self.access_token: Optional[str] = None
         self.sequence_number: int = 0
+        self.sample_index = 0
+        self.rng = random.Random(seed)
 
     def fetch_token(self) -> str:
         """طلب توكن JWT جديد من الخادم عبر نقطة /auth/token."""
@@ -65,6 +68,7 @@ class DeviceSimulator:
         payload = {
             "subject": self.device_id,
             "role": "device",
+            "patient_id": self.patient_id,
             "enrollment_secret": self.secret,
         }
         try:
@@ -85,47 +89,57 @@ class DeviceSimulator:
 
         المعادلات تبني موجات حيوية متناسقة زمنياً (EEG, ECG, Motion, HR).
         """
+        if not isinstance(n, int) or not 1 <= n <= 512:
+            raise ValueError("Batch size must be between 1 and 512")
+        if not math.isfinite(progress):
+            raise ValueError("Progress must be finite")
         p = min(max(progress, 0.0), 1.0)
         samples = []
 
         for i in range(n):
-            t = i / n * 2.0 * math.pi
+            t = (self.sample_index + i) / SAMPLE_RATE_HZ * 2.0 * math.pi
 
-            if pattern == "stable":
+            if pattern == "flatline":
+                eeg, ecg, motion, hr = 0.0, 0.0, 0.0, 72.0
+            elif pattern == "mains_noise":
+                eeg, ecg, motion, hr = math.sin(50 * t), 0.0, 0.0, 72.0
+            elif pattern == "clipping":
+                eeg, ecg, motion, hr = (2.0 if math.sin(8 * t) >= 0 else -2.0), 0.0, 0.0, 72.0
+            elif pattern == "stable":
                 # EEG هادئ بلا قمم صرعية
-                eeg = 0.35 * math.sin(8.0 * t) + random.uniform(-0.08, 0.08)
+                eeg = 0.35 * math.sin(8.0 * t) + self.rng.uniform(-0.08, 0.08)
                 # ECG منتظم
-                ecg = 0.8 * math.sin(5.0 * t) + random.uniform(-0.04, 0.04)
+                ecg = 0.8 * math.sin(5.0 * t) + self.rng.uniform(-0.04, 0.04)
                 # حركة هادئة جداً
-                motion = abs(random.uniform(-0.08, 0.08))
+                motion = abs(self.rng.uniform(-0.08, 0.08))
                 # نبض قلب طبيعي ~72 bpm
-                hr = random.gauss(72.0, 2.5)
+                hr = self.rng.gauss(72.0, 2.5)
 
             elif pattern == "watch":
                 # EEG قمم متوسطة الارتفاع والتردد
-                eeg = 0.65 * math.sin(12.0 * t) + random.uniform(-0.2, 0.2)
-                ecg = 0.9 * math.sin(6.5 * t) + random.uniform(-0.08, 0.08)
-                motion = 0.4 * abs(math.sin(3.0 * t)) + random.uniform(-0.15, 0.15)
-                hr = random.gauss(95.0, 4.0)
+                eeg = 0.65 * math.sin(12.0 * t) + self.rng.uniform(-0.2, 0.2)
+                ecg = 0.9 * math.sin(6.5 * t) + self.rng.uniform(-0.08, 0.08)
+                motion = 0.4 * abs(math.sin(3.0 * t)) + self.rng.uniform(-0.15, 0.15)
+                hr = self.rng.gauss(95.0, 4.0)
 
             elif pattern == "high_risk":
                 # EEG قمم حادة ونشاط صرعي كباقي نوبات الصرع (Spikes/Bursts)
                 spike = 0.95 if math.sin(25.0 * t) > 0.55 else 0.0
-                eeg = 1.35 * math.sin(20.0 * t) + spike + random.uniform(-0.3, 0.3)
-                ecg = 1.15 * math.sin(8.5 * t) + random.uniform(-0.2, 0.2)
-                motion = 1.1 * abs(math.sin(9.0 * t)) + random.uniform(-0.3, 0.3)
-                hr = random.gauss(125.0, 6.0)
+                eeg = 1.35 * math.sin(20.0 * t) + spike + self.rng.uniform(-0.3, 0.3)
+                ecg = 1.15 * math.sin(8.5 * t) + self.rng.uniform(-0.2, 0.2)
+                motion = 1.1 * abs(math.sin(9.0 * t)) + self.rng.uniform(-0.3, 0.3)
+                hr = self.rng.gauss(125.0, 6.0)
 
             elif pattern in ("ramp", "preictal_ramp"):
                 # التدرج المستمر: تزيد سعة وتردد EEG وتظهر القمم الحادة تدريجياً
                 eeg_amp = 0.35 + (1.35 - 0.35) * p
                 eeg_freq = 8.0 + (20.0 - 8.0) * p
                 spike = (0.95 * p) if math.sin(25.0 * t) > (0.8 - 0.25 * p) else 0.0
-                eeg = eeg_amp * math.sin(eeg_freq * t) + spike + random.uniform(-0.08 - 0.2 * p, 0.08 + 0.2 * p)
+                eeg = eeg_amp * math.sin(eeg_freq * t) + spike + self.rng.uniform(-0.08 - 0.2 * p, 0.08 + 0.2 * p)
 
-                ecg = (0.8 + 0.35 * p) * math.sin((5.0 + 3.5 * p) * t) + random.uniform(-0.04 - 0.15 * p, 0.04 + 0.15 * p)
-                motion = (0.05 + 1.1 * p) * abs(math.sin((2.0 + 7.0 * p) * t)) + random.uniform(-0.08 - 0.2 * p, 0.08 + 0.2 * p)
-                hr = 72.0 + (125.0 - 72.0) * p + random.uniform(-2.5, 2.5)
+                ecg = (0.8 + 0.35 * p) * math.sin((5.0 + 3.5 * p) * t) + self.rng.uniform(-0.04 - 0.15 * p, 0.04 + 0.15 * p)
+                motion = (0.05 + 1.1 * p) * abs(math.sin((2.0 + 7.0 * p) * t)) + self.rng.uniform(-0.08 - 0.2 * p, 0.08 + 0.2 * p)
+                hr = 72.0 + (125.0 - 72.0) * p + self.rng.uniform(-2.5, 2.5)
 
             else:
                 raise ValueError(f"نمط غير معروف: {pattern}. الأنماط المتاحة: stable, watch, high_risk, ramp")
@@ -147,6 +161,7 @@ class DeviceSimulator:
 
             samples.append(sample)
 
+        self.sample_index += n
         return samples
 
     def send_batch(
@@ -168,9 +183,9 @@ class DeviceSimulator:
             "device_id": self.device_id,
             "sequence_number": self.sequence_number,
             "samples": samples,
+            "sample_rate_hz": SAMPLE_RATE_HZ,
+            "signal_units": "normalized_demo",
         }
-
-        self.sequence_number += 1
 
         response = client.post(url, json=payload, headers=headers)
         if response.status_code == 401:
@@ -180,16 +195,27 @@ class DeviceSimulator:
             response = client.post(url, json=payload, headers=headers)
 
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        if result.get("out_of_order"):
+            raise RuntimeError("Sequence rejected: use a new device session after restart")
+        self.sequence_number += 1
+        return result
 
 
 def run_simulation(args: argparse.Namespace) -> None:
     """تشغيل عملية المحاكاة بطباعة منسقة وتفاعلية."""
+    if args.batches < 1 or not 1 <= args.batch_size <= 512:
+        raise ValueError("Positive batches and batch size 1..512 are required")
+    if args.interval is None:
+        args.interval = args.batch_size / SAMPLE_RATE_HZ
+    if not math.isfinite(args.interval) or args.interval <= 0:
+        raise ValueError("Interval must be finite and positive")
     simulator = DeviceSimulator(
         api_url=args.api,
         patient_id=args.patient_id,
         device_id=args.device_id,
         secret=args.secret,
+        seed=args.seed,
     )
 
     print("=" * 70)
@@ -246,17 +272,17 @@ def run_simulation(args: argparse.Namespace) -> None:
             if pattern in ("ramp", "preictal_ramp"):
                 print(
                     f"[{b + 1:>2}/{total_batches}] التقدم={progress * 100:>3.0f}% | "
-                    f"المخزن={buffered:>3}/128 | "
+                    f"المخزن={buffered:>3}/262 | "
                     f"الحالة={label:<9} | "
-                    f"احتمال النوبة={preictal_str:<5} | "
+                    f"درجة تجريبية={preictal_str:<5} | "
                     f"الزمن المتوقع={lead_time_str}{alert_tag}"
                 )
             else:
                 print(
                     f"[{b + 1:>2}/{total_batches}] الدفعة المكتملة | "
-                    f"المخزن={buffered:>3}/128 | "
+                    f"المخزن={buffered:>3}/262 | "
                     f"الحالة={label:<9} | "
-                    f"احتمال النوبة={preictal_str:<5}{alert_tag}"
+                    f"درجة تجريبية={preictal_str:<5}{alert_tag}"
                 )
 
             if b < total_batches - 1:
@@ -269,7 +295,7 @@ def run_simulation(args: argparse.Namespace) -> None:
             print("📈 **الملخص النهائي من الخادم:**")
             print(f"   • حالة المريض الحالية : {status_res.get('last_label', 'غ/م')}")
             print(f"   • درجة الثقة         : {status_res.get('last_confidence', 'غ/م')}")
-            print(f"   • احتمال النوبة      : {status_res.get('last_preictal_prob', 'غ/م')}")
+            print(f"   • درجة تجريبية       : {status_res.get('last_preictal_prob', 'غ/م')}")
             print(f"   • زمن الاستباق       : {status_res.get('last_lead_time_min', 'غ/م')} دقيقة")
             print(f"   • حالة الاتصال      : {'متقاطع' if status_res.get('connected') else 'منقطع'}")
             print("=" * 70)
@@ -288,12 +314,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pattern",
         default="ramp",
-        choices=["stable", "watch", "high_risk", "ramp"],
+        choices=["stable", "watch", "high_risk", "ramp", "flatline", "mains_noise", "clipping"],
         help="نمط المحاكاة: stable (مستقر), watch (مراقبة), high_risk (خطر), ramp (تدرج للتنبؤ بالنوبة)",
     )
     parser.add_argument("--batches", type=int, default=20, help="عدد الدفعات المراد إرسالها (Default: 20)")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="عدد العينات لكل دفعة (Default: 32)")
-    parser.add_argument("--interval", type=float, default=1.0, help="الزمن بالثواني بين كل دفعة وأخرى (Default: 1.0)")
+    parser.add_argument("--seed", type=int, default=42, help="Reproducible synthetic signals")
+    parser.add_argument("--interval", type=float, default=None, help="الزمن بالثواني بين كل دفعة وأخرى (Default: batch-size / 256)")
     return parser
 
 

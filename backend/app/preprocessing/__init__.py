@@ -42,10 +42,17 @@ def estimate_hr_from_ecg(ecg: np.ndarray, fs: float = 64.0) -> tuple[float, floa
     return float(np.mean(hr_series)), float(np.std(hr_series))
 
 
-def extract_features(window: VitalWindow) -> FeatureVector:
-    eeg = normalize(denoise(window.eeg))
-    ecg = normalize(denoise(window.ecg))
-    motion = normalize(denoise(window.motion))
+def extract_features(window: VitalWindow, *, unit_variance: bool = True) -> FeatureVector:
+    """Keep the legacy sklearn contract by default; preserve amplitude for rules.
+
+    Unit variance makes power/variance identically one for nonconstant signals.
+    Rule thresholds must therefore use unit_variance=False. Neural engines retain
+    their own training-time preprocessing, independent of these context features.
+    """
+    transform = normalize if unit_variance else lambda signal: signal
+    eeg = transform(denoise(window.eeg))
+    ecg = transform(denoise(window.ecg))
+    motion = transform(denoise(window.motion))
 
     hr_mean, hr_std = estimate_hr_from_ecg(ecg)
     if window.hr is not None:

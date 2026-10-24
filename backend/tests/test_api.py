@@ -140,7 +140,7 @@ def test_device_ingest_and_status(client):
     headers = {"Authorization": "Bearer headband-demo-token"}
     samples = [
         {"eeg": 0.2, "ecg": 0.5, "motion": 0.01, "hr": 80}
-        for _ in range(128)
+        for _ in range(client.get("/device/contract").json()["analysis_window_samples"])
     ]
     r = client.post(
         "/device/ingest",

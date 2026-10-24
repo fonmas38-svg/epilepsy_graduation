@@ -149,8 +149,8 @@ print(f"📊 [Dataset A - Bonn]: {X_A.shape[0]:,} عينة | نوبات: {y_A.su
 # (Preictal Period: 15-30 min قبل النوبة) مع تغيرات الرنين الطيفي وإشارات القلب
 def load_dataset_b_preictal(win_len=262, n_samples=6000):
     """
-    تجهيز مجموعة بيانات سريرية ثانية مستقلة تماماً تمثل الطور السابق للنوبة (Preictal vs Interictal)
-    مبنية على التوزيع الطيفي السريري المعتمد لبيانات فروة الرأس CHB-MIT.
+    Synthetic demonstration signals, not recordings from CHB-MIT patients.
+    Performance on these labels cannot establish clinical forecasting ability.
     """
     np.random.seed(123)
     t = np.linspace(0, win_len / 256.0, win_len)
@@ -187,7 +187,7 @@ def load_dataset_b_preictal(win_len=262, n_samples=6000):
     return X_B, y_B, g_B
 
 X_B, y_B, g_B = load_dataset_b_preictal(win_len=win_len_A)
-print(f"📊 [Dataset B - Preictal/CHB-MIT]: {X_B.shape[0]:,} عينة | ما قبل النوبة (Preictal): {y_B.sum():,} | طبيعي (Interictal): {(y_B==0).sum():,}")
+print(f"📊 [Dataset B - Synthetic demonstration]: {X_B.shape[0]:,} عينة | ما قبل النوبة (Preictal): {y_B.sum():,} | طبيعي (Interictal): {(y_B==0).sum():,}")
 
 # =============================================================================
 # 3. بناء النموذج الأول: [EdgeSeizureNet] — نموذج الهاتف الخفيف (Offline)
@@ -475,9 +475,13 @@ res_cloud_preictal = clinical_metrics(gt_B, p_cloud_B, threshold=0.5)
 p_edge_B, _ = predict_loader(edge_model, loader_te_Cloud)
 p_fused_B = np.maximum(p_cloud_B, 0.6 * p_cloud_B + 0.4 * p_edge_B)
 
+# Select the operating threshold using validation data only; keep the test set held out.
+p_cloud_val, gt_val = predict_loader(cloud_model, loader_va_Cloud)
+p_edge_val, _ = predict_loader(edge_model, loader_va_Cloud)
+p_fused_val = np.maximum(p_cloud_val, 0.6 * p_cloud_val + 0.4 * p_edge_val)
 best_ens_j, best_ens_thr = -1.0, 0.5
 for thr in np.linspace(0.25, 0.75, 21):
-    cur_m = clinical_metrics(gt_B, p_fused_B, threshold=thr)
+    cur_m = clinical_metrics(gt_val, p_fused_val, threshold=thr)
     cur_j = cur_m['sensitivity'] + cur_m['specificity'] - 1.0
     if cur_j > best_ens_j and cur_m['sensitivity'] >= 0.85:
         best_ens_j, best_ens_thr = cur_j, thr
@@ -567,13 +571,16 @@ dual_cfg = {
         "arch": "CloudPreictalNet (MultiScale-Conv + Self-Attention + BiLSTM)",
         "file_pt": "cloud_preictal_model.pt",
         "file_onnx": "cloud_preictal_model.onnx",
-        "dataset": "CHB-MIT Scalp Preictal Benchmark + Cross-Domain Bonn",
+        "dataset": "Synthetic demonstration signals + Bonn",
+        "clinically_validated": False,
         "mode": "Online Cloud (15-30 min Preictal Forecasting)",
         "sensitivity": res_cloud_preictal["sensitivity"],
         "specificity": res_cloud_preictal["specificity"]
     },
     "ensemble_mode": {
-        "formula": "P_fused = 0.65 * P_cloud + 0.35 * P_edge",
+        "formula": "max(P_cloud, 0.6 * P_cloud + 0.4 * P_edge)",
+        "threshold_selection": "validation",
+        "optimal_threshold": float(best_ens_thr),
         "combined_sensitivity": res_ensemble["sensitivity"],
         "combined_specificity": res_ensemble["specificity"],
         "target_horizon_min": 30

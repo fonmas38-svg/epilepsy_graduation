@@ -124,11 +124,23 @@ class RiskClassifier:
     # ---------------------------------------------------------------- public
     def predict_window(self, window: VitalWindow) -> RiskResult:
         """Full multimodal decision from a raw analysis window."""
-        features = extract_features(window)
+        features = extract_features(window, unit_variance=False)
+        if np.ptp(window.eeg) <= 1e-8:
+            # A disconnected/flat EEG must not look like a reassuring baseline.
+            return RiskResult(
+                label="watch", confidence=0.0, features=features,
+                engine="signal_quality",
+                components={"signal_quality": "flatline", "assessment_valid": False,
+                            "clinically_validated": False},
+            )
 
         deep_prob = None
         if self.deep is not None and self.deep.available:
             deep_prob = self.deep.predict_proba(window.eeg)
+
+        if deep_prob is not None and (not np.isfinite(deep_prob) or not 0 <= deep_prob <= 1):
+            log.warning("deep model returned an invalid score; using fallback")
+            deep_prob = None
 
         if deep_prob is not None:
             mm = self._multimodal_score(features)  # 0..1 from HR/motion/ECG
@@ -148,7 +160,8 @@ class RiskClassifier:
             return self._attach_prediction(result, window, features)
 
         # no deep engine -> sklearn or rules on features
-        label, confidence, engine = self._predict_features(features)
+        legacy_features = extract_features(window) if self.model is not None else features
+        label, confidence, engine = self._predict_features(legacy_features, fallback_features=features)
         result = RiskResult(label=label, confidence=confidence,
                             features=features, engine=engine)
         return self._attach_prediction(result, window, features)
@@ -187,11 +200,21 @@ class RiskClassifier:
             preictal_prob = self._preictal_score(features)
             source = "simulated_heuristic"
 
-        preictal_prob = float(min(max(preictal_prob, 0.0), 1.0))
-        lead_time = self._lead_time(preictal_prob, horizon)
+        if not np.isfinite(preictal_prob) or not 0 <= preictal_prob <= 1:
+            result.components["forecast_error"] = "invalid_model_score"
+            return result
+        if not np.isfinite(horizon) or horizon <= 0 or not np.isfinite(thr) or not 0 <= thr <= 1:
+            result.components["forecast_error"] = "invalid_model_metadata"
+            return result
+        preictal_prob = float(preictal_prob)
 
         result.preictal_prob = round(preictal_prob, 4)
-        result.lead_time_min = round(lead_time, 2)
+        # A classifier score does not estimate time-to-event. No survival or
+        # calibrated time-to-onset model has been validated in this project.
+        result.lead_time_min = None
+        result.components["clinically_validated"] = False
+        result.components["score_interpretation"] = "uncalibrated_research_score"
+        result.components["lead_time_status"] = "not_estimated"
         result.horizon_min = horizon
         result.predicted = preictal_prob >= thr
         result.prediction_source = source
@@ -223,19 +246,15 @@ class RiskClassifier:
             "ecg": round(float(ecg), 4),
         }
 
-    def _lead_time(self, prob: float, horizon: float) -> float:
-        """Estimated minutes until onset: monotone countdown from the horizon.
-
-        prob 0 -> full horizon (far from a seizure); prob 1 -> ~0 (imminent)."""
-        return max(0.0, horizon * (1.0 - prob))
-
     # --------------------------------------------------------------- engines
-    def _predict_features(self, features: FeatureVector) -> tuple[RiskLabel, float, str]:
+    def _predict_features(self, features: FeatureVector, *, fallback_features: FeatureVector | None = None) -> tuple[RiskLabel, float, str]:
         if self.model is not None:
             x = features_to_array(features).reshape(1, -1)
             try:
                 if hasattr(self.model, "predict_proba"):
                     proba = self.model.predict_proba(x)[0]
+                    if not np.isfinite(proba).all() or np.any(proba < 0) or np.any(proba > 1):
+                        raise ValueError("Invalid classifier probabilities")
                     classes = list(self.model.classes_)
                     idx = int(np.argmax(proba))
                     label = str(classes[idx])
@@ -251,7 +270,7 @@ class RiskClassifier:
                     return pred, 0.7, "sklearn"  # type: ignore[return-value]
             except Exception as e:  # noqa: BLE001
                 log.warning("sklearn predict failed (%s); using rules", e)
-        label, confidence = self._rule_based(features)
+        label, confidence = self._rule_based(fallback_features or features)
         return label, confidence, "rules"
 
     def _multimodal_score(self, f: FeatureVector) -> float:
@@ -308,6 +327,9 @@ class RiskClassifier:
             "deep": deep,
             "preictal": preictal,
             "sklearn_loaded": self.model is not None,
+            "clinically_validated": False,
+            "intended_use": "research_and_simulation_only",
+            "lead_time_supported": False,
             "fusion_weight": DEEP_WEIGHT,
             "thresholds": {"high": HIGH_THR, "watch": WATCH_THR},
             "prediction": {

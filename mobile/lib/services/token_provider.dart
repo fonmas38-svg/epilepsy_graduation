@@ -131,6 +131,8 @@ class TokenProvider {
     return _token;
   }
 
+  String? get subject => _subject;
+
   bool get hasSession => _role != null && _subject != null;
 
   Future<void> clear() async {

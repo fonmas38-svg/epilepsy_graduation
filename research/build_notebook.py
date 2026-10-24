@@ -25,32 +25,12 @@ cells = []
 # =============================================================================
 # الغلاف والعنوان الرئيسي (باللغة العربية)
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "# نظام الذكاء الاصطناعي الهجين للتنبؤ وكشف نوبات الصرع من إشارات EEG الحقيقية",
-    "### معمارية الذكاء الاصطناعي المزدوجة | خط التدريب المتكامل: النموذج المحلي المدمج (Offline) + النموذج السحابي التنبؤي (Online)",
-    "---",
-    "",
-    "## 🎯 ماذا يفعل هذا الدفتر وما هي فكرته الهندسية؟",
-    "",
-    "يبني هذا الدفتر **معمارية هجينة متكاملة (Dual-Model Architecture)** من الصفر باستخدام لغة **PyTorch** الأساسية، للتغلب على أكبر عقبتين في أنظمة الصرع الذكية:",
-    "1. **مشكلة انقطاع الإنترنت (Offline Safety):** نبني نموذجاً محلياً فائق الخفة `EdgeSeizureNet` يعمل داخل الهاتف أوفلاين 100% دون الحاجة لأي اتصال لحماية المريض المستمرة.",
-    "2. **مشكلة الإنذارات الكاذبة (False Alarms Elimination):** نبني نموذجاً سحابياً عميقاً `CloudPreictalNet` يدمج الانتباه الذاتي `Multi-Head Attention` والـ `BiLSTM` ليتنبأ بالنوبة قبل حدوثها بـ **15 إلى 30 دقيقة (Preictal Horizon)**.",
-    "3. **تدريب النموذجين على بنكي بيانات سريرية مختلفة (Cross-Dataset Diversity):**",
-    "   - **قاعدة بيانات A (Bonn Benchmark):** لتدريب نموذج الهاتف على كشف النوبات الحقيقية في قناة واحدة.",
-    "   - **قاعدة بيانات B (CHB-MIT Preictal Benchmark):** لتدريب النموذج السحابي على أفق ما قبل النوبة وتغيرات التزامن العصبي.",
-    "   - **الدمج المزدوج (Dual Ensemble):** عند توفر الإنترنت، يدمج السيرفر قراري النموذجين معاً لرفع الحساسية إلى **أكثر من 97%** وتصفية الإنذارات الكاذبة تماماً.",
-    "",
-    "> 📌 **ملاحظة فنية:** جميع الشروحات التوضيحية ونقاط المناقشة مكتوبة بـ **اللغة العربية** لراحتك وسهولة العرض، بينما تم ضبط عناوين ومحاور **المخططات البيانية (Plots)** بالإنجليزية القياسية فقط لحل مشكلة تقطع الأحرف العربية في مكتبة Matplotlib داخل Google Colab."
-]))
+cells.append(make_cell("markdown", '# تجربة بحثية لكشف أنماط EEG\n\nA: مقاطع Bonn حقيقية لكشف النوبة الجارية. B: موجات صناعية مولدة، وليست CHB-MIT ولا تسجيلات مرضى. لا يثبت هذا الدفتر التنبؤ بنوبة مستقبلية أو صلاحية الاستخدام الطبي. تطبيق الهاتف الحالي ينفذ قواعد تجريبية ولا يشغّل أوزان ONNX. لا توجد نسبة دقة مضمونة.'))
 
 # =============================================================================
 # القسم 0 — تجهيز البيئة وتثبيت المكتبات
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 0 — تجهيز البيئة وتثبيت المكتبات الأساسية والتكرارية العلمية",
-    "نقوم بتثبيت المكتبات الأساسية لـ PyTorch ومعالجة الإشارة الرقمية ومكتبات التصدير `onnx` و `onnxscript` لتجنب أي خطأ أثناء حفظ النموذج النهائي."
-]))
+cells.append(make_cell("markdown", '## 0 — إعداد بيئة البحث\nهذه الخلية تثبت مكتبات بيئة كولاب عند تشغيلها يدويًا.'))
 
 cells.append(make_cell("code", [
     "# تثبيت المكتبات والتأكد من توفر onnx و onnxscript لتفادي أخطاء التصدير في Colab",
@@ -89,15 +69,7 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 1 — قاعدة البيانات الأولى A (Bonn) للنموذج المحلي
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 1 — تنزيل وتجهيز قاعدة البيانات الأولى A (بيانات جامعة Bonn)",
-    "### خاصة بـ: النموذج المحلي المدمج للهاتف (`EdgeSeizureNet`)",
-    "",
-    "بيانات حقيقية مسجلة من مرضى صرع حقيقيين (11,500 مقطع إشارة دماغية، طول كل مقطع 178 عينة). يتم تنزيلها مباشرة في سحابة جوجل في ثوانٍ دون استهلاك أي بايت من مساحة جهازك.",
-    "- **الفئة 1:** نشاط نوبة صرع حقيقية (Ictal Activity) ⟵ فئة إيجابية (1).",
-    "- **الفئات 2–5:** حالات سليمة غير نوبية (عيون مفتوحة/مغلقة، مناطق سليمة) ⟵ فئة سلبية (0)."
-]))
+cells.append(make_cell("markdown", '## 1 — بيانات Bonn\nتستخدم لمهمة الكشف داخل النافذة؛ لا تحوي أوقات بدء نوبات متصلة لتقييم التنبؤ.'))
 
 cells.append(make_cell("code", [
     "DATA_DIR = Path('data')",
@@ -122,16 +94,7 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 2 — أنبوب معالجة الإشارة الرقمية (DSP) وعرض الإشارة
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 2 — أنبوب معالجة الإشارة الرقمية السريرية (DSP Harmonization)",
-    "",
-    "لتحويل أي إشارة خام إلى عقد قياسي موحد قبل تغذية الشبكة العصبية:",
-    "1. **إعادة تشكيل التردد (Resampling):** من 173.6Hz إلى **256Hz** (التردد السريري العالمي المعتمد).",
-    "2. **مرشح تمرير نطاق (Butterworth Bandpass 0.5–40 Hz):** برتبة 4 وبطريقة zero-phase (صفري الطور) لعزل نطاقات الدماغ الحقيقية (Delta, Theta, Alpha, Beta) وإزالة انجراف الجهد المستمر.",
-    "3. **تطبيع Z-Score:** لكل مقطع زمني $(\\frac{x - \\mu}{\\sigma})$ لتوحيد السعة بين مختلف المرضى.",
-    "4. **استبعاد القطع المشبعة والتالفة (Artifact Rejection).**"
-]))
+cells.append(make_cell("markdown", '## 2 — معالجة إشارة Bonn\nإعادة أخذ العينات والترشيح وتطبيع النافذة. تقسيم مجموعات التسجيل لا يثبت استقلال المرضى البيولوجيين.'))
 
 cells.append(make_cell("code", [
     "TARGET_FS = 256",
@@ -144,12 +107,12 @@ cells.append(make_cell("code", [
     "raw_X_A = df_A[feat_cols].to_numpy(dtype=np.float64)",
     "raw_y_A = (df_A[label_col].to_numpy() == 1).astype(np.int64)",
     "",
-    "# استخراج معرف المريض لمنع تسرب البيانات (Zero Data Leakage)",
-    "def extract_patient_group(row_id):",
+    "# تجميع مقاطع التسجيل نفسه؛ هوية المريض غير متاحة",
+    "def extract_recording_group(row_id):",
     "    parts = str(row_id).split('.')",
     "    return parts[2] if len(parts) > 2 else parts[-1]",
     "",
-    "g_keys_A = df_A[label_col].astype(str) + '_' + df_A[id_col].map(extract_patient_group).astype(str)",
+    "g_keys_A = df_A[label_col].astype(str) + '_' + df_A[id_col].map(extract_recording_group).astype(str)",
     "u_groups_A = {k: idx for idx, k in enumerate(sorted(g_keys_A.unique()))}",
     "groups_A = g_keys_A.map(u_groups_A).to_numpy(dtype=np.int32)",
     "",
@@ -204,23 +167,15 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 3 — قاعدة البيانات الثانية B (Preictal Benchmark) للنموذج السحابي
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 3 — قاعدة البيانات الثانية B (الطور السابق للنوبة 15–30 دقيقة)",
-    "### خاصة بـ: النموذج السحابي التنبؤي عالي السعة (`CloudPreictalNet`)",
-    "",
-    "قاعدة بيانات سريرية مستقلة تماماً تمثل الخصائص الفسيولوجية لـ **طور ما قبل النوبة (Preictal Period)** وفق النمط المعتمد في تسجيلات فروة الرأس CHB-MIT:",
-    "- **فترة ما قبل النوبة (Preictal 15–30 min):** تصاعد طاقة الترددات البطيئة (Delta/Theta Surge) وظهور تفريغات شحنات متزامنة (Synchronized Spikes).",
-    "- **الفترة البينية الطبيعية (Interictal):** إيقاعات طبيعية (Alpha & Beta) مع ضوضاء فسيولوجية عادية."
-]))
+cells.append(make_cell("markdown", '## 3 — بيانات B الصناعية\nمولد موجات رياضي لاختبار التدريب والتصدير. أرقام المجموعات صناعية وليست معرفات مرضى. النتائج على هذه البيانات ليست دقة سريرية ولا مهلة إنذار.'))
 
 cells.append(make_cell("code", [
     "def generate_dataset_b_preictal(win_len, n_samples=6000):",
     "    np.random.seed(123)",
-    "    t = np.linspace(0, win_len / 256.0, win_len)",
+    "    t = np.arange(win_len) / 256.0",
     "    X_list, y_list, g_list = [], [], []",
     "    for i in range(n_samples):",
-    "        patient_id = i % 15 # 15 مريضاً مختلفاً لضمان التنوع السريري",
+    "        synthetic_group = i % 15 # artificial groups, not patients",
     "        is_preictal = 1 if (i % 4 == 0) else 0 # عدم توازن سريري واقعي 1:3",
     "        eeg = (0.5 * np.sin(2 * np.pi * 10.0 * t + np.random.uniform(0, 2*np.pi)) +",
     "               0.3 * np.sin(2 * np.pi * 20.0 * t) + 0.4 * np.random.randn(win_len))",
@@ -233,7 +188,7 @@ cells.append(make_cell("code", [
     "        eeg = (eeg - eeg.mean()) / (eeg.std() + 1e-8)",
     "        X_list.append(eeg.reshape(1, win_len).astype(np.float32))",
     "        y_list.append(is_preictal)",
-    "        g_list.append(patient_id)",
+    "        g_list.append(synthetic_group)",
     "    return np.stack(X_list).astype(np.float32), np.asarray(y_list, dtype=np.int64), np.asarray(g_list, dtype=np.int32)",
     "",
     "X_B, y_B, g_B = generate_dataset_b_preictal(win_len=win_len)",
@@ -244,16 +199,7 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 4 — بناء المعماريات العصبية من الصفر
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 4 — بناء المعماريات العصبية من الصفر في PyTorch (بدون نماذج معلبة)",
-    "",
-    "1. **النموذج المحلي المدمج (`EdgeSeizureNet`):**",
-    "   - مصمم للأجهزة المحدودة والهواتف باستخدام **Depthwise Separable Convolutions** لتقليل الحسابات بنسبة 80%.",
-    "   - عدد المعاملات أقل من 35,000 معامل، وزمن الاستجابة أقل من 2 ميلي ثانية.",
-    "2. **النموذج السحابي التنبؤي (`CloudPreictalNet`):**",
-    "   - مصمم للسيرفر مع **Multi-Scale Conv** (مرشحات 3 و 5 و 7 متوازية) + طبقة انتباه ذاتي متعدد الرؤوس **Multi-Head Self-Attention** لفهم التزامن العصبي + **BiLSTM** ثنائي الاتجاه للتنبؤ المسبق."
-]))
+cells.append(make_cell("markdown", '## 4 — الشبكات\nبناء EdgeSeizureNet وCloudPreictalNet. الاسم المعماري لا يثبت المهمة الطبية.'))
 
 cells.append(make_cell("code", [
     "class EdgeSeizureNet(nn.Module):",
@@ -322,14 +268,7 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 5 — دالة Focal Loss ومقاييس التقييم السريري
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 5 — دالة الخسارة البؤرية (Focal Loss) والتقسيم الآمن",
-    "",
-    "معالجة عدم توازن الفئات الحاد عبر المعادلة الرياضية:",
-    "$$FL(p_t) = -\\alpha_t (1 - p_t)^\\gamma \\log(p_t)$$",
-    "مع موازنة الفئات الحسابية (WeightedRandomSampler) لضمان تدريب النموذج على دفعات متكافئة ومنع التحيز."
-]))
+cells.append(make_cell("markdown", '## 5 — الخسارة والتقسيم\nفصل مجموعات التدريب والتحقق والاختبار. تستخدم الموازنة بالعينات مرة واحدة لتجنب مضاعفة وزن الأقلية.'))
 
 cells.append(make_cell("code", [
     "class FocalLoss(nn.Module):",
@@ -370,12 +309,7 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 6 — التدريب العملي للنموذجين مع موازنة الفئات الصارمة
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 6 — تدريب النموذجين على المجموعتين المختلفتين",
-    "- تدريب نموذج الهاتف `EdgeSeizureNet` على **قاعدة بيانات A (Bonn)** مع WeightedRandomSampler لمنع تفويت النوبات.",
-    "- تدريب النموذج السحابي `CloudPreictalNet` على **قاعدة بيانات B (Preictal Scalp)** مع دمج عينات A لتعلم كلا البيئتين (Cross-Domain Generalization)."
-]))
+cells.append(make_cell("markdown", '## 6 — التدريب البحثي\nتدريب A للكشف وتدريب B الصناعي مع A. لا يمكن تفسير المهمة المختلطة كإثبات توقع النوبات.'))
 
 cells.append(make_cell("code", [
     "# تدريب نموذج الهاتف مع موازنة الفئات الصارمة لمنع تفويت النوبات",
@@ -384,7 +318,7 @@ cells.append(make_cell("code", [
     "# حساب أوزان الفئات لموازنة دالة الخسارة Focal Loss",
     "c_counts_A = np.bincount(y_A[tr_A])",
     "w_A = torch.tensor([len(y_A[tr_A]) / (2.0 * c_counts_A[0]), len(y_A[tr_A]) / (2.0 * c_counts_A[1])], dtype=torch.float32, device=DEVICE)",
-    "loss_fn_A = FocalLoss(alpha=w_A, gamma=2.0)",
+    "loss_fn_A = FocalLoss(alpha=None, gamma=2.0)",
     "",
     "# معاين عشوائي موزون يسحب 50% نوبات و 50% سليم في كل دفعة",
     "s_w_A = np.array([1.0 / c_counts_A[int(c)] for c in y_A[tr_A]])",
@@ -441,7 +375,7 @@ cells.append(make_cell("code", [
     "",
     "c_counts_Cloud = np.bincount(ytr_Cloud)",
     "w_Cloud = torch.tensor([len(ytr_Cloud) / (2.0 * c_counts_Cloud[0]), len(ytr_Cloud) / (2.0 * c_counts_Cloud[1])], dtype=torch.float32, device=DEVICE)",
-    "loss_fn_B = FocalLoss(alpha=w_Cloud, gamma=2.0)",
+    "loss_fn_B = FocalLoss(alpha=None, gamma=2.0)",
     "",
     "s_w_Cloud = np.array([1.0 / c_counts_Cloud[int(c)] for c in ytr_Cloud])",
     "sampler_Cloud = WeightedRandomSampler(s_w_Cloud, len(s_w_Cloud), replacement=True)",
@@ -491,11 +425,7 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 7 — منحنيات التدريب (رسومات إنجليزية لمنع التقطع)
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 7 — منحنيات التعلم والتقييم البياني (Learning Curves)",
-    "نعرض منحنيات الخسارة (Loss Curves) وتطور الحساسية والنوعية عبر الحقب. تم ضبط التسميات باللغة الإنجليزية لتظهر بدقة جمالية عالية بدون أي تقطع في نصوص Matplotlib."
-]))
+cells.append(make_cell("markdown", '## 7 — منحنيات التدريب\nمنحنيات بحثية وليست دليلًا على الأداء لدى مريض جديد.'))
 
 cells.append(make_cell("code", [
     "edge_df = pd.DataFrame(edge_history)",
@@ -534,17 +464,7 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 8 — مصفوفات الارتباك واختبار الدمج المزدوج (Dual Ensemble)
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 8 — التقييم النهائي المستقل ومصفوفات الارتباك واختبار الدمج المزدوج",
-    "",
-    "نختبر الآن الحالات الثلاث سريرياً على مرضى وتسجيلات جديدة لم يرها النموذج إطلاقاً أثناء التدريب:",
-    "1. **أداء نموذج الهاتف منفرداً (أوفلاين - انقطاع الإنترنت).**",
-    "2. **أداء النموذج السحابي منفرداً (أونلاين - أفق التنبؤ 15-30 دقيقة).**",
-    "3. **أداء الدمج الهجين المزدوج (Dual Ensemble):**",
-    "   $$P_{\\text{fusion}} = 0.65 \\times P_{\\text{cloud}} + 0.35 \\times P_{\\text{edge}}$$",
-    "   النتيجة الطبية: الجمع بين النموذجين المدربين على بيانات مختلفة يسحق الإنذارات الكاذبة ويرفع الحساسية إلى أكثر من 97%!"
-]))
+cells.append(make_cell("markdown", '## 8 — التقييم\nاختيار عتبة الدمج على التحقق فقط ثم قياس الاختبار. لا تمثل بيانات B مرضى ولا يقيس هذا التقييم إنذارات/ساعة أو وقت حدوث النوبة.'))
 
 cells.append(make_cell("code", [
     "def eval_model(model, loader):",
@@ -570,10 +490,13 @@ cells.append(make_cell("code", [
     "# دمج ذكي يأخذ أقصى ثقة بين النموذجين لمنع سحب الاحتمالية للأسفل",
     "p_ensemble = np.maximum(p_cloud_online, 0.6 * p_cloud_online + 0.4 * p_edge_on_B)",
     "",
-    "# اختيار عتبة القرار المثلى سريرياً بمؤشر يودن (Youden's J Optimization)",
+    "# Tune on validation only; test labels must not influence the threshold.",
+    "p_cloud_val, gt_B_val = eval_model(cloud_model, loader_va_Cloud)",
+    "p_edge_val, _ = eval_model(edge_model, loader_va_Cloud)",
+    "p_ensemble_val = np.maximum(p_cloud_val, 0.6 * p_cloud_val + 0.4 * p_edge_val)",
     "best_ens_j, best_ens_thr = -1.0, 0.5",
     "for thr in np.linspace(0.25, 0.75, 21):",
-    "    cur_m = clinical_metrics(gt_B_test, p_ensemble, threshold=thr)",
+    "    cur_m = clinical_metrics(gt_B_val, p_ensemble_val, threshold=thr)",
     "    cur_j = cur_m['sensitivity'] + cur_m['specificity'] - 1.0",
     "    if cur_j > best_ens_j and cur_m['sensitivity'] >= 0.85:",
     "        best_ens_j, best_ens_thr = cur_j, thr",
@@ -584,7 +507,7 @@ cells.append(make_cell("code", [
     "fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))",
     "cms = [",
     "    (m_edge, '1. Edge Offline Model (Bonn Test Set)', axes[0]),",
-    "    (m_cloud, '2. Cloud Forecaster (Preictal Test Set)', axes[1]),",
+    "    (m_cloud, '2. Cloud Model (Synthetic Test Set)', axes[1]),",
     "    (m_ensemble, f'3. Dual-Model Ensemble (Thr={best_ens_thr:.2f})', axes[2]),",
     "]",
     "",
@@ -606,7 +529,7 @@ cells.append(make_cell("code", [
     "plt.show()",
     "",
     "print('='*70)",
-    "print('🏆 نتائج المقارنة السريرية النهائية على مرضى لم يراهم النموذج إطلاقاً:')",
+    "print('🏆 نتائج بحثية: تسجيلات Bonn ومجموعات صناعية، دون إثبات صلاحية طبية:')",
     "print('='*70)",
     "print(f'1. نموذج الهاتف الأوفلاين (Edge Offline): حساسية = {m_edge[\"sensitivity\"]*100:.2f}% | نوعية = {m_edge[\"specificity\"]*100:.2f}%')",
     "print(f'2. النموذج السحابي التنبؤي (Cloud Online): حساسية = {m_cloud[\"sensitivity\"]*100:.2f}% | نوعية = {m_cloud[\"specificity\"]*100:.2f}%')",
@@ -617,16 +540,7 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 9 — تصدير وحفظ النماذج للهاتف والسيرفر
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 9 — تصدير وحفظ النماذج وتنزيلها تلقائياً",
-    "",
-    "نقوم بتصدير النماذج بصيغها المعتمدة رسمياً في المشروع:",
-    "- `edge_seizure_model.onnx`: نموذج خفيف مخصص لتطبيق الهاتف (Flutter) ليعمل أوفلاين في أجزاء من الميلي ثانية.",
-    "- `cloud_preictal_model.pt`: أوزان PyTorch الأصلية لخادم الباكيند (FastAPI).",
-    "- `cloud_preictal_model.onnx`: صيغة ONNX المفتوحة للسيرفر.",
-    "- `dual_model_config.json`: ملف البيانات الوصفية والنسب الطبية المسجلة."
-]))
+cells.append(make_cell("markdown", '## 9 — التصدير\nحفظ الأوزان والتنبؤات والمجموعات وبصمات SHA256 لتمكين المراجعة. التصدير لا يمنح صلاحية طبية.'))
 
 cells.append(make_cell("code", [
     "# التأكد من تثبيت onnxscript لتفادي الخطأ في بيئات Colab الحديثة",
@@ -655,7 +569,11 @@ cells.append(make_cell("code", [
     "# 2. حفظ ملف الميتاداتا لربطه بنظام الباكيند",
     "cfg_path = OUT_DIR / 'dual_model_config.json'",
     "dual_config = {",
-    "    'system': 'Dual-Model Hybrid Epilepsy AI',",
+    "    'system': 'Research demonstration',",
+    "    'clinically_validated': False,",
+    "    'dataset_b': 'synthetic_waveforms_not_CHB_MIT',",
+    "    'threshold_selection': 'validation_only',",
+    "    'ensemble_rule': 'max(cloud, 0.6*cloud + 0.4*edge)',",
     "    'edge_model': {'arch': 'EdgeSeizureNet', 'file_onnx': 'edge_seizure_model.onnx', 'file_pt': 'edge_seizure_model.pt', 'mode': 'offline'},",
     "    'cloud_model': {'arch': 'CloudPreictalNet', 'file_pt': 'cloud_preictal_model.pt', 'file_onnx': 'cloud_preictal_model.onnx', 'mode': 'online'},",
     "    'metrics': {",
@@ -700,10 +618,21 @@ cells.append(make_cell("code", [
     "export_onnx_safe(edge_model, dummy_input, edge_onnx_path, 'eeg_stream', 'risk_score')",
     "export_onnx_safe(cloud_model, dummy_input, cloud_onnx_path, 'eeg_window', 'preictal_logits')",
     "",
+    "# Compact evidence for review; no raw EEG or real patient identities.",
+    "import hashlib",
+    "def artifact_hash(path):",
+    "    with open(path, 'rb') as source:",
+    "        return hashlib.sha256(source.read()).hexdigest()",
+    "dual_config['weights_sha256'] = {'cloud': artifact_hash(cloud_pt_path), 'edge': artifact_hash(edge_pt_path)}",
+    "with open(cfg_path, 'w', encoding='utf-8') as f:",
+    "    json.dump(dual_config, f, indent=2, ensure_ascii=False)",
+    "p_edge_val_A, gt_A_val = eval_model(edge_model, loader_va_A)",
+    "np.savez_compressed(OUT_DIR / 'edge_holdout.npz', y=gt_A_test, score=p_edge_offline, group=g_A[te_A], val_y=gt_A_val, val_score=p_edge_val_A, val_group=g_A[va_A], train_group=g_A[tr_A])",
+    "np.savez_compressed(OUT_DIR / 'cloud_synthetic_holdout.npz', y=gt_B_test, score=p_cloud_online, group=np.char.add('B:', g_B[te_B].astype(str)), val_y=gt_B_val, val_score=p_cloud_val, val_group=np.char.add('B:', g_B[va_B].astype(str)), train_group=np.r_[np.char.add('A:', g_A[tr_A].astype(str)), np.char.add('B:', g_B[tr_B].astype(str))])",
     "# 4. التنزيل التلقائي المباشر لجميع الملفات إلى جهازك في حال تشغيل Colab",
     "try:",
     "    from google.colab import files",
-    "    download_files = [cfg_path, cloud_pt_path, edge_pt_path]",
+    "    download_files = [cfg_path, cloud_pt_path, edge_pt_path, OUT_DIR / 'edge_holdout.npz', OUT_DIR / 'cloud_synthetic_holdout.npz']",
     "    if edge_onnx_path.exists(): download_files.append(edge_onnx_path)",
     "    if cloud_onnx_path.exists(): download_files.append(cloud_onnx_path)",
     "    for f in download_files:",
@@ -715,19 +644,7 @@ cells.append(make_cell("code", [
 # =============================================================================
 # القسم 10 — الخلاصة ودليل إجابات المناقشة
 # =============================================================================
-cells.append(make_cell("markdown", [
-    "---",
-    "## القسم 10 — الخلاصة ونقاط قوة المشروع للمناقشة مع الدكاترة 🎓",
-    "",
-    "### ما الذي يثبته هذا الدفتر علمياً في مناقشة التخرج؟",
-    "1. **بناء الشبكات من الصفر (Zero Black-box):** لم يتم استدعاء أي نموذج جاهز من Hugging Face أو أوزان معلبة؛ بل برمجنا معماريات `EdgeSeizureNet` و `CloudPreictalNet` سطراً بسطر في PyTorch.",
-    "2. **معمارية هجينة ثنائية (Dual-Model System):** نموذج محلي أوفلاين لحماية المريض المستمرة على الهاتف، ونموذج سحابي أونلاين للتنبؤ المسبق قبل 15 إلى 30 دقيقة.",
-    "3. **تنوع بنوك البيانات (Cross-Dataset Diversity):** تدريب النموذجين على مجموعتين مختلفتين تماماً لضمان عدم ارتباط الأخطاء.",
-    "4. **الدمج المشترك (Ensemble Stacking):** إثبات أن دمج قراري النموذجين يخفض الإنذارات الكاذبة ويرفع الحساسية إلى أكثر من 97%.",
-    "5. **معالجة عدم التوازن السريري:** برمجة دالة `Focal Loss` والتقسيم الآمن على مستوى المريض `Recording-wise Split` لمنع تسرب البيانات نهائياً.",
-    "",
-    "> 📄 **دليل الأسئلة والأجوبة الكامل متوفر لديك في المشروع بالملف:** `research/DEFENSE_GUIDE_AR.md`"
-]))
+cells.append(make_cell("markdown", '## 10 — حدود النتائج\nهذا الدفتر يختبر تدريب الشبكات على Bonn وبيانات صناعية. لإثبات التنبؤ يلزم EEG متصل مع أوقات النوبات واختبار مستقل ومعالجة مطابقة للجهاز. راجع docs/PREDICTION_READINESS_AR.md. لا تستخدم مخرجاته لاتخاذ قرار علاجي.'))
 
 # حفظ الدفتر المحدث
 nb = {

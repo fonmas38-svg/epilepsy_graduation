@@ -137,7 +137,7 @@ def test_bundle_rolls_back_completely_when_alert_insert_fails():
             "pat-x",
             {"id": "r-2", "timestamp": "2026-02-02T00:00:00+00:00"},
             assessment={"id": "s-2", "label": "high_risk"},
-            alert={"id": "duplicate-alert"},  # violates the unique id constraint
+            alert={"id": "duplicate-alert", "message": "conflicting payload"},  # id cannot be reused for different content
         )
 
     assert [r["id"] for r in cloud_store.list_readings("pat-x")] == ["r-1"]
@@ -261,3 +261,23 @@ def test_monitoring_rows_require_existing_patient():
             select(func.count()).select_from(patients).where(
                 patients.c.patient_id == "does-not-exist")
         ) == 0
+
+
+def test_monitoring_bundle_retry_preserves_acknowledgment_and_does_not_requeue():
+    from app import alert_outbox
+    bundle = dict(patient_id="retry-patient", reading={"id": "retry-reading"},
+                  assessment={"id": "retry-assessment", "label": "watch"},
+                  alert={"id": "retry-alert", "severity": "critical"})
+    cloud_store.save_monitoring_bundle(**bundle)
+    cloud_store.ack_alert("retry-patient", "retry-alert", "caregiver")
+    cloud_store.save_monitoring_bundle(**bundle)
+    assert len(cloud_store.list_readings("retry-patient")) == 1
+    assert len(cloud_store.list_assessments("retry-patient")) == 1
+    assert cloud_store.list_alerts("retry-patient")[0]["acknowledged"] is True
+    assert len(alert_outbox.list_entries()) == 1
+
+
+def test_monitoring_retry_never_returns_other_patient_data():
+    cloud_store.add_reading("owner", {"id": "private-reading", "hr": 80})
+    with pytest.raises(ValueError):
+        cloud_store.add_reading("intruder", {"id": "private-reading", "hr": 80})

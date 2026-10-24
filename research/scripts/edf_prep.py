@@ -9,8 +9,9 @@ CHB-MIT: seizure times come from 'chbXX-summary.txt' (per-file "Seizure Start
 Siena:   seizure times come from 'Seizures-list-PNxx.txt' (Registration start +
          Seizure start/end clock times). ECG channel is kept when present.
 
-Per-subject z-score is fit on that subject's INTERICTAL windows only, then
-applied to all of the subject's windows (no leakage from preictal into stats).
+Normalization uses only each window, without labels or future subject baselines.
+Recording-level zero-phase filters remain OFFLINE preprocessing: prospective
+performance must be evaluated separately with the deployed causal pipeline.
 
 Output data_processed/<dataset>.h5:
     X       float32 (N, C, win_len)
@@ -41,23 +42,23 @@ COMMON_1020 = [
 
 def _norm_ch(name: str) -> str:
     n = name.upper().replace("EEG ", "").strip()
-    n = re.sub(r"-(REF|LE)$", "", n)
-    n = n.split("-")[0]  # bipolar 'FP1-F7' -> 'FP1'
     return n.replace("T3", "T7").replace("T4", "T8").replace("T5", "P7").replace("T6", "P8")
 
 
 def _pick_channels(raw):
-    import mne
-
     mapping = {}
     for ch in raw.ch_names:
         key = _norm_ch(ch)
-        if key in COMMON_1020 and key not in mapping:
-            mapping[key] = ch
-    picks = [mapping[k] for k in COMMON_1020 if k in mapping]
-    if len(picks) < 4:
+        parts = key.split("-")
+        if parts[0] not in COMMON_1020 or any(p not in COMMON_1020 + ["REF", "LE"] for p in parts):
+            continue
+        if key in mapping:
+            raise ValueError(f"Ambiguous duplicate channel {key}")
+        mapping[key] = ch
+    names = sorted(mapping)
+    if len(names) < 4:
         return None, []
-    return picks, [k for k in COMMON_1020 if k in mapping]
+    return [mapping[k] for k in names], names
 
 
 # ----------------------- CHB-MIT summary parsing -----------------------
@@ -70,6 +71,8 @@ def parse_chbmit_summary(summary_path: Path) -> dict[str, list[tuple[float, floa
         line = line.strip()
         if line.startswith("File Name:"):
             if cur:
+                if len(starts) != len(ends):
+                    raise ValueError(f"Incomplete seizure times for {cur}")
                 seizures[cur] = list(zip(starts, ends))
             cur = line.split(":", 1)[1].strip()
             starts, ends = [], []
@@ -82,6 +85,8 @@ def parse_chbmit_summary(summary_path: Path) -> dict[str, list[tuple[float, floa
             if m:
                 ends.append(float(m.group(1)))
     if cur:
+        if len(starts) != len(ends):
+            raise ValueError(f"Incomplete seizure times for {cur}")
         seizures[cur] = list(zip(starts, ends))
     return seizures
 
@@ -92,10 +97,15 @@ def load_chbmit(root: Path, cfg: H.HarmonizeConfig):
         if not subj_dir.is_dir():
             continue
         summaries = list(subj_dir.glob("*summary.txt"))
-        sez = parse_chbmit_summary(summaries[0]) if summaries else {}
+        if len(summaries) != 1:
+            raise ValueError(f"Missing or ambiguous seizure annotation: {subj_dir.name}")
+        sez = parse_chbmit_summary(summaries[0])
         subj_id = int(re.sub(r"\D", "", subj_dir.name))
         for edf in sorted(subj_dir.glob("*.edf")):
-            yield subj_id, edf, sez.get(edf.name, [])
+            if edf.name not in sez:
+                raise ValueError(f"No explicit seizure annotation for {edf.name}")
+            # PhysioNet documents chb01 and chb21 as the same individual.
+            yield (1 if subj_id == 21 else subj_id), edf, sez[edf.name]
 
 
 def load_siena(root: Path, cfg: H.HarmonizeConfig):
@@ -113,6 +123,8 @@ def load_siena(root: Path, cfg: H.HarmonizeConfig):
             tsv = edf.with_suffix(".seizures.tsv")
             if tsv.exists():
                 sez = [tuple(map(float, ln.split())) for ln in tsv.read_text().splitlines() if ln.strip()]
+            if not tsv.exists() and edf.name not in per_file:
+                raise ValueError(f"Missing verified annotation for {edf.name}; supply .seizures.tsv")
             yield subj_id, edf, sez
 
 
@@ -146,6 +158,7 @@ def build(dataset: str, cfg: H.HarmonizeConfig) -> None:
 
     # First pass: collect windows grouped by subject for per-subject normalization.
     by_subject: dict[int, dict] = {}
+    expected_names = None
     for subj_id, edf, seizures in loader(root, cfg):
         try:
             raw = mne.io.read_raw_edf(edf, preload=True, verbose="ERROR")
@@ -156,6 +169,10 @@ def build(dataset: str, cfg: H.HarmonizeConfig) -> None:
         if picks is None:
             print(f"  skip {edf.name}: <4 common channels")
             continue
+        if expected_names is None:
+            expected_names = names
+        elif names != expected_names:
+            raise ValueError(f"Montage mismatch in {edf.name}; do not silently truncate channels")
         fs_in = raw.info["sfreq"]
         data = raw.get_data(picks=picks) * 1e6  # V -> uV
         clean = H.clean_signal(data, fs_in, cfg)  # (C, samples) @ target_fs
@@ -172,20 +189,18 @@ def build(dataset: str, cfg: H.HarmonizeConfig) -> None:
         inter = b["inter"]
         if not inter and not b["pre"]:
             continue
-        norm = H.SubjectNormalizer()
-        if inter:
-            norm.fit(np.concatenate(inter, axis=-1))
-        for win in b["pre"]:
-            Xs.append(norm.apply(win)); ys.append(W.LABEL_PREICTAL); subs.append(subj_id)
-        for win in inter:
-            Xs.append(norm.apply(win)); ys.append(W.LABEL_INTERICTAL); subs.append(subj_id)
+        for label, windows in ((W.LABEL_PREICTAL, b["pre"]), (W.LABEL_INTERICTAL, inter)):
+            for win in windows:
+                mu = win.mean(axis=-1, keepdims=True)
+                sd = win.std(axis=-1, keepdims=True)
+                Xs.append((win - mu) / np.maximum(sd, 1e-8))
+                ys.append(label)
+                subs.append(subj_id)
 
     if not Xs:
         raise SystemExit(f"no windows produced for {dataset}. Check EDF files exist under {root}")
 
-    C = min(x.shape[0] for x in Xs)
-    L = min(x.shape[1] for x in Xs)
-    X = np.stack([x[:C, :L] for x in Xs]).astype(np.float32)
+    X = np.stack(Xs).astype(np.float32)
     y = np.asarray(ys, dtype=np.int64)
     subject = np.asarray(subs, dtype=np.int32)
 
@@ -195,6 +210,10 @@ def build(dataset: str, cfg: H.HarmonizeConfig) -> None:
         f.create_dataset("X", data=X, compression="gzip")
         f.create_dataset("y", data=y)
         f.create_dataset("subject", data=subject)
+        f.attrs["channel_names"] = expected_names
+        f.attrs["units"] = "window_zscore_from_microvolts"
+        f.attrs["preprocessing"] = "offline_record_filter_then_window_zscore_v2"
+        f.attrs["prospectively_validated"] = False
         f.attrs["fs"] = spec_fs
         f.attrs["dataset"] = dataset
         f.attrs["task"] = "prediction(preictal_vs_interictal)"

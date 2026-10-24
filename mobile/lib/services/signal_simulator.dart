@@ -99,7 +99,10 @@ class SeizureCycleController {
 class SignalSimulator {
   SignalSimulator({Random? random}) : _rng = random ?? Random();
 
+  static const sampleRateHz = 256;
+  static const defaultSamples = 262;
   final Random _rng;
+  int _sampleIndex = 0;
   final _uuid = const Uuid();
 
   /// Deterministic pattern selector used by legacy tests and cyclical runners.
@@ -114,15 +117,16 @@ class SignalSimulator {
   VitalReading generate({
     required String patientId,
     RiskLabel pattern = RiskLabel.stable,
-    int samples = 64,
+    int samples = defaultSamples,
   }) {
+    RangeError.checkValueInInterval(samples, 8, 4096, 'samples');
     final eeg = <double>[];
     final ecg = <double>[];
     final motion = <double>[];
     late double hr;
 
     for (var i = 0; i < samples; i++) {
-      final t = i / samples * 2 * pi;
+      final t = (_sampleIndex + i) / sampleRateHz * 2 * pi;
       switch (pattern) {
         case RiskLabel.stable:
           eeg.add(0.4 * sin(8 * t) + _n(0.1));
@@ -143,6 +147,7 @@ class SignalSimulator {
       }
     }
 
+    _sampleIndex += samples;
     return VitalReading(
       id: _uuid.v4(),
       patientId: patientId,
@@ -160,7 +165,7 @@ class SignalSimulator {
   VitalReading generateForPhase({
     required String patientId,
     required SeizurePhase phase,
-    int samples = 64,
+    int samples = defaultSamples,
   }) {
     if (phase == SeizurePhase.postIctal) {
       return _generatePostIctal(patientId: patientId, samples: samples);
@@ -171,15 +176,16 @@ class SignalSimulator {
   /// Post-ictal: slow delta waves, suppressed amplitude, HR below normal.
   VitalReading _generatePostIctal({
     required String patientId,
-    int samples = 64,
+    int samples = defaultSamples,
   }) {
+    RangeError.checkValueInInterval(samples, 8, 4096, 'samples');
     final eeg = <double>[];
     final ecg = <double>[];
     final motion = <double>[];
     late double hr;
 
     for (var i = 0; i < samples; i++) {
-      final t = i / samples * 2 * pi;
+      final t = (_sampleIndex + i) / sampleRateHz * 2 * pi;
       // Slow delta waves (1-4 Hz), suppressed amplitude — post-ictal exhaustion
       eeg.add(0.25 * sin(3 * t) + _n(0.08));
       ecg.add(_synthesizeEcg(t, rate: 1.8, noise: 0.02, ampMultiplier: 0.85));
@@ -187,6 +193,7 @@ class SignalSimulator {
       hr = 58 + _n(4); // slight bradycardia post-seizure
     }
 
+    _sampleIndex += samples;
     return VitalReading(
       id: _uuid.v4(),
       patientId: patientId,
@@ -201,25 +208,28 @@ class SignalSimulator {
   /// One reading on a continuous interictal→preictal→onset ramp, mirroring the
   /// backend `make_trajectory_batch`. [progress] in [0,1] blends the calm
   /// `stable` morphology into the `high_risk` one so the offline forecast rises
-  /// smoothly (the app *predicting* an approaching seizure with no server).
+  /// smoothly for a synthetic demonstration, without clinical forecasting evidence.
   VitalReading generateTrajectory({
     required String patientId,
     required double progress,
-    int samples = 64,
+    int samples = defaultSamples,
   }) {
+    if (!progress.isFinite) throw ArgumentError.value(progress, 'progress');
     final p = progress.clamp(0.0, 1.0).toDouble();
+    RangeError.checkValueInInterval(samples, 8, 4096, 'samples');
     final eeg = <double>[];
     final ecg = <double>[];
     final motion = <double>[];
     late double hr;
     for (var i = 0; i < samples; i++) {
-      final t = i / samples * 2 * pi;
+      final t = (_sampleIndex + i) / sampleRateHz * 2 * pi;
       final burst = sin(25 * t) > 0.6 ? 0.8 * p : 0.0;
       eeg.add(_lerp(0.4, 1.4, p) * sin(_lerp(8, 20, p) * t) + burst + _n(0.1 + 0.25 * p));
       ecg.add(_synthesizeEcg(t, rate: _lerp(2.2, 3.8, p), noise: 0.03 + 0.05 * p, ampMultiplier: _lerp(1.0, 1.3, p)));
       motion.add(_lerp(0.0, 1.2, p) * sin(_lerp(3, 10, p) * t).abs() + _n(0.15 + 0.35 * p));
       hr = _lerp(70, 125, p) + _n(3 + 7 * p);
     }
+    _sampleIndex += samples;
     return VitalReading(
       id: _uuid.v4(),
       patientId: patientId,

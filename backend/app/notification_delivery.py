@@ -54,7 +54,7 @@ def _is_invalid_token_error(exc: Exception | None) -> bool:
     name = type(exc).__name__.lower()
     text = str(exc).lower()
     return any(marker in name or marker in text for marker in (
-        "unregistered", "invalidargument", "invalid registration token",
+        "unregistered", "invalid registration token",
         "registration-token-not-registered",
     ))
 
@@ -104,6 +104,8 @@ def deliver(payload: dict) -> dict:
         # Successful tokens may receive a duplicate on retry. The outbox is
         # intentionally at-least-once: duplicate medical alerts are safer than loss.
         raise RuntimeError(f"FCM transient failures: {transient_failures}")
+    if response.success_count == 0:
+        raise RuntimeError("FCM delivered to no recipients; invalid tokens were removed")
     log.info("FCM alert dispatched", extra={
         "patient_id": patient_id, "severity": severity, "channel": "fcm",
         "success_count": response.success_count,

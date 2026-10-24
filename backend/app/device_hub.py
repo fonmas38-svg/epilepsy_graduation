@@ -10,6 +10,8 @@ from typing import Deque
 from app.preprocessing import extract_features
 from app.schemas import RiskLabel, VitalWindow
 
+DEVICE_WINDOW_SAMPLES = 262
+
 
 @dataclass
 class DeviceSample:
@@ -45,7 +47,7 @@ class DeviceStatus:
 class DeviceHub:
     """In-memory hub for graduation demo (replace with Redis in production)."""
 
-    def __init__(self, window_size: int = 128):
+    def __init__(self, window_size: int = DEVICE_WINDOW_SAMPLES):
         self.window_size = window_size
         self._buffers: dict[str, Deque[DeviceSample]] = defaultdict(
             lambda: deque(maxlen=window_size * 4)
@@ -169,6 +171,7 @@ class DeviceHub:
                     "confidence": confidence,
                     "features": features.model_dump(),
                     "timestamp": window.timestamp,
+                    "components": res.components if hasattr(classifier, "predict_window") else {},
                     "engine": engine,
                     "deep_prob": deep_prob,
                     "preictal_prob": preictal_prob,

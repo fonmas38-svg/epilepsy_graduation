@@ -1,6 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
-from app.schemas import SimulateRequest, SimulateResponse
+from app.schemas import RiskLabel, SimulateRequest, SimulateResponse
 from app.simulation import generate_window
 
 router = APIRouter(prefix="/simulate", tags=["simulate"])
@@ -17,8 +17,6 @@ def simulate_stream(body: SimulateRequest):
 
 
 @router.get("/window", response_model=SimulateResponse)
-def simulate_window(pattern: str = "stable", samples: int = 128, seed: int | None = None):
-    if pattern not in ("stable", "watch", "high_risk"):
-        pattern = "stable"
+def simulate_window(pattern: RiskLabel = "stable", samples: int = Query(default=262, ge=32, le=1024), seed: int | None = None):
     window = generate_window(pattern=pattern, samples=samples, seed=seed)  # type: ignore[arg-type]
     return SimulateResponse(window=window, pattern=pattern)  # type: ignore[arg-type]

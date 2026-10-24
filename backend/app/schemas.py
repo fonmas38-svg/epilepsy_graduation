@@ -58,6 +58,8 @@ class VitalWindow(BaseModel):
         ):
             if not all(math.isfinite(value) for value in channel):
                 raise ValueError(f"{channel_name} values must be finite")
+            if any(abs(value) > 1e6 for value in channel):
+                raise ValueError(f"{channel_name} exceeds supported numerical input range")
         if self.hr is not None and (not math.isfinite(self.hr) or not 20 <= self.hr <= 240):
             raise ValueError("hr must be finite and between 20 and 240 bpm")
         return self
@@ -94,7 +96,7 @@ class AnalyzeResponse(BaseModel):
 
 class SimulateRequest(BaseModel):
     pattern: RiskLabel = "stable"
-    samples: int = Field(default=128, ge=32, le=1024)
+    samples: int = Field(default=262, ge=32, le=1024)
     seed: int | None = None
 
 

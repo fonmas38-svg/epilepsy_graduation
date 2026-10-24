@@ -6,8 +6,8 @@ This wires the PyTorch model trained in `research/scripts/train.py`
 API. It loads the saved `state_dict`, reproduces the *exact* architecture, and
 applies the same signal contract the model was trained on before inference:
 
-    EEG channel -> band-pass 0.5-40 Hz -> per-window z-score -> resample to
-    the model's expected length -> Conv1D stack -> BiLSTM -> P(ictal)
+    EEG at the expected length -> band-pass 0.5-40 Hz -> per-window z-score
+    -> Conv1D stack -> BiLSTM -> uncalibrated ictal score
 
 Design decisions (deliberate, documented for the defense):
   * The model is loaded lazily and behind a lock; a failed/absent model or a
@@ -16,9 +16,9 @@ Design decisions (deliberate, documented for the defense):
   * The research model is single-channel (EEG). The live window carries EEG,
     ECG and Motion; only EEG is fed to the CNN-LSTM. The multimodal context
     (tachycardia, motion bursts) is fused on top by ``RiskClassifier``.
-  * The architecture is length-flexible (temporal mean-pool), but we still
-    resample every window to the training length so the amplitude/temporal
-    statistics match the training distribution as closely as possible.
+  * The input length must match the training length. Without a documented input
+    sample rate, stretching an arbitrary window changes its frequencies and is
+    not a valid conversion. Mismatches return no neural score.
 
 CAVEAT for real clinical use: the Bonn model expects Bonn-domain EEG. Feeding
 it signals from a different acquisition setup requires domain adaptation /
@@ -145,11 +145,11 @@ class DeepSeizureModel:
         target_len = int(self.meta["input_len"])
         fs = float(self.meta["fs"])
 
-        # resample to the training length (post-resample effective fs ~= meta.fs)
+        # Do not change signal duration to fit a model tensor.
         if x.size != target_len:
-            from scipy import signal as sp
-
-            x = sp.resample(x, target_len)
+            raise ValueError("EEG window length does not match training; implicit time stretching is unsafe")
+        if not np.isfinite(x).all() or np.ptp(x) <= 1e-8:
+            raise ValueError("Unusable EEG signal")
 
         # band-pass 0.5-40 Hz to match harmonize.clean_signal (best-effort; the
         # model tolerates already-filtered input since z-score follows).
@@ -177,7 +177,7 @@ class DeepSeizureModel:
                 with torch.no_grad():
                     logits = self._model(xb)
                     prob = torch.softmax(logits, dim=1)[0, 1].item()
-                return float(prob)
+                return float(prob) if np.isfinite(prob) and 0 <= prob <= 1 else None
             except Exception as e:  # noqa: BLE001
                 log.warning("deep_model: inference failed (%s)", e)
                 return None

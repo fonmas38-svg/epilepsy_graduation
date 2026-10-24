@@ -145,7 +145,7 @@ def test_recipient_resolution_uses_only_patient_care_graph(client):
     }
 
 
-def test_fcm_adapter_removes_invalid_token_without_retry(client, monkeypatch):
+def test_fcm_adapter_removes_invalid_token_but_does_not_claim_delivery(client, monkeypatch):
     patient, _ = _create_patient(client)
     token = "invalid-fcm-token-123456789012345"
     push_tokens_store.register(patient["id"], token, "android")
@@ -176,11 +176,16 @@ def test_fcm_adapter_removes_invalid_token_without_retry(client, monkeypatch):
     monkeypatch.setattr(
         notification_delivery, "_firebase_messaging", lambda: FakeMessaging
     )
-    result = notification_delivery.deliver({
-        "id": "alert-push", "patient_id": patient["id"],
-        "severity": "critical", "message": "Check patient",
-        "recipients": ["patient"],
-    })
+    with pytest.raises(RuntimeError, match="no recipients"):
+        notification_delivery.deliver({
+            "id": "alert-push", "patient_id": patient["id"],
+            "severity": "critical", "message": "Check patient",
+            "recipients": ["patient"],
+        })
 
-    assert result["invalid_tokens_removed"] == 1
     assert push_tokens_store.count_for_user(patient["id"]) == 0
+
+def test_invalid_payload_error_does_not_delete_registration():
+    class InvalidArgumentError(Exception):
+        pass
+    assert not notification_delivery._is_invalid_token_error(InvalidArgumentError("bad data payload"))

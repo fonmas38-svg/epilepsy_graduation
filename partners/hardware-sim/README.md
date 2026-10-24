@@ -1,60 +1,40 @@
-# partners/hardware-sim — محاكي جهاز الرأس التفاعلي (Headband Device Simulator)
+# محاكي جهاز الرأس
 
-هذا المجلد يحتوي على **محاكي جهاز الرأس (Device Simulator)** الذي يعمل كعميل (Client) يرسل البيانات الحيوية المحاكاة إلى خادم المشروع الرئيسي (`FastAPI`).
+المسار المتكامل مع خادم المشروع هو `sim_client.py`. يولد EEG وECG وحركة ونبضًا صناعيًا، ويحصل على JWT مرتبط بالجهاز والمريض، ثم يرسل الدفعات إلى `/device/ingest`.
 
----
+## العقد الحالي
 
-## 📌 مميزات المحاكي
-1. **بدون Datasets خارجية**: يولّد إشارات حيوية صناعية مترابطة زمنياً (EEG + ECG + Motion + Heart Rate) باستخدام معادلات رياضية دقيقة.
-2. **المصادقة والتشفير**: يتكامل تلقائياً مع نقطة النهاية `POST /auth/token` للحصول على توكن JWT ورفاقه في جميع طلبات الإرسال.
-3. **الأنماط الأربعة (Patterns)**:
-   - `stable`: حالة مستقرة وهادئة للمريض.
-   - `watch`: حالة تتطلب المراقبة والاحتياط.
-   - `high_risk`: حالة خطر مرتفع/نوبة نشطة.
-   - `ramp`: التدرج الزمني المستمر من الاستقرار إلى النوبة لتوضيح **التنبؤ المبكر (Prediction)** أمام اللجنة.
-4. **تسلسل الدفعات (Idempotency & Deduplication)**: يتضمن `sequence_number` متزايداً لمنع تكرار المعالجة.
-5. **اختبارات آلية**: يحتوي على اختبارات وحدة عبر `pytest`.
+- 256 عينة/ثانية، قناة EEG واحدة، وحدات `normalized_demo` غير معايرة طبيًا.
+- الخادم يجمع 262 عينة لتطابق الطول المعلن للأوزان الحالية.
+- دفعات 1–512 عينة؛ الفاصل الافتراضي حجم الدفعة / 256.
+- الأنماط `stable`, `watch`, `high_risk`, `ramp` تختبر مسار النظام ببيانات صناعية. لا تمثل مرضى أو تثبت التنبؤ الطبي.
+- الأنماط `flatline`, `mains_noise`, `clipping` لاختبار الإشارة غير الصالحة والتشويش والتشبع.
+- `--seed` يعيد إنتاج الإشارة؛ التردد لا يتغير بتغيير حجم الدفعة.
 
----
+## التشغيل
 
-## 🚀 كيفية التشغيل
+شغّل الخادم الرئيسي وفق README الخاص بالمشروع، ثم من جذر المستودع:
 
-### 1. تشغيل السيرفر الرئيسي (في نافذة Terminal 1):
 ```bash
-cd backend
-python -m venv .venv
-.venv\Scripts\activate          # على Windows
-pip install -r requirements.txt
-python data/build_dataset.py
-python train_from_dataset.py
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+python partners/hardware-sim/sim_client.py --pattern stable --seed 42
+python partners/hardware-sim/sim_client.py --pattern flatline --seed 42
+python partners/hardware-sim/sim_client.py --pattern mains_noise --seed 42
+python partners/hardware-sim/sim_client.py --pattern clipping --seed 42
 ```
 
-### 2. تشغيل المحاكي (في نافذة Terminal 2):
-```bash
-cd partners/hardware-sim
+العنوان الافتراضي محلي HTTP؛ JWT وسيلة مصادقة، ولا يشفّر الاتصال. استخدم HTTPS عند تصميم اتصال خارج البيئة المحلية.
 
-# تشغيل نمط التدرج والتنبؤ بالنوبة (الموصى به للعرض)
-python sim_client.py --pattern ramp
+`GET /device/contract` يعرض عقد الإدخال. لا يمكن وصف المحاكي بأنه مطابق لجهاز طبي محدد قبل تحديد الأقطاب والمرجع والوحدات والمعايرة ومعدل العينات. الدرجات المعروضة تجريبية ولا يُستنتج منها وقت حدوث نوبة.
 
-# تشغيل نمط المستقر
-python sim_client.py --pattern stable --batches 10
+بعد إعادة تشغيل العميل قد يرفض الخادم التسلسل القديم. يعرض العميل هذا الخطأ؛ يلزم استئناف جلسة جهاز موثق بدل اعتبار الدفعات مفقودة مقبولة. التخزين الدائم للجلسات واختبار توقيت النقل الفعلي ما زالا مطلوبين.
 
-# تشغيل نمط الخطر المرتفع بسرعة إرسال أعلى
-python sim_client.py --pattern high_risk --interval 0.5
-```
+`main.py` و`simulator.py` لوحة IoT قديمة مستقلة للحركة والنبض؛ لا تشغلان نموذج EEG ولا تمثلان مسار العميل المتكامل المذكور أعلاه.
 
----
+## الاختبارات
 
-## 🧪 تشغيل اختبارات الوحدة (Unit Tests)
 ```bash
 cd partners/hardware-sim
-pytest -v
+python -m pytest -q
 ```
 
----
-
-## 📁 الهيكل المعتمد
-- `sim_client.py`: برنامج المحاكي الرئيسي (Client API Streamer).
-- `test_sim_client.py`: اختبارات صحة البيانات ومدى الأرقام الفسيولوجية.
-- `requirements.txt`: المكتبات المطلوبة (`httpx`, `pytest`).
+راجع [تقييم الجاهزية والمتطلبات المتبقية](../../docs/PREDICTION_READINESS_AR.md).

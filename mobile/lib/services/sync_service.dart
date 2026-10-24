@@ -6,6 +6,7 @@ import '../core/config.dart';
 import '../core/enums.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
+import '../models/care_models.dart';
 import '../models/prediction_state.dart';
 import 'api_client.dart';
 import 'auth_service.dart';
@@ -122,8 +123,9 @@ class SyncService {
 
   /// Check whether the seizure event is still within the active rescue window.
   bool isWithinRescueWindow(DateTime eventTime) {
-    final diff = DateTime.now().difference(eventTime).inMinutes;
-    return diff <= activeSeizureRescueWindowMin;
+    final diff = DateTime.now().difference(eventTime);
+    return !diff.isNegative &&
+        diff <= const Duration(minutes: activeSeizureRescueWindowMin);
   }
 
   /// Escalate a pre-alert that was NOT cancelled within the window: persist it
@@ -148,20 +150,7 @@ class SyncService {
           ? const ['patient', 'caregiver', 'doctor']
           : const ['patient'],
     );
-    await db.insertAlert(escalated);
-    if (await isOnline) {
-      cloudAlerts.putIfAbsent(reading.patientId, () => []);
-      cloudAlerts[reading.patientId]!.insert(0, escalated.toMap());
-      try {
-        if (await api.health()) {
-          await api.cloudSync(
-            patientId: reading.patientId,
-            reading: reading.toMap(),
-            alert: escalated.toMap(),
-          );
-        }
-      } catch (_) {}
-    }
+    await _persistAlert(escalated, reading);
     return escalated;
   }
 
@@ -189,20 +178,7 @@ class SyncService {
       message: 'SOS ($who) — ${_l10n.sosMessageSuffix} $location',
       recipients: const ['caregiver', 'doctor'],
     );
-    await db.insertAlert(alert);
-    if (await isOnline) {
-      cloudAlerts.putIfAbsent(patientId, () => []);
-      cloudAlerts[patientId]!.insert(0, alert.toMap());
-      try {
-        if (await api.health()) {
-          await api.cloudSync(
-            patientId: patientId,
-            reading: _sosBeaconReading(patientId).toMap(),
-            alert: alert.toMap(),
-          );
-        }
-      } catch (_) {}
-    }
+    await _persistAlert(alert, _sosBeaconReading(patientId));
     return alert;
   }
 
@@ -219,7 +195,7 @@ class SyncService {
     synced: true,
   );
 
-  DateTime? _lastAlertAt;
+  final Map<String, DateTime> _lastAlertAt = {};
   static const _alertCooldown = Duration(minutes: 2);
 
   Future<AlertItem?> maybeCreateAlert(
@@ -229,18 +205,17 @@ class SyncService {
     if (assessment.label != RiskLabel.highRisk) return null;
 
     final now = DateTime.now();
-    if (_lastAlertAt != null && now.difference(_lastAlertAt!) < _alertCooldown) {
+    final lastAlert = _lastAlertAt[reading.patientId];
+    if (lastAlert != null && now.difference(lastAlert) < _alertCooldown) {
       return null;
     }
-    _lastAlertAt = now;
+    _lastAlertAt[reading.patientId] = now;
 
     Map<String, dynamic>? remote;
     try {
       if (await isOnline && await api.health()) {
         remote = await api.evaluateAlert(reading);
-        if (remote['should_notify'] == true) {
-          await api.queueFcmStub(remote);
-        }
+        // The persisted cloud bundle enqueues delivery once, using the alert id.
       }
     } catch (_) {
       remote = null;
@@ -251,33 +226,72 @@ class SyncService {
       patientId: reading.patientId,
       timestamp: DateTime.now(),
       severity: remote?['severity'] as String? ?? 'critical',
-      message:
-          remote?['message'] as String? ?? _l10n.riskDangerBodyNoLead,
+      message: remote?['message'] as String? ?? _l10n.riskDangerBodyNoLead,
       recipients: List<String>.from(
         remote?['recipients'] as List? ??
             const ['patient', 'caregiver', 'doctor'],
       ),
     );
-    await db.insertAlert(alert);
-    if (await isOnline) {
-      cloudAlerts.putIfAbsent(reading.patientId, () => []);
-      cloudAlerts[reading.patientId]!.insert(0, alert.toMap());
-      try {
-        if (await api.health()) {
-          await api.cloudSync(
-            patientId: reading.patientId,
-            reading: reading.toMap(),
-            assessment: assessment.toMap(),
-            alert: alert.toMap(),
-          );
-        }
-      } catch (_) {}
-    }
+    await _persistAlert(alert, reading, assessment: assessment);
     return alert;
+  }
+
+  Future<void> _persistAlert(
+    AlertItem alert,
+    VitalReading reading, {
+    RiskAssessment? assessment,
+  }) async {
+    final owner = auth.currentUser?.uid;
+    final delivery = OutboxItem(
+      id: 'monitoring-${alert.id}',
+      method: 'POST',
+      path: '/cloud/sync',
+      body: {
+        '_ownerId': owner,
+        'patient_id': alert.patientId,
+        'reading': reading.toMap(),
+        if (assessment != null) 'assessment': assessment.toMap(),
+        'alert': alert.toMap(),
+      },
+      createdAt: DateTime.now(),
+    );
+    await db.insertAlert(alert, delivery: delivery);
+    cloudAlerts.putIfAbsent(alert.patientId, () => []).insert(0, alert.toMap());
+    await flushPendingAlerts();
+  }
+
+  bool _flushingAlerts = false;
+
+  Future<void> flushPendingAlerts() async {
+    final owner = auth.currentUser?.uid;
+    if (_flushingAlerts || owner == null || !api.tokens.hasSession) return;
+    _flushingAlerts = true;
+    try {
+      final pending = await db.pendingOutbox(
+        onlyPath: '/cloud/sync',
+        ownerId: owner,
+        limit: 1000,
+      );
+      for (final item in pending) {
+        if (auth.currentUser?.uid != owner) break;
+        if (item.body['_ownerId'] != owner) continue;
+        final body = Map<String, Object?>.from(item.body)..remove('_ownerId');
+        try {
+          await api.sendJson(method: 'POST', path: '/cloud/sync', body: body);
+          await db.deleteOutbox(item.id);
+        } catch (_) {
+          // Keep the durable intent on all transport/server failures.
+          break;
+        }
+      }
+    } finally {
+      _flushingAlerts = false;
+    }
   }
 
   Future<void> syncPending(String patientId) async {
     if (!await isOnline) return;
+    await flushPendingAlerts();
     final pending = await db.unsyncedReadings(patientId);
     if (pending.isEmpty) return;
     cloudReadings.putIfAbsent(patientId, () => []);
@@ -335,8 +349,8 @@ class SyncService {
     final eegPeak = reading.eeg.isEmpty
         ? 0.0
         : reading.eeg
-            .map((e) => e.abs())
-            .fold<double>(0, (a, b) => a > b ? a : b);
+              .map((e) => e.abs())
+              .fold<double>(0, (a, b) => a > b ? a : b);
     if (eegPeak > 1.5) score += 0.3;
 
     final label = score >= 0.65
@@ -360,7 +374,7 @@ class SyncService {
         'lead_time_min': double.parse(leadTimeMin.toStringAsFixed(2)),
         'horizon_min': horizonMin,
         'predicted': preictalProb >= prealertThr,
-        'prediction_source': 'edge_seizure_net',
+        'prediction_source': 'simulated_heuristic',
       },
       processingMs: 1,
     );

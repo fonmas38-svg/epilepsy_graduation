@@ -10,12 +10,16 @@ from app.schemas import RiskLabel, VitalWindow
 
 def generate_window(
     pattern: RiskLabel = "stable",
-    samples: int = 128,
+    samples: int = 262,
     seed: int | None = None,
     patient_id: str | None = None,
 ) -> VitalWindow:
+    if pattern not in ("stable", "watch", "high_risk"):
+        raise ValueError("Unknown simulation pattern")
+    if not 32 <= samples <= 1024:
+        raise ValueError("Simulation window must contain 32..1024 samples")
     rng = np.random.default_rng(seed)
-    t = np.linspace(0, 2 * np.pi, samples)
+    t = np.arange(samples) / 256.0 * 2 * np.pi
 
     if pattern == "stable":
         eeg = 0.4 * np.sin(8 * t) + 0.1 * rng.normal(size=samples)

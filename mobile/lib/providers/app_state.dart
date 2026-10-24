@@ -710,6 +710,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    messages.clearSession();
     await monitoring.stop();
     await preAlerts.cancel();
     _preAlertReading = null;
@@ -959,6 +960,7 @@ class AppState extends ChangeNotifier {
     final active = monitoring.activePatientId;
     if (active != null) await monitoring.refresh(active);
     await messages.flushPendingMessages();
+    await sync.flushPendingAlerts();
     notifyListeners();
   }
 

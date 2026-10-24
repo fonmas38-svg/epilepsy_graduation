@@ -2,25 +2,28 @@
 from __future__ import annotations
 
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app import cloud_store, messages_store, users_store
-from app.auth import authorize_patient_access, get_current_principal
+from app.auth import authorize_patient_access, require_role
 
 router = APIRouter(prefix="/patients", tags=["messages"])
+require_messenger = require_role("patient", "doctor", "caregiver", "admin")
 
 
 class SendMessageRequest(BaseModel):
     channel_type: Literal["doctor_patient", "family_patient"]
     content: str = Field(..., min_length=1, max_length=5000)
+    client_message_id: UUID | None = None
 
 
 class LocationShareRequest(BaseModel):
-    latitude: float
-    longitude: float
-    accuracy: float | None = None
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    accuracy: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     note: str | None = Field(default=None, max_length=500)
 
 
@@ -30,10 +33,11 @@ def list_messages(
     channel_type: Literal["doctor_patient", "family_patient"] | None = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    principal: dict = Depends(get_current_principal),
+    latest: bool = False,
+    principal: dict = Depends(require_messenger),
 ):
     """Retrieve messages for a patient scoped by channel and role permissions."""
-    authorize_patient_access(patient_id, principal)
+    authorize_patient_access(patient_id, principal, enforce=True)
     role = principal.get("role")
 
     # Strict privacy safeguard: Caregivers can NEVER inspect private doctor-patient consultations.
@@ -50,6 +54,7 @@ def list_messages(
         channel_type=channel_type,
         limit=limit,
         offset=offset,
+        latest=latest,
     )
     return {"messages": msgs}
 
@@ -58,10 +63,10 @@ def list_messages(
 def send_message(
     patient_id: str,
     body: SendMessageRequest,
-    principal: dict = Depends(get_current_principal),
+    principal: dict = Depends(require_messenger),
 ):
     """Send a message to either doctor-patient or family-patient channel."""
-    authorize_patient_access(patient_id, principal)
+    authorize_patient_access(patient_id, principal, enforce=True)
     role = principal.get("role", "patient")
     sub = str(principal.get("sub", ""))
 
@@ -83,6 +88,7 @@ def send_message(
             sender_role=role,
             channel_type=body.channel_type,
             content=body.content,
+            client_message_id=str(body.client_message_id) if body.client_message_id else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -101,12 +107,15 @@ def send_message(
 def share_location(
     patient_id: str,
     body: LocationShareRequest,
-    principal: dict = Depends(get_current_principal),
+    principal: dict = Depends(require_messenger),
 ):
     """Update and broadcast patient's live location to family and care circle."""
-    authorize_patient_access(patient_id, principal)
+    authorize_patient_access(patient_id, principal, enforce=True)
     sub = str(principal.get("sub", ""))
     role = principal.get("role", "patient")
+
+    if role != "patient" or sub != patient_id:
+        raise HTTPException(status_code=403, detail="Only the patient can share their location")
 
     loc_data = {
         "latitude": body.latitude,
@@ -145,10 +154,10 @@ def share_location(
 @router.get("/{patient_id}/location")
 def get_location(
     patient_id: str,
-    principal: dict = Depends(get_current_principal),
+    principal: dict = Depends(require_messenger),
 ):
     """Get the patient's last reported location coordinates."""
-    authorize_patient_access(patient_id, principal)
+    authorize_patient_access(patient_id, principal, enforce=True)
     patient = cloud_store.get_patient(patient_id) or {}
     loc = patient.get("lastKnownLocation")
     if not loc:

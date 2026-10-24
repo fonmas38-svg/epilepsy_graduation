@@ -10,11 +10,7 @@ import 'auth_service.dart';
 import 'local_database.dart';
 
 class MessageService extends ChangeNotifier {
-  MessageService({
-    required this.db,
-    required this.api,
-    required this.auth,
-  });
+  MessageService({required this.db, required this.api, required this.auth});
 
   final LocalDatabase db;
   final ApiClient api;
@@ -27,9 +23,26 @@ class MessageService extends ChangeNotifier {
   Map<String, dynamic>? lastSharedLocation;
   bool loading = false;
   Failure? failure;
+  bool _flushing = false;
+  String? _patientId;
+
+  void clearSession() {
+    _patientId = null;
+    doctorMessages = [];
+    familyMessages = [];
+    lastSharedLocation = null;
+    failure = null;
+    notifyListeners();
+  }
 
   /// Load messages for [patientId] from local SQLite first, then refresh from cloud if online.
   Future<void> loadFor(String patientId, {String? channel}) async {
+    if (_patientId != patientId) {
+      doctorMessages = [];
+      familyMessages = [];
+      lastSharedLocation = null;
+      _patientId = patientId;
+    }
     loading = true;
     failure = null;
     notifyListeners();
@@ -39,16 +52,21 @@ class MessageService extends ChangeNotifier {
     try {
       // 1. Load from local database immediately
       if (role != UserRole.caregiver) {
-        doctorMessages = await db.messagesForChannel(patientId, 'doctor_patient');
+        doctorMessages = await db.messagesForChannel(
+          patientId,
+          'doctor_patient',
+        );
       } else {
-        doctorMessages = []; // Caregiver never sees private doctor consultations
+        doctorMessages =
+            []; // Caregiver never sees private doctor consultations
       }
       familyMessages = await db.messagesForChannel(patientId, 'family_patient');
       notifyListeners();
 
       // 2. Fetch from cloud API if user has active session
       if (api.tokens.hasSession) {
-        if (role != UserRole.caregiver && (channel == null || channel == 'doctor_patient')) {
+        if (role != UserRole.caregiver &&
+            (channel == null || channel == 'doctor_patient')) {
           await _syncChannelFromCloud(patientId, 'doctor_patient');
         }
         if (channel == null || channel == 'family_patient') {
@@ -66,12 +84,17 @@ class MessageService extends ChangeNotifier {
     }
   }
 
-  Future<void> _syncChannelFromCloud(String patientId, String channelType) async {
+  Future<void> _syncChannelFromCloud(
+    String patientId,
+    String channelType,
+  ) async {
     try {
       final res = await api.sendJson(
         method: 'GET',
-        path: '/patients/$patientId/messages?channel_type=$channelType',
+        path:
+            '/patients/$patientId/messages?channel_type=$channelType&latest=true',
       );
+      if (_patientId != patientId) return;
       final rawList = res['messages'] as List? ?? [];
       for (final item in rawList) {
         if (item is Map<String, dynamic>) {
@@ -81,9 +104,15 @@ class MessageService extends ChangeNotifier {
       }
       // Re-read local for consistency
       if (channelType == 'doctor_patient') {
-        doctorMessages = await db.messagesForChannel(patientId, 'doctor_patient');
+        doctorMessages = await db.messagesForChannel(
+          patientId,
+          'doctor_patient',
+        );
       } else {
-        familyMessages = await db.messagesForChannel(patientId, 'family_patient');
+        familyMessages = await db.messagesForChannel(
+          patientId,
+          'family_patient',
+        );
       }
     } catch (_) {
       // Offline fallback: keep locally cached rows
@@ -98,12 +127,23 @@ class MessageService extends ChangeNotifier {
   }) async {
     final user = auth.currentUser;
     final role = user?.role ?? UserRole.patient;
+    if (user == null ||
+        content.trim().isEmpty ||
+        content.trim().length > 5000) {
+      throw ArgumentError(
+        'A signed-in user and a message of 1–5000 characters are required',
+      );
+    }
+    if (!['doctor_patient', 'family_patient'].contains(channelType) ||
+        (role == UserRole.caregiver && channelType == 'doctor_patient')) {
+      throw ArgumentError('Message channel is not permitted');
+    }
 
     final localMsg = ChatMessage(
       id: _uuid.v4(),
       patientId: patientId,
-      senderId: user?.uid ?? 'unknown',
-      senderName: user?.name ?? 'مستخدم',
+      senderId: user.uid,
+      senderName: user.name,
       senderRole: role,
       channelType: channelType,
       content: content.trim(),
@@ -128,14 +168,14 @@ class MessageService extends ChangeNotifier {
           path: '/patients/$patientId/messages',
           body: {
             'channel_type': channelType,
+            'client_message_id': localMsg.id,
             'content': content.trim(),
           },
         );
         final serverMap = res['message'] as Map<String, dynamic>?;
         if (serverMap != null) {
           final serverMsg = ChatMessage.fromMap(serverMap);
-          await db.insertMessage(serverMsg);
-          await db.markMessageSynced(localMsg.id);
+          await db.replacePendingMessage(localMsg.id, serverMsg);
           _replaceMessage(localMsg.id, serverMsg);
           notifyListeners();
           return serverMsg;
@@ -148,7 +188,9 @@ class MessageService extends ChangeNotifier {
   }
 
   void _replaceMessage(String oldId, ChatMessage newMsg) {
-    final list = newMsg.channelType == 'doctor_patient' ? doctorMessages : familyMessages;
+    final list = newMsg.channelType == 'doctor_patient'
+        ? doctorMessages
+        : familyMessages;
     final idx = list.indexWhere((m) => m.id == oldId);
     if (idx != -1) {
       list[idx] = newMsg;
@@ -157,26 +199,29 @@ class MessageService extends ChangeNotifier {
 
   /// Drain pending offline messages from SQLite to the backend API when connected.
   Future<int> flushPendingMessages() async {
-    if (!api.tokens.hasSession) return 0;
+    final senderId = auth.currentUser?.uid;
+    if (!api.tokens.hasSession || senderId == null || _flushing) return 0;
+    _flushing = true;
     try {
-      final pending = await db.unsyncedMessages();
+      final pending = await db.unsyncedMessages(senderId);
       if (pending.isEmpty) return 0;
       int flushed = 0;
       for (final msg in pending) {
+        if (auth.currentUser?.uid != senderId) break;
         try {
           final res = await api.sendJson(
             method: 'POST',
             path: '/patients/${msg.patientId}/messages',
             body: {
               'channel_type': msg.channelType,
+              'client_message_id': msg.id,
               'content': msg.content,
             },
           );
           final serverMap = res['message'] as Map<String, dynamic>?;
           if (serverMap != null) {
             final serverMsg = ChatMessage.fromMap(serverMap);
-            await db.insertMessage(serverMsg);
-            await db.markMessageSynced(msg.id);
+            await db.replacePendingMessage(msg.id, serverMsg);
             _replaceMessage(msg.id, serverMsg);
             flushed++;
           }
@@ -190,6 +235,8 @@ class MessageService extends ChangeNotifier {
       return flushed;
     } catch (_) {
       return 0;
+    } finally {
+      _flushing = false;
     }
   }
 
@@ -201,17 +248,11 @@ class MessageService extends ChangeNotifier {
     double? accuracy,
     String? note,
   }) async {
-    final locData = {
-      'latitude': latitude,
-      'longitude': longitude,
-      'accuracy': accuracy,
-      'note': note,
-      'updatedAt': DateTime.now().toIso8601String(),
-      'mapsUrl': 'https://maps.google.com/?q=${latitude.toStringAsFixed(6)},${longitude.toStringAsFixed(6)}',
-    };
-    lastSharedLocation = locData;
-    notifyListeners();
-
+    if (!api.tokens.hasSession) {
+      throw StateError(
+        'Location sharing requires a connection and an active session',
+      );
+    }
     if (api.tokens.hasSession) {
       try {
         final res = await api.sendJson(
@@ -232,11 +273,13 @@ class MessageService extends ChangeNotifier {
           notifyListeners();
           return loc;
         }
-      } catch (_) {
-        // Offline
+      } catch (e) {
+        failure = Failure.from(e);
+        notifyListeners();
+        rethrow;
       }
     }
-    return locData;
+    throw StateError('Server did not confirm location sharing');
   }
 
   Future<Map<String, dynamic>?> fetchLatestLocation(String patientId) async {

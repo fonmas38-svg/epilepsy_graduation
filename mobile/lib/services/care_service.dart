@@ -712,6 +712,7 @@ class CareService extends ChangeNotifier {
       body: {
         ...body,
         // Carried so a successful send can flip `synced` on the right row.
+        '_ownerId': api.tokens.subject,
         '_table': ?table,
         '_rowId': ?rowId,
       },
@@ -731,16 +732,20 @@ class CareService extends ChangeNotifier {
   /// network, and stops on 404 too: that means the endpoint is not deployed, so
   /// every following item would fail the same way.
   Future<void> flushOutbox() async {
-    if (_flushing) return;
+    final owner = api.tokens.subject;
+    if (_flushing || owner == null || !api.tokens.hasSession) return;
     _flushing = true;
     try {
-      final items = await db.pendingOutbox();
+      final items = await db.pendingOutbox(excludePath: '/cloud/sync', ownerId: owner);
       for (final item in items) {
+        if (api.tokens.subject != owner) break;
+        if (item.body['_ownerId'] != owner) continue;
         final table = item.body['_table'] as String?;
         final rowId = item.body['_rowId'] as String?;
         final payload = Map<String, Object?>.from(item.body)
           ..remove('_table')
-          ..remove('_rowId');
+          ..remove('_rowId')
+          ..remove('_ownerId');
         try {
           await api.sendJson(
             method: item.method,

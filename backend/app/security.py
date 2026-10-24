@@ -60,18 +60,20 @@ def hash_password(password: str, *, iterations: int | None = None) -> str:
 
 def verify_password(password: str, stored: str) -> bool:
     """Constant-time verify. Returns False (never raises) on any bad input."""
-    if not password or not stored:
+    if not isinstance(password, str) or not isinstance(stored, str) or not password or not stored:
         return False
     try:
         algorithm, iters_s, salt_b64, hash_b64 = stored.split("$")
         if algorithm != ALGORITHM:
             return False
         iters = int(iters_s)
+        if not 1 <= iters <= 10_000_000:
+            return False
         salt = _b64d(salt_b64)
         expected = _b64d(hash_b64)
-    except (ValueError, TypeError):
+        candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters)
+    except (ValueError, TypeError, OverflowError):
         return False
-    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters)
     return hmac.compare_digest(candidate, expected)
 
 
@@ -79,9 +81,9 @@ def needs_rehash(stored: str, *, iterations: int | None = None) -> bool:
     """True if `stored` was produced with a weaker/old iteration count."""
     try:
         algorithm, iters_s, _, _ = stored.split("$")
-    except (ValueError, AttributeError):
+        return algorithm != ALGORITHM or int(iters_s) < (iterations or _default_iterations())
+    except (ValueError, TypeError, AttributeError):
         return True
-    return algorithm != ALGORITHM or int(iters_s) < (iterations or _default_iterations())
 
 
 def generate_password(length: int = 12) -> str:

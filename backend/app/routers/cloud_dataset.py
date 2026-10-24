@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 
 from app import cloud_store
 from app.device_hub import DeviceSample
-from app.preprocessing import extract_features
 from app.schemas import VitalWindow
 from app.auth import authorize_patient_access, get_optional_principal
 from app.settings import settings
@@ -102,13 +101,17 @@ def cloud_sync(body: CloudReadingIn, principal: dict = Depends(get_optional_prin
     authorize_patient_access(body.patient_id, principal)
     # One transaction: a client never ends up with a reading whose derived
     # assessment/alert failed to persist.
-    saved = cloud_store.save_monitoring_bundle(
-        body.patient_id,
-        body.reading,
-        assessment=body.assessment or None,
-        alert=body.alert or None,
-        patient_profile={"name": body.patient_id},
-    )
+    try:
+        saved = cloud_store.save_monitoring_bundle(
+            body.patient_id,
+            body.reading,
+            assessment=body.assessment or None,
+            alert=body.alert or None,
+            patient_profile={"name": body.patient_id},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     return {
         "ok": True,
         "reading": saved["reading"],
@@ -163,8 +166,9 @@ def dataset_next(
         row = df.iloc[idx]
 
     window = _row_to_window(row, body.patient_id)
-    features = extract_features(window)
-    label, confidence = request.app.state.classifier.predict(features)
+    result = request.app.state.classifier.predict_window(window)
+    features = result.features
+    label, confidence = result.label, result.confidence
 
     if body.push_to_device_hub:
         samples = [

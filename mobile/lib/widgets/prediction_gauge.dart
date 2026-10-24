@@ -134,6 +134,12 @@ class ForecastSourceNote extends StatelessWidget {
           value: isModel ? l.forecastSourceModel : l.forecastSourceHeuristic,
           icon: isModel ? Icons.psychology_outlined : Icons.science_outlined,
         ),
+        Gap.vSm,
+        InfoNote(
+          text: l.forecastResearchWarning,
+          icon: Icons.science_outlined,
+          view: RiskView.caution,
+        ),
         if (!isModel) ...[
           Gap.vSm,
           InfoNote(

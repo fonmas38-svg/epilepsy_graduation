@@ -7,7 +7,7 @@
 //   and a 401 triggers the registered onUnauthorized handler (auto-logout).
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || '';
-export const API_BASE = RAW_BASE ? RAW_BASE.replace(/\/$/, '') : '/api';
+export const API_BASE = RAW_BASE ? RAW_BASE.replace(/\/$/, '') : (import.meta.env.DEV ? '/api' : '');
 
 let _tokenProvider = () => null;
 let _onUnauthorized = () => {};
@@ -42,7 +42,7 @@ async function request(method, path, body) {
     throw new ApiError('تعذّر الاتصال بالخادم', 0, String(networkErr));
   }
 
-  if (res.status === 401) {
+  if (res.status === 401 && token === _tokenProvider()) {
     _onUnauthorized();
   }
 

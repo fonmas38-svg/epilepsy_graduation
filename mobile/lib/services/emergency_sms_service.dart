@@ -5,9 +5,8 @@ import 'location_service.dart';
 
 /// Emergency SMS Fallback Service.
 ///
-/// Ensures patient safety when internet connectivity (Wi-Fi / Mobile Data) is down.
-/// Composes an urgent SMS carrying GPS coordinates and Google Maps link,
-/// and dispatches it directly to the patient's registered emergency contacts.
+/// Opens the SMS composer with emergency contacts and optional GPS coordinates.
+/// The user must confirm sending. A successful launch is not a delivery receipt.
 class EmergencySmsService {
   const EmergencySmsService();
 
@@ -18,7 +17,9 @@ class EmergencySmsService {
     GpsFix? fix,
   }) async {
     if (phoneNumbers.isEmpty) {
-      debugPrint('EmergencySmsService: No emergency contact phone numbers provided.');
+      debugPrint(
+        'EmergencySmsService: No emergency contact phone numbers provided.',
+      );
       return false;
     }
 
@@ -36,21 +37,19 @@ class EmergencySmsService {
     final smsUri = Uri(
       scheme: 'sms',
       path: recipients,
-      queryParameters: <String, String>{
-        'body': message,
-      },
+      query: 'body=${Uri.encodeComponent(message)}',
     );
 
     try {
       if (await canLaunchUrl(smsUri)) {
-        await launchUrl(smsUri);
-        return true;
+        return await launchUrl(smsUri);
       } else {
         // Fallback: try launching with simple query string
-        final directUri = Uri.parse('sms:$recipients?body=${Uri.encodeComponent(message)}');
+        final directUri = Uri.parse(
+          'sms:$recipients?body=${Uri.encodeComponent(message)}',
+        );
         if (await canLaunchUrl(directUri)) {
-          await launchUrl(directUri);
-          return true;
+          return await launchUrl(directUri);
         }
       }
     } catch (e) {

@@ -92,10 +92,24 @@ def _trim(conn: Connection, table, patient_id: str, keep: int) -> None:
     conn.execute(delete(table).where(table.c.sequence.in_(stale)))
 
 
+def _persist_monitoring_row(conn: Connection, table, values: dict) -> tuple[dict, bool]:
+    """Retry-safe insert; never disclose or overwrite another patient's row."""
+    inserted = conn.execute(upsert(table, values).on_conflict_do_nothing(index_elements=["id"]))
+    row = conn.execute(select(table).where(table.c.id == values["id"])).one()
+    if row._mapping["patient_id"] != values["patient_id"]:
+        raise ValueError("Monitoring id is already in use")
+    saved = _payload(row)
+    incoming = load_json(values["payload_json"], {})
+    ignored = {"synced", "acknowledged", "acknowledgedBy", "acknowledgments"}
+    if any(saved.get(key) != value for key, value in incoming.items() if key not in ignored):
+        raise ValueError("Monitoring id is already in use with different content")
+    return saved, inserted.rowcount == 1
+
+
 def _add_reading(conn: Connection, patient_id: str, reading: dict[str, Any]) -> dict:
     _ensure_patient(conn, patient_id)
     result = {**reading, "id": reading.get("id") or str(uuid4()), "patientId": patient_id}
-    conn.execute(insert(readings).values(
+    result, _ = _persist_monitoring_row(conn, readings, dict(
         id=result["id"], patient_id=patient_id,
         captured_at=result.get("timestamp"), payload_json=dump_json(result),
     ))
@@ -115,15 +129,16 @@ def _add_assessment(conn: Connection, patient_id: str,
         **assessment, "id": assessment.get("id") or str(uuid4()),
         "patientId": patient_id,
     }
-    conn.execute(insert(assessments).values(
+    result, inserted = _persist_monitoring_row(conn, assessments, dict(
         id=result["id"], patient_id=patient_id,
         captured_at=result.get("timestamp"), label=result.get("label"),
         payload_json=dump_json(result),
     ))
-    conn.execute(update(patients).where(patients.c.patient_id == patient_id).values(
-        current_status=result.get("label"), last_updated=result.get("timestamp"),
-        updated_at=_now(),
-    ))
+    if inserted:
+        conn.execute(update(patients).where(patients.c.patient_id == patient_id).values(
+            current_status=result.get("label"), last_updated=result.get("timestamp"),
+            updated_at=_now(),
+        ))
     _trim(conn, assessments, patient_id, 500)
     return result
 
@@ -140,7 +155,7 @@ def _add_alert(conn: Connection, patient_id: str, alert: dict[str, Any]) -> dict
         "recipients": alert.get("recipients") or ["patient", "caregiver", "doctor"],
         "acknowledged": False,
     }
-    conn.execute(insert(alerts).values(
+    result, _ = _persist_monitoring_row(conn, alerts, dict(
         id=result["id"], patient_id=patient_id,
         captured_at=result.get("timestamp"), severity=result.get("severity"),
         acknowledged=False, payload_json=dump_json(result),

@@ -79,54 +79,33 @@ def model_info(request: Request):
     return info
 
 
-_FALLBACK_METRICS = {
-    "preictal_chbmit": {
-        "dataset_tag": "chbmit",
-        "architecture": "CNN-LSTM Deep Attention Network",
-        "test_at_tuned_threshold": {
-            "threshold": 0.75,
-            "sensitivity": 0.884,
-            "specificity": 0.918,
-            "fpr_per_hour": 0.14,
-            "auc_roc": 0.943,
-        },
-        "test_at_0.5": {
-            "threshold": 0.5,
-            "sensitivity": 0.942,
-            "specificity": 0.865,
-            "fpr_per_hour": 0.28,
-        },
-    },
-    "detection_bonn": {
-        "dataset_tag": "bonn",
-        "test_at_tuned_threshold": {
-            "threshold": 0.9,
-            "sensitivity": 0.7977,
-            "specificity": 0.9906,
-            "fpr_per_hour": 33.0675,
-        },
-        "test_at_0.5": {
-            "threshold": 0.5,
-            "sensitivity": 0.9515,
-            "specificity": 0.9266,
-            "fpr_per_hour": 258.34,
-        },
-    },
-}
-
-
 def _read_metrics(key: str, path: Path) -> dict:
-    """Load clinical-metrics JSON, falling back to bundled benchmark metrics if absent."""
-    if path.exists():
-        try:
-            return {"available": True, "metrics": json.loads(path.read_text(encoding="utf-8"))}
-        except Exception as e:  # noqa: BLE001
-            log.warning("metrics file %s unreadable: %s, using fallback", path.name, e)
-    
-    fallback = _FALLBACK_METRICS.get(key)
-    if fallback:
-        return {"available": True, "metrics": fallback}
-    return {"available": False, "reason": f"{path.name} not found"}
+    """A saved report is not proof of validation of the deployed weights."""
+    result = {"available": False, "clinically_validated": False,
+              "verification_status": "unverified", "report_present": path.exists()}
+    if not path.exists():
+        return {**result, "reason": f"{path.name} not found"}
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(report, dict):
+            raise ValueError("report must be an object")
+        issues = []
+        for name in ("val_tuned_threshold", "test_at_0.5", "test_at_tuned_threshold"):
+            block = report.get(name, {})
+            for metric, numerator, other in (("sensitivity", "tp", "fn"),
+                                              ("specificity", "tn", "fp")):
+                if all(k in block for k in (metric, numerator, other)):
+                    a, b = float(block[numerator]), float(block[other])
+                    value = float(block[metric])
+                    if (not np.isfinite([a, b, value]).all() or min(a, b) < 0
+                            or a + b <= 0 or abs(value - a / (a + b)) > 0.0001):
+                        issues.append(f"{name}.{metric}: inconsistent confusion counts")
+        return {**result, "reported_metrics": report, "verification_issues": issues,
+                "reason": "No independently verified held-out evaluation linked to deployed weights. "
+                          "Saved report values must not be presented as clinical accuracy."}
+    except (ValueError, TypeError, OSError) as exc:
+        log.warning("metrics file %s unreadable: %s", path.name, exc)
+        return {**result, "reason": "Invalid metrics report"}
 
 
 @router.get("/model/metrics")
@@ -143,9 +122,10 @@ def model_metrics(request: Request):
         # which live engine currently backs the forecast (real model vs heuristic)
         "prediction_engine_available": bool(preictal_engine.get("available")),
         "reports": reports,
-        "note": ("Per-window metrics from offline training (research/scripts/train.py). "
-                 "For CHB-MIT, FPR/hour is a real alarm rate over continuous interictal "
-                 "data; sensitivity is reported at the clinically-tuned threshold."),
+        "clinically_validated": False,
+        "note": ("Research only. Detection is not prospective seizure prediction. "
+                 "Window-level false positives cannot establish a continuous event alarm rate. "
+                 "The presence of weights or a report does not establish clinical validity."),
     }
 
 

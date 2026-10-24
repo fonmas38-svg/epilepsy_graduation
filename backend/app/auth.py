@@ -144,14 +144,14 @@ def require_role(*allowed: Role):
     return _dep
 
 
-def authorize_patient_access(patient_id: str, principal: dict) -> None:
+def authorize_patient_access(patient_id: str, principal: dict, *, enforce: bool = False) -> None:
     """Authorize access to a patient-scoped resource.
 
     The demo profile intentionally keeps anonymous compatibility for the local
     presentation.  Production and ``REQUIRE_PATIENT_AUTH=1`` always use this
     policy, so a valid token alone is not enough to read another patient.
     """
-    if not settings.require_patient_auth:
+    if not settings.require_patient_auth and not enforce:
         return
     role = principal.get("role")
     subject = str(principal.get("sub", ""))

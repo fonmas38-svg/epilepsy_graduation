@@ -1,64 +1,43 @@
-import 'dart:convert';
 import 'dart:math' as math;
-import 'package:flutter/services.dart' show rootBundle;
 
 import '../core/enums.dart';
 import '../models/models.dart';
 import 'api_client.dart';
 
-/// Edge Model Service — On-Device (Offline) AI Seizure Detection Engine.
-///
-/// Wraps `EdgeSeizureNet` (Conv1D + BiLSTM) running directly on the mobile device.
-/// Enables 100% offline seizure detection and emergency safety response even when
-/// the patient is completely disconnected from the internet or cloud servers.
-///
-/// Performance Verified in Research:
-///   - Architecture: EdgeSeizureNet (3-layer Conv1D + BiLSTM)
-///   - Sensitivity: 94.20%
-///   - Specificity: 92.68%
-///   - Size: 205 KB (ONNX FP32)
-///   - Target Latency: < 2 ms on mobile CPU
+/// Offline demonstration heuristic. This service does not execute ONNX weights.
+/// Research model metrics do not measure this implementation.
 class EdgeModelService {
   EdgeModelService._();
   static final EdgeModelService instance = EdgeModelService._();
 
-  bool _initialized = false;
-  Map<String, dynamic>? _config;
-
-  double edgeSensitivity = 0.9420;
-  double edgeSpecificity = 0.9268;
   double optimalThreshold = 0.60;
-  String modelArchitecture = 'EdgeSeizureNet (Conv1D + BiLSTM)';
+  String modelArchitecture = 'Offline signal heuristic';
 
-  /// Lazily load model parameters and configuration from assets
-  Future<void> initialize() async {
-    if (_initialized) return;
-    try {
-      final jsonString = await rootBundle.loadString('assets/models/dual_model_config.json');
-      _config = json.decode(jsonString) as Map<String, dynamic>;
-      final edge = _config?['edge_model'] as Map<String, dynamic>?;
-      if (edge != null) {
-        edgeSensitivity = (edge['test_sensitivity'] as num?)?.toDouble() ?? 0.9420;
-        edgeSpecificity = (edge['test_specificity'] as num?)?.toDouble() ?? 0.9268;
-        modelArchitecture = edge['architecture'] as String? ?? modelArchitecture;
-      }
-      final ensemble = _config?['ensemble'] as Map<String, dynamic>?;
-      if (ensemble != null) {
-        optimalThreshold = (ensemble['optimal_threshold'] as num?)?.toDouble() ?? 0.60;
-      }
-      _initialized = true;
-    } catch (_) {
-      // Degrade gracefully with verified constants if asset loading fails
-      _initialized = true;
-    }
-  }
+  Future<void> initialize() async {}
 
-  /// Evaluates an incoming [VitalReading] using the EdgeSeizureNet neural pipeline.
+  /// Evaluates an incoming [VitalReading] using the demonstration heuristic.
   AnalyzeResult infer(VitalReading reading, {double horizonMin = 15.0}) {
     final stopwatch = Stopwatch()..start();
 
     // 1. Signal preprocessing & peak analysis
     final eeg = reading.eeg;
+    if (eeg.length < 8 ||
+        [...eeg, ...reading.ecg, ...reading.motion, reading.hr]
+            .any((v) => !v.isFinite || v.abs() > 1e6) ||
+        eeg.every((v) => (v - eeg.first).abs() <= 1e-8)) {
+      return AnalyzeResult(
+        label: RiskLabel.watch,
+        confidence: 0,
+        features: {
+          'assessment_valid': false,
+          'signal_quality': 'unusable',
+          'clinically_validated': false,
+          'model_executed': false,
+          'offline': true,
+        },
+        processingMs: stopwatch.elapsedMicroseconds / 1000,
+      );
+    }
     var eegPeak = 0.0;
     var eegPower = 0.0;
     var zeroCrossings = 0;
@@ -98,12 +77,7 @@ class EdgeModelService {
 
     final hr = reading.hr;
 
-    // 3. Simulated Conv1D + BiLSTM Forward Representation
-    // Mirrors the weight activations learned during EdgeSeizureNet training:
-    //  - Conv1D Layer 1: Detects low-frequency rhythm slowing (0.5-4 Hz delta)
-    //  - Conv1D Layer 2: Detects sharp spike-wave discharges (> 1.5 amplitude)
-    //  - Conv1D Layer 3: Temporal burst integration
-    //  - BiLSTM: Evaluates sequential accumulation of rhythm disruption
+    // 3. Hand-written signal thresholds; not a neural-network forward pass.
     var convActivation = 0.0;
     if (eegPeak >= 2.0) {
       convActivation += 0.45;
@@ -144,13 +118,18 @@ class EdgeModelService {
     final ictalProb = rawProb.clamp(0.01, 0.99);
 
     // Preictal rising score (forecast horizon ramp)
-    final preictalScore = (0.55 * convActivation + 0.30 * (hr > 85 ? (hr - 85) / 40.0 : 0.0) + 0.15 * motionEnergy).clamp(0.0, 1.0);
-    final leadTimeMin = math.max(0.0, horizonMin * (1.0 - preictalScore));
+    final preictalScore =
+        (0.55 * convActivation +
+                0.30 * (hr > 85 ? (hr - 85) / 40.0 : 0.0) +
+                0.15 * motionEnergy)
+            .clamp(0.0, 1.0);
+    // No validated time-to-onset estimator is available.
 
     // Classification decision using optimal ensemble threshold
     final RiskLabel label;
     final double confidence;
-    if (ictalProb >= optimalThreshold || (ictalProb >= 0.50 && eegPeak >= 1.6)) {
+    if (ictalProb >= optimalThreshold ||
+        (ictalProb >= 0.50 && eegPeak >= 1.6)) {
       label = RiskLabel.highRisk;
       confidence = ictalProb;
     } else if (ictalProb >= 0.32 || preictalScore >= 0.38) {
@@ -169,16 +148,15 @@ class EdgeModelService {
       confidence: double.parse(confidence.clamp(0.50, 0.99).toStringAsFixed(4)),
       features: {
         'edge_model': modelArchitecture,
-        'edge_sensitivity': edgeSensitivity,
-        'edge_specificity': edgeSpecificity,
-        'model_size': '205 KB (ONNX FP32)',
+        'model_executed': false,
+        'clinically_validated': false,
         'offline': true,
         'ictal_prob': double.parse(ictalProb.toStringAsFixed(4)),
         'preictal_prob': double.parse(preictalScore.toStringAsFixed(4)),
-        'lead_time_min': double.parse(leadTimeMin.toStringAsFixed(2)),
+        'lead_time_min': null,
         'horizon_min': horizonMin,
         'predicted': preictalScore >= 0.60,
-        'prediction_source': 'edge_seizure_net',
+        'prediction_source': 'simulated_heuristic',
         'eeg_peak': double.parse(eegPeak.toStringAsFixed(2)),
         'eeg_power': double.parse(eegPower.toStringAsFixed(2)),
         'motion_energy': double.parse(motionEnergy.toStringAsFixed(2)),

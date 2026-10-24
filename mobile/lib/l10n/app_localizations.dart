@@ -400,6 +400,7 @@ class AppLocalizations {
 
   // ------------------------------------------------------------- prediction
   String get forecastSection => _s('forecastSection');
+  String get forecastResearchWarning => _s('forecastResearchWarning');
   String get preictalProb => _s('preictalProb');
   String get leadTime => _s('leadTime');
   String get forecastSourceModel => _s('forecastSourceModel');
@@ -994,7 +995,8 @@ const Map<String, String> _ar = {
   'severityInfo': 'معلومة',
 
   'forecastSection': 'التنبؤ',
-  'preictalProb': 'احتمال ما قبل النوبة',
+  'forecastResearchWarning': 'درجة بحثية غير معتمدة طبيًا، وليست احتمالًا مُعايرًا لحدوث نوبة. لا يمكن تقدير وقت النوبة من هذه الدرجة أو الاعتماد عليها لاتخاذ قرار علاجي.',
+  'preictalProb': 'درجة النموذج التجريبية',
   'leadTime': 'زمن الاستباق',
   'forecastSourceModel': 'نموذج تنبؤ عصبي (CNN-LSTM)',
   'forecastSourceHeuristic': 'محاكاة تنبؤية',
@@ -1567,7 +1569,8 @@ const Map<String, String> _en = {
   'severityInfo': 'Info',
 
   'forecastSection': 'Forecast',
-  'preictalProb': 'Preictal probability',
+  'forecastResearchWarning': 'Unvalidated research score, not a calibrated seizure probability. Seizure onset time cannot be estimated from this score. Do not use it for treatment decisions.',
+  'preictalProb': 'Experimental model score',
   'leadTime': 'Lead time',
   'forecastSourceModel': 'Neural forecast model (CNN-LSTM)',
   'forecastSourceHeuristic': 'Simulated forecast',

@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app import alert_outbox
-from app.preprocessing import extract_features
 from app.schemas import AnalyzeResponse, RiskLabel, VitalWindow
 from app.auth import authorize_patient_access, get_optional_principal, require_role
 
@@ -33,9 +32,8 @@ def evaluate_alert(
 ):
     """Analyze a window and build an alert payload when high_risk is detected."""
     authorize_patient_access(body.patient_id, principal)
-    features = extract_features(body.window)
-    classifier = request.app.state.classifier
-    label, confidence = classifier.predict(features)
+    result = request.app.state.classifier.predict_window(body.window)
+    label, confidence = result.label, result.confidence
     should_notify = label == "high_risk"
     severity = {"stable": "info", "watch": "warning", "high_risk": "critical"}[label]
     message = {

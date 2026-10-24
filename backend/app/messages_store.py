@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
+import json
 
-from sqlalchemy import desc, insert, select, update
+from sqlalchemy import select
 
-from app.database import connection, messages, transaction
+from app.database import connection, messages, transaction, upsert
 
 
 def _now() -> str:
@@ -36,6 +37,7 @@ def create_message(
     sender_role: str,
     channel_type: str,
     content: str,
+    client_message_id: str | None = None,
 ) -> dict:
     if channel_type not in ("doctor_patient", "family_patient"):
         raise ValueError(f"Invalid channel_type: {channel_type}")
@@ -43,11 +45,13 @@ def create_message(
     if not content:
         raise ValueError("Message content cannot be empty")
 
-    msg_id = str(uuid4())
+    msg_id = str(uuid5(NAMESPACE_URL, json.dumps(
+        [patient_id, sender_id, client_message_id]
+    ))) if client_message_id else str(uuid4())
     created_at = _now()
     with transaction() as conn:
         conn.execute(
-            insert(messages).values(
+            upsert(messages, dict(
                 id=msg_id,
                 patient_id=patient_id,
                 sender_id=sender_id,
@@ -57,19 +61,14 @@ def create_message(
                 content=content,
                 created_at=created_at,
                 read_at=None,
-            )
+            )).on_conflict_do_nothing(index_elements=["id"])
         )
-    return {
-        "id": msg_id,
-        "patientId": patient_id,
-        "senderId": sender_id,
-        "senderName": sender_name,
-        "senderRole": sender_role,
-        "channelType": channel_type,
-        "content": content,
-        "createdAt": created_at,
-        "readAt": None,
-    }
+        row = conn.execute(select(messages).where(messages.c.id == msg_id)).one()
+        saved = _message(row)
+        if saved["content"] != content or saved["channelType"] != channel_type:
+            raise ValueError("client_message_id already used for a different message")
+        return saved
+
 
 
 def list_messages(
@@ -77,11 +76,15 @@ def list_messages(
     channel_type: str | None = None,
     limit: int = 100,
     offset: int = 0,
+    latest: bool = False,
 ) -> list[dict]:
     query = select(messages).where(messages.c.patient_id == patient_id)
     if channel_type:
         query = query.where(messages.c.channel_type == channel_type)
-    query = query.order_by(messages.c.created_at.asc()).limit(limit).offset(offset)
+    ordering = (messages.c.created_at.desc(), messages.c.id.desc()) if latest else (
+        messages.c.created_at.asc(), messages.c.id.asc()
+    )
+    query = query.order_by(*ordering).limit(limit).offset(offset)
     with connection() as conn:
         rows = conn.execute(query).all()
-        return [_message(r) for r in rows]
+        return [_message(r) for r in (reversed(rows) if latest else rows)]

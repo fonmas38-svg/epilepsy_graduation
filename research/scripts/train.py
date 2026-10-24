@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from evaluate_holdout import sha256
 from pathlib import Path
 
 import numpy as np
@@ -94,7 +95,7 @@ class ArrayDS(Dataset):
 
 # ---------------------------- metrics ----------------------------
 def clinical_metrics(y_true, y_prob, fs, win_sec, threshold=0.5):
-    """Sensitivity, specificity, FPR/hour at a decision threshold."""
+    """Window sensitivity and specificity; event rates cannot be derived here."""
     y_pred = (y_prob >= threshold).astype(int)
     tp = int(((y_pred == 1) & (y_true == 1)).sum())
     fn = int(((y_pred == 0) & (y_true == 1)).sum())
@@ -102,24 +103,22 @@ def clinical_metrics(y_true, y_prob, fs, win_sec, threshold=0.5):
     tn = int(((y_pred == 0) & (y_true == 0)).sum())
     sens = tp / (tp + fn) if (tp + fn) else 0.0
     spec = tn / (tn + fp) if (tn + fp) else 0.0
-    # FPR/hour: false positives per hour of NEGATIVE (interictal) data seen
-    neg_hours = (tn + fp) * win_sec / 3600.0
-    fpr_h = fp / neg_hours if neg_hours > 0 else 0.0
     return {
         "threshold": round(float(threshold), 3),
         "sensitivity": round(sens, 4), "specificity": round(spec, 4),
-        "fpr_per_hour": round(fpr_h, 4),
+        "fpr_per_hour": None,
+        "window_false_positive_rate": round(1 - spec, 4),
         "tp": tp, "fn": fn, "fp": fp, "tn": tn,
     }
 
 
 def best_threshold_for_target(y_true, y_prob, fs, win_sec, min_sens=0.8):
-    """Pick the threshold with lowest FPR/h that still reaches min_sens."""
+    """Pick the validation threshold with lowest window FPR reaching min_sens."""
     best = None
     for t in np.linspace(0.05, 0.95, 19):
         m = clinical_metrics(y_true, y_prob, fs, win_sec, t)
         if m["sensitivity"] >= min_sens:
-            if best is None or m["fpr_per_hour"] < best["fpr_per_hour"]:
+            if best is None or m["window_false_positive_rate"] < best["window_false_positive_rate"]:
                 best = m
     return best or clinical_metrics(y_true, y_prob, fs, win_sec, 0.5)
 
@@ -177,7 +176,7 @@ def train(data, fs, win_sec, loss_kind="focal", epochs=12, bs=128, lr=1e-3, seed
         j = vm["sensitivity"] + vm["specificity"] - 1.0
         print(f"ep{ep:02d} train_loss={tr_loss:.4f} val_loss={va_loss:.4f} "
               f"val_sens={vm['sensitivity']:.3f} val_spec={vm['specificity']:.3f} "
-              f"val_fpr/h={vm['fpr_per_hour']:.3f} J={j:.3f}")
+              f"val_window_fpr={vm['window_false_positive_rate']:.3f} J={j:.3f}")
         if j > best_j:
             best_j = j
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
@@ -201,14 +200,10 @@ def train(data, fs, win_sec, loss_kind="focal", epochs=12, bs=128, lr=1e-3, seed
         "val_tuned_threshold": tuned,
         "test_at_0.5": test_default,
         "test_at_tuned_threshold": test_tuned,
-        "note": "Sensitivity + FPR/h are the reported metrics; accuracy omitted by design.",
-        "caveat": (
-            "FPR/hour is only physically meaningful on CONTINUOUS recordings "
-            "(CHB-MIT/Siena). Bonn windows are isolated ~1s segments, so its FPR/h "
-            "is not a real alarm rate -- use specificity for Bonn instead."
-            if tag == "bonn" else
-            "FPR/hour computed over continuous interictal data."
-        ),
+        "weights_sha256": sha256(MODELS / f"cnn_lstm_{tag}.pt"),
+        "clinically_validated": False,
+        "note": "Window-level research metrics. Threshold selected on validation data only.",
+        "caveat": "Event sensitivity, false alarms/hour and lead time require continuous recordings and an explicit alarm policy.",
     }
     (RESULTS / f"metrics_{tag}.json").write_text(json.dumps(report, indent=2))
     print("\n=== TEST (default 0.5) ===", json.dumps(test_default, indent=2))

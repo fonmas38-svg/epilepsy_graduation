@@ -5,7 +5,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI):
     if settings.is_production:
         notification_delivery.validate_configuration()
     app.state.classifier = RiskClassifier.load()
-    app.state.device_hub = DeviceHub(window_size=128)
+    app.state.device_hub = DeviceHub()
     logging.getLogger("epilepsy").info(
         "startup: active engine = %s",
         app.state.classifier.engine_info()["active_engine"],
@@ -164,7 +164,9 @@ if _admin_dist.exists():
     @app.get("/admin", include_in_schema=False)
     @app.get("/admin/{full_path:path}", include_in_schema=False)
     async def serve_admin_dashboard(full_path: str = ""):
-        target_file = _admin_dist / full_path
+        target_file = (_admin_dist / full_path).resolve()
+        if not target_file.is_relative_to(_admin_dist.resolve()):
+            raise HTTPException(status_code=404, detail="Not found")
         if full_path and target_file.is_file():
             return FileResponse(target_file)
         return FileResponse(_admin_dist / "index.html")

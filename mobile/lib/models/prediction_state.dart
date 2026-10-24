@@ -41,7 +41,7 @@ class PredictionState {
   final Map<String, double>? drivers;
 
   /// Whether the forecast came from the real trained model vs. the heuristic.
-  bool get isModel => source == 'cnn_lstm_preictal';
+  bool get isModel => source == 'cnn_lstm_preictal' || source == 'cloud_preictal_net';
 
   bool get hasLeadTime => leadTimeMin != null;
 
@@ -54,7 +54,7 @@ class PredictionState {
     return RiskLabel.stable;
   }
 
-  static double? _d(dynamic v) => v is num ? v.toDouble() : null;
+  static double? _d(dynamic v) => v is num && v.isFinite ? v.toDouble() : null;
 
   /// Build from a merged `features` / assessment / device-status map (snake_case
   /// keys straight from the backend). Returns `null` when no `preictal_prob` is
@@ -82,12 +82,13 @@ class PredictionState {
     final clamped = prob.clamp(0.0, 1.0).toDouble();
     return PredictionState(
       preictalProb: clamped,
-      leadTimeMin: _d(map['lead_time_min']),
+      // Legacy score-derived lead times are not time-to-onset estimates.
+      leadTimeMin: null,
       horizonMin: _d(map['horizon_min']),
-      predicted: map['predicted'] as bool? ?? (clamped >= 0.6),
+      predicted: map['predicted'] == true,
       source: map['prediction_source'] as String?,
       trajectory: rawTraj is List
-          ? List<double>.from(rawTraj.map((e) => (e as num).toDouble()))
+          ? rawTraj.map(_d).whereType<double>().map((e) => e.clamp(0.0, 1.0).toDouble()).toList()
           : const [],
       drivers: drivers,
     );

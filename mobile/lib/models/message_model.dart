@@ -103,7 +103,7 @@ class ChatMessage {
       content: (map['content'] ?? '') as String,
       createdAt: parsedCreated,
       readAt: parsedRead,
-      synced: map['synced'] == 1 || map['synced'] == true,
+      synced: !map.containsKey('synced') || map['synced'] == 1 || map['synced'] == true,
     );
   }
 }

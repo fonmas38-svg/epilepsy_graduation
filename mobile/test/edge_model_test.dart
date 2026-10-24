@@ -23,8 +23,9 @@ void main() {
       final result = edgeService.infer(stableReading);
 
       expect(result.label, equals(RiskLabel.stable));
-      expect(result.features['edge_model'], contains('EdgeSeizureNet'));
-      expect(result.features['edge_sensitivity'], equals(0.9420));
+      expect(result.features['edge_model'], contains('heuristic'));
+      expect(result.features['model_executed'], isFalse);
+      expect(result.features.containsKey('edge_sensitivity'), isFalse);
       expect(result.features['offline'], isTrue);
       expect((result.features['ictal_prob'] as num).toDouble(), lessThan(0.35));
     });
@@ -45,11 +46,17 @@ void main() {
 
       expect(result.label, equals(RiskLabel.highRisk));
       expect(result.confidence, greaterThanOrEqualTo(0.50));
-      expect((result.features['ictal_prob'] as num).toDouble(), greaterThanOrEqualTo(0.50));
-      expect(result.features['prediction_source'], equals('edge_seizure_net'));
+      expect(
+        (result.features['ictal_prob'] as num).toDouble(),
+        greaterThanOrEqualTo(0.50),
+      );
+      expect(
+        result.features['prediction_source'],
+        equals('simulated_heuristic'),
+      );
     });
 
-    test('forecasts preictal rising pattern with lead time', () {
+    test('reports a research score without inventing time to onset', () {
       final preictalReading = VitalReading(
         id: 'read-3',
         patientId: 'patient-test',
@@ -63,7 +70,7 @@ void main() {
       final result = edgeService.infer(preictalReading, horizonMin: 30.0);
 
       expect(result.features['horizon_min'], equals(30.0));
-      expect(result.features['lead_time_min'], isNotNull);
+      expect(result.features['lead_time_min'], isNull);
       expect(result.features['preictal_prob'], isNotNull);
     });
   });

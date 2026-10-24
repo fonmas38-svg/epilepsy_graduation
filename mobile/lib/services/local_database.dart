@@ -64,7 +64,10 @@ class LocalDatabase {
     final dbPath = await getDatabasesPath();
     final path = p.join(dbPath, 'epilepsy_monitor.db');
     // 256-bit key from secure storage (iOS Keychain / Android Keystore).
-    final key = await SecureStore.instance.readOrCreateSecret(_kDbKey, byteLength: 32);
+    final key = await SecureStore.instance.readOrCreateSecret(
+      _kDbKey,
+      byteLength: 32,
+    );
     return openDatabase(
       path,
       version: _dbVersion,
@@ -335,25 +338,23 @@ class LocalDatabase {
 
   Future<void> insertReading(VitalReading reading) async {
     final db = await database;
-    await db.insert(
-      'readings',
-      {
-        'id': reading.id,
-        'patientId': reading.patientId,
-        'timestamp': reading.timestamp.toIso8601String(),
-        'eeg': encodeSignal(reading.eeg),
-        'ecg': encodeSignal(reading.ecg),
-        'motion': encodeSignal(reading.motion),
-        'hr': reading.hr,
-        'synced': reading.synced ? 1 : 0,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('readings', {
+      'id': reading.id,
+      'patientId': reading.patientId,
+      'timestamp': reading.timestamp.toIso8601String(),
+      'eeg': encodeSignal(reading.eeg),
+      'ecg': encodeSignal(reading.ecg),
+      'motion': encodeSignal(reading.motion),
+      'hr': reading.hr,
+      'synced': reading.synced ? 1 : 0,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
     await _pruneOld(db, reading.patientId);
   }
 
   Future<void> _pruneOld(Database db, String patientId) async {
-    final cutoff = DateTime.now().subtract(AppConfig.localRetention).toIso8601String();
+    final cutoff = DateTime.now()
+        .subtract(AppConfig.localRetention)
+        .toIso8601String();
     await db.delete(
       'readings',
       where: 'patientId = ? AND timestamp < ?',
@@ -361,7 +362,10 @@ class LocalDatabase {
     );
   }
 
-  Future<List<VitalReading>> recentReadings(String patientId, {int limit = 120}) async {
+  Future<List<VitalReading>> recentReadings(
+    String patientId, {
+    int limit = 120,
+  }) async {
     final db = await database;
     final rows = await db.query(
       'readings',
@@ -422,19 +426,15 @@ class LocalDatabase {
 
   Future<void> insertAssessment(RiskAssessment a) async {
     final db = await database;
-    await db.insert(
-      'assessments',
-      {
-        'id': a.id,
-        'patientId': a.patientId,
-        'timestamp': a.timestamp.toIso8601String(),
-        'label': a.label.apiValue,
-        'confidence': a.confidence,
-        'features': jsonEncode(a.features),
-        'processingMs': a.processingMs,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('assessments', {
+      'id': a.id,
+      'patientId': a.patientId,
+      'timestamp': a.timestamp.toIso8601String(),
+      'label': a.label.apiValue,
+      'confidence': a.confidence,
+      'features': jsonEncode(a.features),
+      'processingMs': a.processingMs,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<RiskAssessment?> latestAssessment(String patientId) async {
@@ -454,12 +454,17 @@ class LocalDatabase {
       timestamp: DateTime.parse(r['timestamp'] as String),
       label: RiskLabelX.fromApi(r['label'] as String),
       confidence: (r['confidence'] as num).toDouble(),
-      features: Map<String, dynamic>.from(jsonDecode(r['features'] as String) as Map),
+      features: Map<String, dynamic>.from(
+        jsonDecode(r['features'] as String) as Map,
+      ),
       processingMs: (r['processingMs'] as num).toDouble(),
     );
   }
 
-  Future<List<RiskAssessment>> assessmentsFor(String patientId, {int limit = 100}) async {
+  Future<List<RiskAssessment>> assessmentsFor(
+    String patientId, {
+    int limit = 100,
+  }) async {
     final db = await database;
     final rows = await db.query(
       'assessments',
@@ -476,18 +481,19 @@ class LocalDatabase {
             timestamp: DateTime.parse(r['timestamp'] as String),
             label: RiskLabelX.fromApi(r['label'] as String),
             confidence: (r['confidence'] as num).toDouble(),
-            features: Map<String, dynamic>.from(jsonDecode(r['features'] as String) as Map),
+            features: Map<String, dynamic>.from(
+              jsonDecode(r['features'] as String) as Map,
+            ),
             processingMs: (r['processingMs'] as num).toDouble(),
           ),
         )
         .toList();
   }
 
-  Future<void> insertAlert(AlertItem alert) async {
+  Future<void> insertAlert(AlertItem alert, {OutboxItem? delivery}) async {
     final db = await database;
-    await db.insert(
-      'alerts',
-      {
+    await db.transaction((txn) async {
+      await txn.insert('alerts', {
         'id': alert.id,
         'patientId': alert.patientId,
         'timestamp': alert.timestamp.toIso8601String(),
@@ -496,9 +502,15 @@ class LocalDatabase {
         'recipients': jsonEncode(alert.recipients),
         'acknowledged': alert.acknowledged ? 1 : 0,
         'acknowledgedBy': alert.acknowledgedBy,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      if (delivery != null) {
+        await txn.insert(
+          'outbox',
+          delivery.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+    });
   }
 
   Future<List<AlertItem>> alertsFor(String patientId, {int limit = 50}) async {
@@ -518,7 +530,9 @@ class LocalDatabase {
             timestamp: DateTime.parse(r['timestamp'] as String),
             severity: r['severity'] as String,
             message: r['message'] as String,
-            recipients: List<String>.from(jsonDecode(r['recipients'] as String) as List),
+            recipients: List<String>.from(
+              jsonDecode(r['recipients'] as String) as List,
+            ),
             acknowledged: (r['acknowledged'] as int) == 1,
             acknowledgedBy: r['acknowledgedBy'] as String?,
           ),
@@ -539,23 +553,22 @@ class LocalDatabase {
   // -------------------------------------------------------------- medications
   Future<void> insertMedication(Medication m) async {
     final db = await database;
-    await db.insert(
-      'medications',
-      {
-        'id': m.id,
-        'patientId': m.patientId,
-        'name': m.name,
-        'dosage': m.dosage,
-        'schedule': m.schedule,
-        'times': jsonEncode(m.times),
-        'active': m.active ? 1 : 0,
-        'createdAt': m.createdAt.toIso8601String(),
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('medications', {
+      'id': m.id,
+      'patientId': m.patientId,
+      'name': m.name,
+      'dosage': m.dosage,
+      'schedule': m.schedule,
+      'times': jsonEncode(m.times),
+      'active': m.active ? 1 : 0,
+      'createdAt': m.createdAt.toIso8601String(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<List<Medication>> medicationsFor(String patientId, {bool activeOnly = false}) async {
+  Future<List<Medication>> medicationsFor(
+    String patientId, {
+    bool activeOnly = false,
+  }) async {
     final db = await database;
     final rows = await db.query(
       'medications',
@@ -564,56 +577,88 @@ class LocalDatabase {
       orderBy: 'createdAt DESC',
     );
     return rows
-        .map((r) => Medication(
-              id: r['id'] as String,
-              patientId: r['patientId'] as String,
-              name: r['name'] as String,
-              dosage: r['dosage'] as String? ?? '',
-              schedule: r['schedule'] as String? ?? '',
-              times: List<String>.from(jsonDecode(r['times'] as String? ?? '[]') as List),
-              active: (r['active'] as int? ?? 1) == 1,
-              createdAt: DateTime.tryParse(r['createdAt'] as String? ?? '') ?? DateTime.now(),
-            ))
+        .map(
+          (r) => Medication(
+            id: r['id'] as String,
+            patientId: r['patientId'] as String,
+            name: r['name'] as String,
+            dosage: r['dosage'] as String? ?? '',
+            schedule: r['schedule'] as String? ?? '',
+            times: List<String>.from(
+              jsonDecode(r['times'] as String? ?? '[]') as List,
+            ),
+            active: (r['active'] as int? ?? 1) == 1,
+            createdAt:
+                DateTime.tryParse(r['createdAt'] as String? ?? '') ??
+                DateTime.now(),
+          ),
+        )
         .toList();
   }
 
   Future<void> setMedicationActive(String id, bool active) async {
     final db = await database;
-    await db.update('medications', {'active': active ? 1 : 0},
-        where: 'id = ?', whereArgs: [id]);
+    await db.update(
+      'medications',
+      {'active': active ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> deleteMedication(String id) async {
     final db = await database;
     await db.delete('medications', where: 'id = ?', whereArgs: [id]);
-    await db.delete('medication_logs', where: 'medicationId = ?', whereArgs: [id]);
+    await db.delete(
+      'medication_logs',
+      where: 'medicationId = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> insertMedicationLog(MedicationLog log) async {
     final db = await database;
-    await db.insert('medication_logs', log.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert(
+      'medication_logs',
+      log.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
-  Future<List<MedicationLog>> medicationLogsFor(String patientId, {DateTime? since}) async {
+  Future<List<MedicationLog>> medicationLogsFor(
+    String patientId, {
+    DateTime? since,
+  }) async {
     final db = await database;
     final rows = await db.query(
       'medication_logs',
-      where: since == null ? 'patientId = ?' : 'patientId = ? AND scheduledFor >= ?',
-      whereArgs: since == null ? [patientId] : [patientId, since.toIso8601String()],
+      where: since == null
+          ? 'patientId = ?'
+          : 'patientId = ? AND scheduledFor >= ?',
+      whereArgs: since == null
+          ? [patientId]
+          : [patientId, since.toIso8601String()],
       orderBy: 'scheduledFor DESC',
     );
-    return rows.map((r) => MedicationLog.fromMap(Map<String, dynamic>.from(r))).toList();
+    return rows
+        .map((r) => MedicationLog.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
   }
 
   // --------------------------------------------------------- prediction events
   Future<void> insertPredictionEvent(PredictionEvent e) async {
     final db = await database;
-    await db.insert('prediction_events', e.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert(
+      'prediction_events',
+      e.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
-  Future<List<PredictionEvent>> predictionEventsFor(String patientId, {int limit = 100}) async {
+  Future<List<PredictionEvent>> predictionEventsFor(
+    String patientId, {
+    int limit = 100,
+  }) async {
     final db = await database;
     final rows = await db.query(
       'prediction_events',
@@ -622,7 +667,9 @@ class LocalDatabase {
       orderBy: 'firedAt DESC',
       limit: limit,
     );
-    return rows.map((r) => PredictionEvent.fromMap(Map<String, dynamic>.from(r))).toList();
+    return rows
+        .map((r) => PredictionEvent.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
   }
 
   // ------------------------------------------------------------------- care (v3)
@@ -900,17 +947,25 @@ class LocalDatabase {
 
   /// Oldest first: writes replay in the order the user made them, so a create
   /// can never be applied after the update that followed it.
-  Future<List<OutboxItem>> pendingOutbox({int limit = 100}) async {
+  Future<List<OutboxItem>> pendingOutbox({
+    int limit = 100,
+    String? onlyPath,
+    String? excludePath,
+    String? ownerId,
+  }) async {
     final db = await database;
     final rows = await db.query(
       'outbox',
-      where: 'attempts < ?',
-      whereArgs: [OutboxItem.maxAttempts],
+      where:
+          'attempts < ?${onlyPath != null ? ' AND path = ?' : ''}${excludePath != null ? ' AND path != ?' : ''}',
+      whereArgs: [OutboxItem.maxAttempts, ?onlyPath, ?excludePath],
       orderBy: 'createdAt ASC',
-      limit: limit,
+      limit: ownerId == null ? limit : null,
     );
     return rows
         .map((r) => OutboxItem.fromMap(Map<String, dynamic>.from(r)))
+        .where((item) => ownerId == null || item.body['_ownerId'] == ownerId)
+        .take(limit)
         .toList();
   }
 
@@ -995,25 +1050,40 @@ class LocalDatabase {
       'messages',
       where: 'patientId = ? AND channelType = ?',
       whereArgs: [patientId, channelType],
-      orderBy: 'createdAt ASC',
+      orderBy: 'createdAt DESC, id DESC',
       limit: limit,
     );
-    return rows.map((r) => ChatMessage.fromMap(Map<String, dynamic>.from(r))).toList();
+    return rows.reversed
+        .map((r) => ChatMessage.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
   }
 
-  Future<List<ChatMessage>> unsyncedMessages() async {
+  Future<List<ChatMessage>> unsyncedMessages(String senderId) async {
     final db = await database;
     final rows = await db.query(
       'messages',
-      where: 'synced = 0',
+      where: 'synced = 0 AND senderId = ?',
+      whereArgs: [senderId],
       orderBy: 'createdAt ASC',
       limit: 50,
     );
-    return rows.map((r) => ChatMessage.fromMap(Map<String, dynamic>.from(r))).toList();
+    return rows
+        .map((r) => ChatMessage.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
   }
 
-  Future<void> markMessageSynced(String id) async {
+  Future<void> replacePendingMessage(
+    String id,
+    ChatMessage serverMessage,
+  ) async {
     final db = await database;
-    await db.update('messages', {'synced': 1}, where: 'id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      await txn.delete('messages', where: 'id = ?', whereArgs: [id]);
+      await txn.insert(
+        'messages',
+        serverMessage.copyWith(synced: true).toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    });
   }
 }

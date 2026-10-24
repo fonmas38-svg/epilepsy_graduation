@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:epilepsy_monitor/core/enums.dart';
 import 'package:epilepsy_monitor/models/message_model.dart';
@@ -6,6 +8,26 @@ import 'package:epilepsy_monitor/models/prediction_state.dart';
 import 'package:epilepsy_monitor/services/signal_simulator.dart';
 
 void main() {
+  test('simulator defaults match the current model input contract', () {
+    final reading = SignalSimulator(random: Random(42)).generate(patientId: 'p1');
+    expect(reading.eeg.length, 262);
+    expect(SignalSimulator.sampleRateHz, 256);
+  });
+
+  test('packet boundaries do not change simulated signal frequency', () {
+    final whole = SignalSimulator(random: Random(42))
+        .generate(patientId: 'p1', samples: 256);
+    final split = SignalSimulator(random: Random(42));
+    final parts = List.generate(8, (_) => split.generate(patientId: 'p1', samples: 32));
+    expect(parts.expand((p) => p.eeg).toList(), whole.eeg);
+    expect(parts.expand((p) => p.ecg).toList(), whole.ecg);
+    expect(parts.expand((p) => p.motion).toList(), whole.motion);
+  });
+
+  test('empty simulator windows are rejected before inference', () {
+    expect(() => SignalSimulator().generate(patientId: 'p1', samples: 0), throwsRangeError);
+  });
+
   test('simulator generates expected sample counts', () {
     final sim = SignalSimulator();
     final reading = sim.generate(patientId: 'p1', pattern: RiskLabel.stable, samples: 32);

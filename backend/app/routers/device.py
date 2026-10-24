@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException, Request, Depends
 from pydantic import BaseModel, Field, model_validator
+from typing import Literal
 
-from app.device_hub import DeviceHub, DeviceSample
-from app.preprocessing import extract_features
+from app.device_hub import DEVICE_WINDOW_SAMPLES, DeviceHub, DeviceSample
 from app.schemas import VitalWindow, validate_utc_timestamp
 from app.auth import (
     get_current_principal,
@@ -35,6 +35,8 @@ class SampleIn(BaseModel):
         values = (self.eeg, self.ecg, self.motion)
         if not all(math.isfinite(value) for value in values):
             raise ValueError("sample values must be finite")
+        if any(abs(value) > 1e6 for value in values):
+            raise ValueError("sample exceeds supported numerical input range")
         if self.hr is not None and (not math.isfinite(self.hr) or not 20 <= self.hr <= 240):
             raise ValueError("hr must be finite and between 20 and 240 bpm")
         validate_utc_timestamp(self.ts, "ts", enforce_max_age=True)
@@ -42,6 +44,9 @@ class SampleIn(BaseModel):
 
 
 class IngestRequest(BaseModel):
+    # Current gateway is a normalized prototype contract, not a raw EEG adapter.
+    sample_rate_hz: Literal[256] = 256
+    signal_units: Literal["normalized_demo"] = "normalized_demo"
     patient_id: str = Field(..., min_length=1)
     device_id: str = Field(default="headband-01")
     samples: list[SampleIn] = Field(..., min_length=1, max_length=512)
@@ -104,6 +109,24 @@ def get_hub(request: Request) -> DeviceHub:
     return request.app.state.device_hub
 
 
+@router.get("/contract")
+def device_contract():
+    return {
+        "version": 1, "intended_use": "research_and_simulation_only",
+        "sample_rate_hz": 256, "eeg_channels": 1,
+        "signal_units": "normalized_demo", "max_batch_samples": 512,
+        "analysis_window_samples": DEVICE_WINDOW_SAMPLES,
+        "channels": ["eeg", "ecg", "motion", "hr"],
+        "physical_device_compatible": False,
+        "requirements_for_physical_device": [
+            "Document sensor, electrode montage and reference, units and calibration",
+            "Implement validated sampling, timestamps, signal quality and missing-channel handling",
+            "Match the deployed model preprocessing and training input contract",
+            "Validate on independent continuous annotated patient recordings",
+        ],
+    }
+
+
 @router.post("/ingest")
 def ingest_samples(
     body: IngestRequest,
@@ -147,8 +170,9 @@ def ingest_window(
         timestamp=body.timestamp,
         patient_id=body.patient_id,
     )
-    features = extract_features(window)
-    label, confidence = request.app.state.classifier.predict(features)
+    result = request.app.state.classifier.predict_window(window)
+    features = result.features
+    label, confidence = result.label, result.confidence
 
     hub = get_hub(request)
     samples = [

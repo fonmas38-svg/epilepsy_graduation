@@ -791,12 +791,12 @@ class _CaregiverLocationTrackerCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'الموقع الجغرافي للمريض (مباشر)',
+                      'آخر موقع شاركه المريض',
                       style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
                     ),
                     Text(
                       loc != null
-                          ? 'آخر إحداثيات تم مشاركتها من جهاز المريض'
+                          ? 'وقت المشاركة: ${loc['updatedAt'] ?? 'غير معروف'}. ليس تتبعًا حيًا.${loc['accuracy'] == null ? '' : ' دقة تقريبية: ${loc['accuracy']} متر.'}'
                           : 'لم يقم المريض بمشاركة موقعه بعد',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,

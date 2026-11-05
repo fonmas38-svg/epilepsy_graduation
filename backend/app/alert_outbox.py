@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from uuid import uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.engine import Connection
 
 from app.database import (
@@ -40,6 +40,24 @@ log = logging.getLogger("epilepsy.outbox")
 MAX_ATTEMPTS = 5
 BASE_BACKOFF_SECONDS = 10
 PENDING, SENT, FAILED, DEAD = "pending", "sent", "failed", "dead"
+LEASE_SECONDS = 120
+
+
+def _available_lease(now: str):
+    return or_(alert_outbox.c.lease_expires_at.is_(None), alert_outbox.c.lease_expires_at <= now)
+
+
+def _claim(entry_id: str) -> str | None:
+    now = _now()
+    token = str(uuid4())
+    with transaction() as conn:
+        changed = conn.execute(update(alert_outbox).where(
+            alert_outbox.c.id == entry_id,
+            alert_outbox.c.status.in_([PENDING, FAILED]),
+            alert_outbox.c.next_attempt_at <= _iso(now),
+            _available_lease(_iso(now)),
+        ).values(lease_token=token, lease_expires_at=_iso(now + timedelta(seconds=LEASE_SECONDS))))
+        return token if changed.rowcount else None
 
 
 def _now() -> datetime:
@@ -103,28 +121,33 @@ def due_entries(limit: int = 20) -> list[dict]:
             select(alert_outbox)
             .where(alert_outbox.c.status.in_([PENDING, FAILED]))
             .where(alert_outbox.c.next_attempt_at <= now)
+            .where(_available_lease(now))
             .order_by(alert_outbox.c.next_attempt_at)
             .limit(limit)
         ).all()
     return [_row_to_dict(row) for row in rows]
 
 
-def mark_sent(entry_id: str) -> None:
+def mark_sent(entry_id: str, lease_token: str | None = None) -> None:
     now = _iso(_now())
     with transaction() as conn:
         conn.execute(
             update(alert_outbox)
             .where(alert_outbox.c.id == entry_id)
-            .values(status=SENT, updated_at=now, last_error=None)
+            .where(alert_outbox.c.lease_token == lease_token if lease_token else True)
+            .values(status=SENT, updated_at=now, last_error=None, lease_token=None, lease_expires_at=None)
         )
 
 
-def mark_failure(entry_id: str, error: str) -> str:
+def mark_failure(entry_id: str, error: str, lease_token: str | None = None) -> str:
     """Record a failed attempt and return the resulting status."""
     now = _now()
     with transaction() as conn:
         row = conn.execute(
-            select(alert_outbox.c.attempts).where(alert_outbox.c.id == entry_id)
+            select(alert_outbox.c.attempts).where(
+                alert_outbox.c.id == entry_id,
+                alert_outbox.c.lease_token == lease_token if lease_token else True,
+            ).with_for_update()
         ).first()
         if row is None:
             return DEAD
@@ -136,6 +159,8 @@ def mark_failure(entry_id: str, error: str) -> str:
             .where(alert_outbox.c.id == entry_id)
             .values(
                 status=status,
+                lease_token=None,
+                lease_expires_at=None,
                 attempts=attempts,
                 # Keep a due date even when dead so ordering stays well-defined.
                 next_attempt_at=_iso(
@@ -153,18 +178,23 @@ def process_once(sender: Callable[[dict], None], limit: int = 20) -> dict[str, i
     kill the worker loop."""
     result = {"processed": 0, "sent": 0, "failed": 0, "dead": 0}
     for entry in due_entries(limit):
+        # Claim immediately before sending, not an entire batch whose leases
+        # could expire while earlier network requests are still in progress.
+        lease_token = _claim(entry["id"])
+        if lease_token is None:
+            continue
         result["processed"] += 1
         try:
             sender(entry["payload"])
         except Exception as exc:  # noqa: BLE001 - failure is an expected path
-            status = mark_failure(entry["id"], f"{type(exc).__name__}: {exc}")
+            status = mark_failure(entry["id"], f"{type(exc).__name__}: {exc}", lease_token)
             result["dead" if status == DEAD else "failed"] += 1
             log.warning(
                 "alert delivery failed (attempt recorded, status=%s) alert_id=%s: %s",
                 status, entry["alert_id"], exc,
             )
             continue
-        mark_sent(entry["id"])
+        mark_sent(entry["id"], lease_token)
         result["sent"] += 1
     return result
 

@@ -79,39 +79,43 @@ def deliver(payload: dict) -> dict:
 
     messaging = _firebase_messaging()
     severity = str(payload.get("severity") or "critical")
-    title = "Critical seizure alert" if severity == "critical" else "Patient alert"
-    message = messaging.MulticastMessage(
-        notification=messaging.Notification(
-            title=title,
-            body=str(payload.get("message") or "Patient requires attention."),
-        ),
-        data={
-            "patient_id": patient_id,
-            "alert_id": str(payload.get("id") or ""),
-            "severity": severity,
-        },
-        tokens=tokens,
-    )
-    response = messaging.send_each_for_multicast(message)
-    invalid = [
-        token for token, item in zip(tokens, response.responses)
-        if not item.success and _is_invalid_token_error(item.exception)
-    ]
-    if invalid:
-        push_tokens_store.remove_tokens(invalid)
-    transient_failures = response.failure_count - len(invalid)
+    success_count, failure_count = 0, 0
+    invalid = []
+    for offset in range(0, len(tokens), 500):
+        batch = tokens[offset:offset + 500]
+        message = messaging.MulticastMessage(
+            notification=messaging.Notification(
+                title="Patient alert",
+                body="Open the app to review the alert securely.",
+            ),
+            data={
+                "patient_id": patient_id, "alert_id": str(payload.get("id") or ""),
+                "severity": severity,
+                "event_kind": str((payload.get("details") or {}).get("event_kind") or "alert"),
+            },
+            tokens=batch,
+        )
+        response = messaging.send_each_for_multicast(message)
+        success_count += response.success_count
+        failure_count += response.failure_count
+        rejected = [token for token, item in zip(batch, response.responses)
+                    if not item.success and _is_invalid_token_error(item.exception)]
+        if rejected:
+            push_tokens_store.remove_tokens(rejected)
+            invalid.extend(rejected)
+    transient_failures = failure_count - len(invalid)
     if transient_failures > 0:
         # Successful tokens may receive a duplicate on retry. The outbox is
         # intentionally at-least-once: duplicate medical alerts are safer than loss.
         raise RuntimeError(f"FCM transient failures: {transient_failures}")
-    if response.success_count == 0:
+    if success_count == 0:
         raise RuntimeError("FCM delivered to no recipients; invalid tokens were removed")
     log.info("FCM alert dispatched", extra={
         "patient_id": patient_id, "severity": severity, "channel": "fcm",
-        "success_count": response.success_count,
+        "success_count": success_count,
         "invalid_token_count": len(invalid),
     })
     return {
-        "channel": "fcm", "success": response.success_count,
-        "failure": response.failure_count, "invalid_tokens_removed": len(invalid),
+        "channel": "fcm", "success": success_count,
+        "failure": failure_count, "invalid_tokens_removed": len(invalid),
     }

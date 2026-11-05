@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:uuid/uuid.dart';
@@ -46,10 +47,12 @@ class SyncService {
   }
 
   Future<RiskAssessment> analyzeAndStore(VitalReading reading) async {
+    final owner = auth.currentUser?.uid;
+    if (owner == null) throw StateError('No active session');
     AnalyzeResult result;
     try {
-      if (await isOnline && await api.health()) {
-        result = await api.analyze(reading);
+      if (await isOnline && await api.health(null, const Duration(seconds: 2))) {
+        result = await api.analyze(reading).timeout(const Duration(seconds: 5));
       } else {
         result = _offlineEdgeInference(reading);
       }
@@ -57,31 +60,25 @@ class SyncService {
       result = _offlineEdgeInference(reading);
     }
 
+    if (auth.currentUser?.uid != owner) throw StateError('Session changed during analysis');
     final assessment = RiskAssessment(
       id: _uuid.v4(),
       patientId: reading.patientId,
-      timestamp: DateTime.now(),
+      timestamp: reading.timestamp,
       label: result.label,
       confidence: result.confidence,
-      features: result.features,
+      features: {...result.features, 'reading_id': reading.id},
       processingMs: result.processingMs,
     );
-    await db.insertAssessment(assessment);
-    await auth.updatePatientStatus(reading.patientId, assessment.label);
-
-    if (await isOnline) {
-      cloudAssessments.putIfAbsent(reading.patientId, () => []);
-      cloudAssessments[reading.patientId]!.insert(0, assessment.toMap());
-      try {
-        if (await api.health()) {
-          await api.cloudSync(
-            patientId: reading.patientId,
-            reading: reading.toMap(),
-            assessment: assessment.toMap(),
-          );
-        }
-      } catch (_) {}
+    await db.insertAssessment(assessment, delivery: OutboxItem(
+      id: 'assessment-${assessment.id}', method: 'POST', path: '/cloud/sync',
+      body: {'_ownerId': owner, 'patient_id': reading.patientId,
+        'reading': reading.toMap(), 'assessment': assessment.toMap()}, createdAt: DateTime.now()));
+    if (auth.currentUser?.uid != owner) return assessment;
+    if (assessment.confidence > 0 && assessment.features['assessment_valid'] != false) {
+      await auth.updatePatientStatus(reading.patientId, assessment.label);
     }
+    if (result.features['offline'] != true) await flushPendingAlerts();
     return assessment;
   }
 
@@ -257,7 +254,8 @@ class SyncService {
     );
     await db.insertAlert(alert, delivery: delivery);
     cloudAlerts.putIfAbsent(alert.patientId, () => []).insert(0, alert.toMap());
-    await flushPendingAlerts();
+    // Persist first; a network timeout must not block an urgent local alert.
+    unawaited(flushPendingAlerts().catchError((Object _) {}));
   }
 
   bool _flushingAlerts = false;
@@ -278,6 +276,9 @@ class SyncService {
         final body = Map<String, Object?>.from(item.body)..remove('_ownerId');
         try {
           await api.sendJson(method: 'POST', path: '/cloud/sync', body: body);
+          if (auth.currentUser?.uid != owner) break;
+          final readingId = (body['reading'] as Map?)?['id'];
+          if (body['assessment'] != null && readingId is String) await db.markSynced([readingId]);
           await db.deleteOutbox(item.id);
         } catch (_) {
           // Keep the durable intent on all transport/server failures.
@@ -289,27 +290,42 @@ class SyncService {
     }
   }
 
+  final Set<String> _syncingPatients = {};
+
   Future<void> syncPending(String patientId) async {
-    if (!await isOnline) return;
-    await flushPendingAlerts();
-    final pending = await db.unsyncedReadings(patientId);
-    if (pending.isEmpty) return;
-    cloudReadings.putIfAbsent(patientId, () => []);
-    final synchronizedIds = <String>[];
-    for (final r in pending) {
-      try {
-        if (await api.health()) {
-          await api.cloudSync(patientId: patientId, reading: r.toMap());
-          cloudReadings[patientId]!.add(r.toMap());
-          synchronizedIds.add(r.id);
-        }
-      } catch (_) {
-        // Keep this row unsynchronized. A later connectivity tick retries it;
-        // marking the whole batch here used to lose rows after HTTP failures.
+    final owner = auth.currentUser?.uid;
+    if (owner != patientId || _syncingPatients.contains(patientId)) return;
+    _syncingPatients.add(patientId);
+    try {
+      if (!await isOnline || auth.currentUser?.uid != owner ||
+          !await api.health(null, const Duration(seconds: 2))) {
+        return;
       }
-    }
-    if (synchronizedIds.isNotEmpty) {
-      await db.markSynced(synchronizedIds);
+      await flushPendingAlerts();
+      final pending = await db.unsyncedReadings(patientId);
+      if (pending.isEmpty) return;
+      final assessments = await db.assessmentsFor(patientId, limit: 1000);
+      final byReading = <String, RiskAssessment>{};
+      for (final assessment in assessments) {
+        final readingId = assessment.features['reading_id'];
+        if (readingId is String) byReading.putIfAbsent(readingId, () => assessment);
+      }
+      cloudReadings.putIfAbsent(patientId, () => []);
+      for (final reading in pending) {
+        if (auth.currentUser?.uid != owner) break;
+        try {
+          final assessment = byReading[reading.id];
+          await api.cloudSync(patientId: patientId, reading: reading.toMap(), assessment: assessment?.toMap());
+          if (auth.currentUser?.uid != owner) break;
+          await db.markSynced([reading.id]);
+          cloudReadings[patientId]!.add(reading.toMap());
+        } catch (_) {
+          // Preserve the reading and its assessment for an idempotent retry.
+          break;
+        }
+      }
+    } finally {
+      _syncingPatients.remove(patientId);
     }
   }
 
@@ -328,55 +344,16 @@ class SyncService {
   }
 
   AnalyzeResult _offlineEdgeInference(VitalReading reading) {
-    try {
-      return EdgeModelService.instance.infer(reading, horizonMin: horizonMin);
-    } catch (_) {
-      return _offlineHeuristicFallback(reading);
+    // Real patients must not silently receive demo rules as a neural fallback.
+    if (auth.isDemoSession) {
+      try {
+        return EdgeModelService.instance.infer(reading, horizonMin: horizonMin);
+      } catch (_) {}
     }
-  }
-
-  AnalyzeResult _offlineHeuristicFallback(VitalReading reading) {
-    var score = 0.0;
-    if (reading.hr >= 110) {
-      score += 0.4;
-    } else if (reading.hr >= 90) {
-      score += 0.15;
-    }
-    final motionEnergy =
-        reading.motion.map((e) => e * e).fold<double>(0, (a, b) => a + b) /
-        (reading.motion.isEmpty ? 1 : reading.motion.length);
-    if (motionEnergy > 0.6) score += 0.35;
-    final eegPeak = reading.eeg.isEmpty
-        ? 0.0
-        : reading.eeg
-              .map((e) => e.abs())
-              .fold<double>(0, (a, b) => a > b ? a : b);
-    if (eegPeak > 1.5) score += 0.3;
-
-    final label = score >= 0.65
-        ? RiskLabel.highRisk
-        : score >= 0.3
-        ? RiskLabel.watch
-        : RiskLabel.stable;
-
-    const prealertThr = 0.6;
-    final preictalProb = score.clamp(0.0, 1.0).toDouble();
-    final leadTimeMin = horizonMin * (1.0 - preictalProb);
-    return AnalyzeResult(
-      label: label,
-      confidence: 0.6 + score / 4,
-      features: {
-        'hr_mean': reading.hr,
-        'motion_energy': motionEnergy,
-        'eeg_peak': eegPeak,
-        'offline': true,
-        'preictal_prob': double.parse(preictalProb.toStringAsFixed(4)),
-        'lead_time_min': double.parse(leadTimeMin.toStringAsFixed(2)),
-        'horizon_min': horizonMin,
-        'predicted': preictalProb >= prealertThr,
-        'prediction_source': 'simulated_heuristic',
-      },
-      processingMs: 1,
-    );
+    return AnalyzeResult(label: RiskLabel.watch, confidence: 0,
+      features: {'assessment_valid': false, 'offline': true,
+        'model_executed': false, 'clinically_validated': false,
+        'engine': 'unavailable', 'capability_reason': 'local_neural_runtime_not_integrated'},
+      processingMs: 0);
   }
 }

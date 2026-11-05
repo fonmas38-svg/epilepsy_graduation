@@ -104,7 +104,9 @@ async def lifespan(app: FastAPI):
             logging.getLogger("epilepsy").info(
                 "seeded admin account '%s'", seeded["user"]["username"]
             )
-    except Exception:  # pragma: no cover - never block startup on seeding
+    except Exception:
+        if settings.is_production:
+            raise
         logging.getLogger("epilepsy").exception("admin seeding failed")
 
     # Opt-out via OUTBOX_WORKER_ENABLED=0 (tests drive the drain deterministically).

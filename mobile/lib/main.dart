@@ -178,14 +178,14 @@ class _AppOverlayState extends State<_AppOverlay> {
                       child: Text('أنا بخير (${state.preAlertSecondsLeft})'),
                     ),
                   )
-                else if (state.auth.currentUser?.role == UserRole.patient &&
+                else if (state.auth.currentUser != null &&
                     state.lastAlert != null &&
                     !state.lastAlert!.acknowledged)
                   _TopBanner(
                     view: RiskView.danger,
                     icon: AppColors.iconFor(RiskView.danger),
                     title: state.lastAlert!.message,
-                    subtitle: l.activeAlertTitle,
+                    subtitle: '${l.activeAlertTitle} — ${state.lastAlert!.patientId}',
                     onTap: () => AppRouter.openAlert(
                       alertId: state.lastAlert!.id,
                       patientId: state.lastAlert!.patientId,

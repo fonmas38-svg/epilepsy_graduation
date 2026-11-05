@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from typing import Any
 from uuid import uuid4
 
@@ -47,26 +48,30 @@ def _payload(row) -> dict:
 
 
 def _upsert_patient(conn: Connection, patient_id: str, profile: dict[str, Any]) -> dict:
-    row = conn.execute(select(patients).where(patients.c.patient_id == patient_id)).first()
-    current = _patient(row) or {}
+    _ensure_patient(conn, patient_id)
+    row = conn.execute(select(patients).where(
+        patients.c.patient_id == patient_id,
+    ).with_for_update()).one()
+    current = _patient(row)
+    if not profile:
+        return current
     current.update(profile)
     now = _now()
     current.update({"patientId": patient_id, "updatedAt": now})
     values = {
-        "current_status": current.get("currentStatus"),
-        "last_updated": current.get("lastUpdated"),
         "updated_at": now,
         "profile_json": dump_json({
             key: value for key, value in current.items()
             if key not in {"patientId", "updatedAt", "currentStatus", "lastUpdated"}
         }),
     }
-    # Atomic upsert: a plain SELECT-then-INSERT loses the race when several
-    # devices report for the same (possibly new) patient at once.
-    conn.execute(
-        upsert(patients, {"patient_id": patient_id, **values})
-        .on_conflict_do_update(index_elements=[patients.c.patient_id], set_=values)
-    )
+    # Unrelated profile edits must never write an old status back over a fresh
+    # assessment. Only explicit administrative status edits touch these fields.
+    if "currentStatus" in profile:
+        values["current_status"] = profile["currentStatus"]
+    if "lastUpdated" in profile:
+        values["last_updated"] = profile["lastUpdated"]
+    conn.execute(update(patients).where(patients.c.patient_id == patient_id).values(**values))
     return current
 
 
@@ -87,6 +92,10 @@ def _ensure_patient(conn: Connection, patient_id: str) -> None:
 
 
 def _trim(conn: Connection, table, patient_id: str, keep: int) -> None:
+    # Circular demo history is not a medical retention policy. Production keeps
+    # records until an explicit archive/erasure process acts on them.
+    if os.getenv("APP_ENV", "demo").strip().lower() in {"production", "prod"}:
+        return
     stale = select(table.c.sequence).where(table.c.patient_id == patient_id).order_by(
         table.c.sequence.desc()).offset(keep)
     conn.execute(delete(table).where(table.c.sequence.in_(stale)))
@@ -134,11 +143,32 @@ def _add_assessment(conn: Connection, patient_id: str,
         captured_at=result.get("timestamp"), label=result.get("label"),
         payload_json=dump_json(result),
     ))
-    if inserted:
-        conn.execute(update(patients).where(patients.c.patient_id == patient_id).values(
-            current_status=result.get("label"), last_updated=result.get("timestamp"),
-            updated_at=_now(),
-        ))
+    raw_features = result.get('features')
+    features = raw_features if isinstance(raw_features, dict) else {}
+    raw_components = result.get('components') or features.get('components')
+    components = raw_components if isinstance(raw_components, dict) else {}
+    valid_projection = ((raw_features is None or isinstance(raw_features, dict))
+                        and (raw_components is None or isinstance(raw_components, dict))
+                        and features.get('assessment_valid', True)
+                        and components.get('assessment_valid', True)
+                        and result.get('source') not in ('dataset', 'bonn', 'simulation'))
+    if inserted and valid_projection:
+        # Compare actual instants (legacy rows may use Z or an offset). The
+        # caller holds the patient row while advancing this projection.
+        row = conn.execute(select(patients.c.last_updated).where(
+            patients.c.patient_id == patient_id,
+        ).with_for_update()).one()
+        def instant(value):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
+            except (AttributeError, TypeError, ValueError):
+                return None
+        incoming_at, current_at = instant(result.get("timestamp")), instant(row[0])
+        if incoming_at is not None and (current_at is None or incoming_at > current_at):
+            conn.execute(update(patients).where(patients.c.patient_id == patient_id).values(
+                current_status=result.get("label"), last_updated=incoming_at.isoformat(), updated_at=_now(),
+            ))
     _trim(conn, assessments, patient_id, 500)
     return result
 
@@ -226,6 +256,14 @@ def list_assessments(patient_id: str, limit: int = 50) -> list[dict]:
 
 def list_alerts(patient_id: str, limit: int = 50) -> list[dict]:
     return _list_payloads(alerts, patient_id, limit)
+
+
+def get_alert(patient_id: str, alert_id: str) -> dict | None:
+    with connection() as conn:
+        row = conn.execute(select(alerts).where(
+            alerts.c.patient_id == patient_id, alerts.c.id == alert_id,
+        )).first()
+        return _payload(row) if row is not None else None
 
 
 def _acknowledgment(row) -> dict:

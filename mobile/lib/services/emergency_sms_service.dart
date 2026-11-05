@@ -1,60 +1,63 @@
 import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
-
 import 'location_service.dart';
 
-/// Emergency SMS Fallback Service.
-///
-/// Opens the SMS composer with emergency contacts and optional GPS coordinates.
-/// The user must confirm sending. A successful launch is not a delivery receipt.
-class EmergencySmsService {
-  const EmergencySmsService();
+enum SmsOutcome { composerOpened, noRecipients, unsupported, failed }
 
-  /// Build and trigger emergency SMS fallback.
+typedef SmsLauncher = Future<bool> Function(Uri uri);
+
+/// Opening a composer requires user confirmation and proves no delivery.
+class EmergencySmsService {
+  const EmergencySmsService({SmsLauncher? canOpen, SmsLauncher? open})
+    : _canOpen = canOpen,
+      _open = open;
+  final SmsLauncher? _canOpen;
+  final SmsLauncher? _open;
+
+  static List<String> normalizeRecipients(List<String> numbers) => numbers
+      .map((p) => p.trim().replaceAll(RegExp(r'[\s()\-]'), ''))
+      .where((p) => RegExp(r'^\+?[0-9]{7,15}$').hasMatch(p))
+      .toSet()
+      .toList();
+
+  Future<SmsOutcome> composeEmergencySms({
+    required List<String> phoneNumbers,
+    required String patientName,
+    GpsFix? fix,
+    String? eventId,
+    DateTime? occurredAt,
+  }) async {
+    final recipients = normalizeRecipients(phoneNumbers);
+    if (recipients.isEmpty) return SmsOutcome.noRecipients;
+    final location = fix != null && fix.valid
+        ? 'الإحداثيات: $fix. الموقع: ${fix.mapsUrl}${fix.accuracy == null ? '' : '. دقة تقريبية: ${fix.accuracy!.round()} متر'}'
+        : 'تعذر الحصول على موقع حديث؛ لا توجد إحداثيات مؤكدة.';
+    final text =
+        'طلب مساعدة — المريض ($patientName). الوقت: ${(occurredAt ?? DateTime.now()).toUtc().toIso8601String()}. $location${eventId == null ? '' : ' مرجع الحدث: $eventId'}';
+    final separator = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+        ? '&'
+        : '?';
+    final uri = Uri.parse(
+      'sms:${recipients.join(',')}${separator}body=${Uri.encodeComponent(text)}',
+    );
+    try {
+      if (!await (_canOpen ?? canLaunchUrl)(uri)) return SmsOutcome.unsupported;
+      final launched = await (_open ?? (Uri value) => launchUrl(value))(uri);
+      return launched ? SmsOutcome.composerOpened : SmsOutcome.failed;
+    } catch (_) {
+      return SmsOutcome.failed;
+    }
+  }
+
   Future<bool> sendEmergencySms({
     required List<String> phoneNumbers,
     required String patientName,
     GpsFix? fix,
-  }) async {
-    if (phoneNumbers.isEmpty) {
-      debugPrint(
-        'EmergencySmsService: No emergency contact phone numbers provided.',
-      );
-      return false;
-    }
-
-    final locationText = fix != null
-        ? 'الموقع: ${fix.mapsUrl}'
-        : 'الموقع: تعذر تحديد إحداثيات GPS بدقة.';
-
-    final message =
-        'استغاثة عاجلة — نظام مراقبة الصرع: المريض ($patientName) بحاجة لمساعدة فورية. $locationText';
-
-    // Format phone numbers for SMS URI (comma-separated on Android/iOS)
-    final recipients = phoneNumbers.where((p) => p.trim().isNotEmpty).join(',');
-    if (recipients.isEmpty) return false;
-
-    final smsUri = Uri(
-      scheme: 'sms',
-      path: recipients,
-      query: 'body=${Uri.encodeComponent(message)}',
-    );
-
-    try {
-      if (await canLaunchUrl(smsUri)) {
-        return await launchUrl(smsUri);
-      } else {
-        // Fallback: try launching with simple query string
-        final directUri = Uri.parse(
-          'sms:$recipients?body=${Uri.encodeComponent(message)}',
-        );
-        if (await canLaunchUrl(directUri)) {
-          return await launchUrl(directUri);
-        }
-      }
-    } catch (e) {
-      debugPrint('EmergencySmsService failed to dispatch SMS: $e');
-    }
-    return false;
-  }
+  }) async =>
+      await composeEmergencySms(
+        phoneNumbers: phoneNumbers,
+        patientName: patientName,
+        fix: fix,
+      ) ==
+      SmsOutcome.composerOpened;
 }

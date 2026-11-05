@@ -172,7 +172,8 @@ def bonn_next(
         samples = [DeviceSample(eeg=eeg[i], ecg=0.0, motion=0.0, hr=70.0)
                    for i in range(len(eeg))]
         request.app.state.device_hub.ingest(
-            body.patient_id, "bonn-eeg-player", samples, request.app.state.classifier)
+            body.patient_id, "bonn-eeg-player", samples, request.app.state.classifier,
+            source="dataset")
 
     assessment = {
         "label": result.label, "confidence": result.confidence,

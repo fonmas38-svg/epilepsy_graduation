@@ -48,13 +48,28 @@ class SecureStore {
   /// Return the value at [key], generating and persisting a fresh random
   /// [byteLength]-byte secret (base64url) the first time. Used for the DB key so
   /// it is created once per install and never leaves the device.
-  Future<String> readOrCreateSecret(String key, {int byteLength = 32}) async {
-    final existing = await read(key);
+  /// Persistent secrets must never silently fall back to volatile memory.
+  Future<String?> readSecret(String key) => _storage.read(key: key);
+
+  Future<void> writeSecret(String key, String value) async {
+    await _storage.write(key: key, value: value);
+    if (await _storage.read(key: key) != value) {
+      throw StateError('Secure storage did not persist the secret');
+    }
+  }
+
+  Future<void> deleteSecret(String key) => _storage.delete(key: key);
+
+  Future<String> readOrCreateSecret(String key, {int byteLength = 32, bool allowCreate = true}) async {
+    final existing = await readSecret(key);
     if (existing != null && existing.isNotEmpty) return existing;
+    if (!allowCreate) {
+      throw StateError('The existing database key is unavailable; recovery is required');
+    }
     final rng = Random.secure();
     final bytes = List<int>.generate(byteLength, (_) => rng.nextInt(256));
     final secret = base64Url.encode(bytes);
-    await write(key, secret);
+    await writeSecret(key, secret);
     return secret;
   }
 }

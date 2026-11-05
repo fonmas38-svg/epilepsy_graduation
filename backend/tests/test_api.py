@@ -169,7 +169,7 @@ def test_device_rejects_bad_token(client):
         json={"patient_id": "p1", "samples": [{"eeg": 1, "ecg": 1, "motion": 1}]},
         headers={"Authorization": "Bearer wrong"},
     )
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_device_token_info_hides_demo_token_in_production(client, monkeypatch):
@@ -254,7 +254,7 @@ def test_legacy_token_is_rejected_when_patient_authorization_is_enabled(client, 
         json={"patient_id": "p1", "samples": [{"eeg": 1, "ecg": 1, "motion": 1}]},
         headers={"Authorization": "Bearer headband-demo-token"},
     )
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_auth_rejects_bad_enrollment_secret(client):
@@ -266,7 +266,13 @@ def test_auth_rejects_bad_enrollment_secret(client):
 
 
 def test_auth_wrong_role_cannot_ingest(client):
-    """A patient-role JWT must not be allowed to push device data."""
+    """A valid patient session must fail role authorization, not authentication."""
+    from app import security, users_store
+
+    users_store.create_user(
+        username="ingest-patient", name="Patient", role="patient", patient_id="u1",
+        password_hash=security.hash_password("test-password"),
+    )
     tok = client.post(
         "/auth/token",
         json={"subject": "u1", "role": "patient",

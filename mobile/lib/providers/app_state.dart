@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -51,6 +52,7 @@ class AppState extends ChangeNotifier {
     };
     monitoring.onAlert = (alert) {
       lastAlert = alert;
+      unawaited(_prepareEmergencySms(alert));
       notifyListeners();
     };
     monitoring.onPreAlert = (reading, assessment, pre) {
@@ -69,6 +71,7 @@ class AppState extends ChangeNotifier {
         final fix = await location.currentFix();
         final escalated = await sync.escalatePreAlert(reading, pre);
         lastAlert = escalated;
+        if (escalated.severity == 'critical') unawaited(_prepareEmergencySms(escalated));
         if (fix != null) {
           try {
             await messages.shareLocation(
@@ -140,6 +143,7 @@ class AppState extends ChangeNotifier {
 
   /// Emergency SMS fallback service with GPS fix.
   final EmergencySmsService emergencySms = const EmergencySmsService();
+  SmsOutcome? lastSmsOutcome;
 
   /// Medical report and Excel workbook exporter.
   final ReportExportService reportExporter = ReportExportService();
@@ -164,7 +168,6 @@ class AppState extends ChangeNotifier {
   String get currentBaseUrl => api.baseUrl;
 
   String? currentSessionUsername;
-  String? currentSessionPassword;
 
   static const _onboardingCompletedKey = 'has_completed_permissions_onboarding';
 
@@ -208,8 +211,7 @@ class AppState extends ChangeNotifier {
     return RiskViewX.resolve(
       label: assessment?.label,
       observedAt: assessment?.timestamp,
-      dataAvailable: monitoring.source != SignalSource.headDevice ||
-          monitoring.deviceConnected,
+      dataAvailable: monitoring.hasUsableAssessment,
     );
   }
 
@@ -250,10 +252,17 @@ class AppState extends ChangeNotifier {
     final pid = monitoring.activePatientId ?? user?.uid;
     if (pid == null) return;
     sosInProgress = true;
+    failure = null;
+    lastSmsOutcome = null;
     notifyListeners();
     try {
-      final fix = await location.currentFix();
-      lastAlert = await sync.sendSos(pid, fix: fix, patientName: user?.name);
+      final fixFuture = location.currentFix();
+      final saved = await sync.sendSos(pid, patientName: user?.name);
+      if (auth.currentUser?.uid != user?.uid) return;
+      lastAlert = saved;
+      notifyListeners();
+      final fix = await fixFuture;
+      if (auth.currentUser?.uid != user?.uid) return;
 
       // Broadcast live location to family & cloud channels
       if (fix != null) {
@@ -268,24 +277,46 @@ class AppState extends ChangeNotifier {
         } catch (_) {}
       }
 
-      // Offline Emergency SMS Fallback: if offline, dispatch SMS to contacts directly
-      if (!await sync.isOnline) {
-        try {
-          final contacts = await db.emergencyContactsFor(pid);
-          final phones = contacts.map((c) => c.phone).where((p) => p.trim().isNotEmpty).toList();
-          if (phones.isNotEmpty) {
-            await emergencySms.sendEmergencySms(
-              phoneNumbers: phones,
-              patientName: user?.name ?? 'المريض',
-              fix: fix,
-            );
-          }
-        } catch (_) {}
+      final alert = lastAlert;
+      if (alert != null) {
+        await _prepareEmergencySms(alert, fix: fix, locate: false);
       }
     } catch (e) {
       failure = Failure.from(e);
     } finally {
       sosInProgress = false;
+      notifyListeners();
+    }
+  }
+
+  bool _preparingEmergencySms = false;
+  final Set<String> _smsPrepared = {};
+
+  Future<void> _prepareEmergencySms(AlertItem alert, {GpsFix? fix, bool locate = true}) async {
+    final owner = auth.currentUser;
+    if (_preparingEmergencySms || owner?.role != UserRole.patient ||
+        owner?.uid != alert.patientId || _smsPrepared.contains(alert.id)) {
+      return;
+    }
+    _preparingEmergencySms = true;
+    try {
+      if (await api.health(null, const Duration(seconds: 2))) return;
+      if (auth.currentUser?.uid != owner!.uid) return;
+      final actualFix = fix ?? (locate ? await location.currentFix() : null);
+      final contacts = await db.emergencyContactsFor(alert.patientId);
+      if (auth.currentUser?.uid != owner.uid) return;
+      lastSmsOutcome = await emergencySms.composeEmergencySms(
+        phoneNumbers: contacts.map((c) => c.phone).toList(),
+        patientName: owner.name, fix: actualFix,
+        eventId: alert.id, occurredAt: alert.timestamp);
+      if (lastSmsOutcome == SmsOutcome.composerOpened) {
+        _smsPrepared.add(alert.id);
+        if (_smsPrepared.length > 256) _smsPrepared.remove(_smsPrepared.first);
+      }
+    } catch (_) {
+      lastSmsOutcome = SmsOutcome.failed;
+    } finally {
+      _preparingEmergencySms = false;
       notifyListeners();
     }
   }
@@ -456,6 +487,7 @@ class AppState extends ChangeNotifier {
   String? activeEngine;
 
   Future<void> init() async {
+    await biometrics.purgeLegacySecrets();
     await auth.init();
     try {
       await EdgeModelService.instance.initialize();
@@ -496,6 +528,20 @@ class AppState extends ChangeNotifier {
             message: '$title: $body',
             recipients: const ['patient', 'caregiver', 'doctor'],
           );
+          notifyListeners();
+        },
+        onRemoteAlert: (patientId, alertId) async {
+          final owner = auth.currentUser?.uid;
+          if (owner == null) return;
+          AlertItem? received;
+          try {
+            received = await api.alertDetails(patientId, alertId);
+          } catch (_) {}
+          if (auth.currentUser?.uid != owner) return;
+          lastAlert = received ?? AlertItem(id: alertId, patientId: patientId,
+            timestamp: DateTime.now(), severity: 'critical',
+            message: _l10n.notificationFallbackTitle, recipients: const []);
+          if (received != null) await db.insertAlert(received);
           notifyListeners();
         },
         onToken: (token) {
@@ -586,7 +632,6 @@ class AppState extends ChangeNotifier {
         final context = await api.sessionContext();
         await auth.applyBackendSession(context);
         currentSessionUsername = username;
-        currentSessionPassword = password;
         // ── Cross-account FCM isolation: tell the notification service which
         // patient owns this session so it can discard foreign alerts.
         final user = auth.currentUser;
@@ -623,8 +668,13 @@ class AppState extends ChangeNotifier {
       }
     }
 
-    // 2. Offline / Demo Credentials validation:
-    // Requires exact username and password matches!
+    if (!AppConfig.demoMode) {
+      await api.tokens.clear();
+      await auth.signOut();
+      throw const Failure(FailureKind.offline);
+    }
+
+    // Explicit demo builds only; a network outage is never real authentication.
     final u = username.trim().toLowerCase();
     final p = password.trim();
 
@@ -635,7 +685,6 @@ class AppState extends ChangeNotifier {
         role: UserRole.doctor,
       );
       currentSessionUsername = username;
-      currentSessionPassword = password;
       await _startForUser();
       await saveLastLoggedInUser(username);
       apiOnline = false;
@@ -648,7 +697,6 @@ class AppState extends ChangeNotifier {
         role: UserRole.patient,
       );
       currentSessionUsername = username;
-      currentSessionPassword = password;
       await _startForUser();
       await saveLastLoggedInUser(username);
       apiOnline = false;
@@ -661,7 +709,6 @@ class AppState extends ChangeNotifier {
         role: UserRole.caregiver,
       );
       currentSessionUsername = username;
-      currentSessionPassword = password;
       await _startForUser();
       await saveLastLoggedInUser(username);
       apiOnline = false;
@@ -674,7 +721,6 @@ class AppState extends ChangeNotifier {
         role: UserRole.admin,
       );
       currentSessionUsername = username;
-      currentSessionPassword = password;
       await _startForUser();
       await saveLastLoggedInUser(username);
       apiOnline = false;
@@ -689,6 +735,31 @@ class AppState extends ChangeNotifier {
       FailureKind.unauthorized,
       customMessage: 'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التحقق وإعادة المحاولة.',
     );
+  }
+
+  Future<void> signInWithBiometrics(String username) async {
+    final saved = await biometrics.takeSession(username, api.baseUrl);
+    if (saved == null) throw const Failure(FailureKind.unauthorized);
+    await monitoring.stop();
+    await api.tokens.clear();
+    await auth.signOut();
+    try {
+      await api.tokens.useLoginToken(token: saved.token, role: saved.role, subject: saved.userId);
+      final context = await api.sessionContext();
+      if ((context['user'] as Map?)?['id'] != saved.userId) {
+        throw const Failure(FailureKind.unauthorized);
+      }
+      await auth.applyBackendSession(context);
+      currentSessionUsername = username;
+      await _registerCurrentPushToken();
+      await _startForUser();
+      apiOnline = true;
+      notifyListeners();
+    } catch (e) {
+      await api.tokens.clear();
+      await auth.signOut();
+      throw Failure.from(e);
+    }
   }
 
   static const _lastUserKey = 'last_logged_in_username';
@@ -719,7 +790,10 @@ class AppState extends ChangeNotifier {
     monitoring.latestAssessment = null;
     monitoring.latestPrediction = null;
     currentSessionUsername = null;
-    currentSessionPassword = null;
+    lastSmsOutcome = null;
+    _smsPrepared.clear();
+    location.lastResult = null;
+    monitoring.activePatientId = null;
     // Clear FCM patient-filter so no stale alerts show after sign-out.
     notifications.setActivePatient(null);
     final pushToken = notifications.token;
@@ -743,12 +817,16 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    notifications.dispose();
     settings.removeListener(notifyListeners);
     care.removeListener(notifyListeners);
     super.dispose();
   }
 
   Future<void> _startForUser() async {
+    final session = auth.currentUser;
+    notifications.configureSession(session?.uid, session?.role == UserRole.patient
+        ? [session!.uid] : auth.accessiblePatients().map((p) => p.patientId));
     final user = auth.currentUser;
     if (user == null) return;
     final patients = auth.accessiblePatients();
@@ -774,19 +852,14 @@ class AppState extends ChangeNotifier {
         await messages.loadFor(patientId);
       } catch (_) {}
 
-      // Hardware signal simulation & continuous vital monitoring is exclusive to
-      // the PATIENT account. Doctors & caregivers are clinical observers who read
-      // cloud & SQLite records without triggering local alert generators.
-      if (user.role == UserRole.patient) {
-        await monitoring.start(patientId);
-      } else {
-        await monitoring.stop();
-      }
+      // MonitoringService enforces read-only observers and real-vs-demo sources.
+      await monitoring.start(patientId);
     }
     apiOnline = await api.health();
   }
 
   Future<void> _seedPatientTelemetry(String pid) async {
+    if (!auth.isDemoSession) return;
     try {
       final existing = await db.assessmentsFor(pid, limit: 1);
       if (existing.isEmpty) {
@@ -856,8 +929,12 @@ class AppState extends ChangeNotifier {
           backendPatientId = userMap['id'] as String?;
         }
       } catch (e) {
-        debugPrint('Cloud patient creation notice: $e');
+        if (!auth.isDemoSession) throw Failure.from(e);
+        debugPrint('Demo patient creation notice: $e');
       }
+    }
+    if (backendPatientId == null && !auth.isDemoSession) {
+      throw const Failure(FailureKind.offline);
     }
 
     profile = await auth.addDoctorPatient(
@@ -880,7 +957,10 @@ class AppState extends ChangeNotifier {
     if (pid == null) return false;
     try {
       final fix = await location.currentFix();
-      if (fix == null) return false;
+      if (fix == null) {
+        notifyListeners();
+        return false;
+      }
       await messages.shareLocation(
         patientId: pid,
         latitude: fix.latitude,
@@ -966,6 +1046,7 @@ class AppState extends ChangeNotifier {
 
   /// Simulate a realistic pre-ictal forecast event with 30s countdown for live clinical demonstration.
   Future<void> simulatePreIctalForecast() async {
+    if (!auth.isDemoSession) return;
     final pid = monitoring.activePatientId ?? auth.currentUser?.uid;
     if (pid == null) return;
     final now = DateTime.now();
@@ -1071,6 +1152,9 @@ class AppState extends ChangeNotifier {
   /// Point monitoring and the care store at a different patient — used by the
   /// doctor's list (§5.1) and the family's patient cards (§4.1).
   Future<void> selectPatient(String patientId) async {
+    if (!patients.any((patient) => patient.patientId == patientId)) {
+      throw const Failure(FailureKind.unauthorized);
+    }
     if (patientId == monitoring.activePatientId) return;
     try {
       await care.loadFor(patientId);

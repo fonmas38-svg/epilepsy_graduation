@@ -25,7 +25,7 @@ def normalize(signal: np.ndarray) -> np.ndarray:
     return (signal - np.mean(signal)) / std
 
 
-def estimate_hr_from_ecg(ecg: np.ndarray, fs: float = 64.0) -> tuple[float, float]:
+def estimate_hr_from_ecg(ecg: np.ndarray, fs: float = 256.0) -> tuple[float, float]:
     """Rough peak-based HR estimate (bpm) and RR std proxy."""
     x = normalize(denoise(ecg))
     threshold = 0.5 * float(np.max(x)) if np.max(x) > 0 else 0.5
@@ -54,7 +54,7 @@ def extract_features(window: VitalWindow, *, unit_variance: bool = True) -> Feat
     ecg = transform(denoise(window.ecg))
     motion = transform(denoise(window.motion))
 
-    hr_mean, hr_std = estimate_hr_from_ecg(ecg)
+    hr_mean, hr_std = estimate_hr_from_ecg(ecg, fs=window.sample_rate_hz)
     if window.hr is not None:
         hr_mean = float(window.hr)
 

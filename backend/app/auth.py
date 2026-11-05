@@ -170,11 +170,8 @@ def authorize_patient_access(patient_id: str, principal: dict, *, enforce: bool 
             return
         if role == "caregiver" and users_store.is_caregiver_linked(patient_id, subject):
             return
-        # Compatibility for legacy imported accounts. New links are always
-        # persisted in caregiver_links and managed through explicit endpoints.
-        user = users_store.get_user(subject)
-        if patient_id in (user or {}).get("meta", {}).get("linkedPatientIds", []):
-            return
+        # Persisted relationships are the authority. Profile metadata must not
+        # bypass a revoked caregiver link or an unassigned doctor relationship.
     raise AuthError("Not authorized for this patient", code=status.HTTP_403_FORBIDDEN)
 
 

@@ -22,6 +22,7 @@ from app.database import (
     dump_json,
     load_json,
     transaction,
+    upsert,
     users,
 )
 
@@ -177,31 +178,16 @@ def list_users(role: str | None = None, q: str | None = None,
 
 
 def assign_patient(patient_id: str, doctor_id: str, by: str | None = None) -> dict:
-    with connection() as conn:
-        existing = conn.execute(select(assignments).where(
+    with transaction() as conn:
+        _require_link_roles(conn, patient_id, doctor_id, "doctor")
+        conn.execute(upsert(assignments, {
+            "patient_id": patient_id, "doctor_id": doctor_id,
+            "assigned_by": by, "assigned_at": _now(),
+        }).on_conflict_do_nothing(index_elements=["patient_id", "doctor_id"]))
+        return _assignment(conn.execute(select(assignments).where(
             assignments.c.patient_id == patient_id,
             assignments.c.doctor_id == doctor_id,
-        )).first()
-    if existing:
-        return _assignment(existing)
-    assigned_at = _now()
-    try:
-        with transaction() as conn:
-            conn.execute(insert(assignments).values(
-                patient_id=patient_id, doctor_id=doctor_id,
-                assigned_by=by, assigned_at=assigned_at,
-            ))
-    except IntegrityError:
-        with connection() as conn:
-            existing = conn.execute(select(assignments).where(
-                assignments.c.patient_id == patient_id,
-                assignments.c.doctor_id == doctor_id,
-            )).first()
-        if existing:
-            return _assignment(existing)
-        raise
-    return {"patientId": patient_id, "doctorId": doctor_id,
-            "assignedBy": by, "assignedAt": assigned_at}
+        )).one())
 
 
 def unassign_patient(patient_id: str, doctor_id: str) -> bool:
@@ -238,35 +224,39 @@ def _caregiver_link(row) -> dict:
     return {
         "patientId": r["patient_id"], "caregiverId": r["caregiver_id"],
         "linkedBy": r["linked_by"], "linkedAt": r["linked_at"],
+        "disabled": bool(r["disabled"]),
     }
 
 
+def _require_link_roles(conn, patient_id: str, other_id: str, role: str) -> None:
+    roles = dict(conn.execute(select(users.c.id, users.c.role).where(
+        users.c.id.in_([patient_id, other_id]),
+    )).all())
+    if roles.get(patient_id) != "patient" or roles.get(other_id) != role:
+        raise ValueError(f"a patient and a {role} account are required")
+
+
 def link_caregiver(patient_id: str, caregiver_id: str, by: str | None = None) -> dict:
-    with connection() as conn:
-        existing = conn.execute(select(caregiver_links).where(
+    with transaction() as conn:
+        _require_link_roles(conn, patient_id, caregiver_id, "caregiver")
+        conn.execute(upsert(caregiver_links, {
+            "patient_id": patient_id, "caregiver_id": caregiver_id,
+            "linked_by": by, "linked_at": _now(), "disabled": False,
+        }).on_conflict_do_nothing(index_elements=["patient_id", "caregiver_id"]))
+        return _caregiver_link(conn.execute(select(caregiver_links).where(
             caregiver_links.c.patient_id == patient_id,
             caregiver_links.c.caregiver_id == caregiver_id,
-        )).first()
-    if existing:
-        return _caregiver_link(existing)
-    linked_at = _now()
-    try:
-        with transaction() as conn:
-            conn.execute(insert(caregiver_links).values(
-                patient_id=patient_id, caregiver_id=caregiver_id,
-                linked_by=by, linked_at=linked_at,
-            ))
-    except IntegrityError:
-        with connection() as conn:
-            existing = conn.execute(select(caregiver_links).where(
-                caregiver_links.c.patient_id == patient_id,
-                caregiver_links.c.caregiver_id == caregiver_id,
-            )).first()
-        if existing:
-            return _caregiver_link(existing)
-        raise
-    return {"patientId": patient_id, "caregiverId": caregiver_id,
-            "linkedBy": by, "linkedAt": linked_at}
+        )).one())
+
+
+def set_caregiver_link_disabled(patient_id: str, caregiver_id: str, disabled: bool) -> bool:
+    """A patient can revoke only their own relationship, never another account."""
+    with transaction() as conn:
+        _require_link_roles(conn, patient_id, caregiver_id, "caregiver")
+        return bool(conn.execute(update(caregiver_links).where(
+            caregiver_links.c.patient_id == patient_id,
+            caregiver_links.c.caregiver_id == caregiver_id,
+        ).values(disabled=disabled)).rowcount)
 
 
 def unlink_caregiver(patient_id: str, caregiver_id: str) -> bool:
@@ -282,16 +272,25 @@ def list_caregiver_links() -> list[dict]:
         return [_caregiver_link(row) for row in conn.execute(select(caregiver_links))]
 
 
-def caregivers_for_patient(patient_id: str) -> list[str]:
+def caregivers_for_patient(patient_id: str, *, include_disabled: bool = False) -> list[str]:
+    stmt = select(caregiver_links.c.caregiver_id).join(
+        users, users.c.id == caregiver_links.c.caregiver_id,
+    ).where(caregiver_links.c.patient_id == patient_id, users.c.role == "caregiver")
+    if not include_disabled:
+        stmt = stmt.where(caregiver_links.c.disabled.is_(False), users.c.disabled.is_(False))
     with connection() as conn:
-        return list(conn.execute(select(caregiver_links.c.caregiver_id).where(
-            caregiver_links.c.patient_id == patient_id)).scalars())
+        return list(conn.execute(stmt).scalars())
 
 
 def patients_for_caregiver(caregiver_id: str) -> list[str]:
     with connection() as conn:
-        return list(conn.execute(select(caregiver_links.c.patient_id).where(
-            caregiver_links.c.caregiver_id == caregiver_id)).scalars())
+        return list(conn.execute(select(caregiver_links.c.patient_id).join(
+            users, users.c.id == caregiver_links.c.patient_id,
+        ).where(
+            caregiver_links.c.caregiver_id == caregiver_id,
+            caregiver_links.c.disabled.is_(False),
+            users.c.role == "patient", users.c.disabled.is_(False),
+        )).scalars())
 
 
 def is_caregiver_linked(patient_id: str, caregiver_id: str) -> bool:
@@ -336,7 +335,9 @@ def counts() -> dict:
 
 
 def seed_demo_accounts() -> None:
-    """Ensure standard demo accounts exist for evaluation and defense."""
+    """Explicit demo-only setup; never inferred from whether pytest is running."""
+    if os.getenv("APP_ENV", "demo").strip().lower() != "demo":
+        raise RuntimeError("Demo accounts are forbidden outside APP_ENV=demo")
     doc = get_by_username("doctor")
     if not doc:
         doc = create_user(
@@ -377,7 +378,15 @@ def seed_demo_accounts() -> None:
 
 
 def seed_admin() -> dict | None:
-    if not os.getenv("PYTEST_CURRENT_TEST"):
+    environment = os.getenv("APP_ENV", "demo").strip().lower()
+    if environment in {"production", "prod"}:
+        # Existing default accounts are just as unsafe as creating new ones.
+        for username, password in (("doctor", "doctor123"), ("patient", "patient123"),
+                                   ("caregiver", "caregiver123"), ("admin", "change-me-admin")):
+            existing = get_by_username(username)
+            if existing and not existing["disabled"] and security.verify_password(password, existing["passwordHash"]):
+                raise RuntimeError("Default credentials found; disable or reset demo accounts before production")
+    if os.getenv("SEED_DEMO_ACCOUNTS", "0") == "1":
         seed_demo_accounts()
     if list_users(role="admin"):
         return None

@@ -12,119 +12,105 @@ import 'local_database.dart';
 import 'signal_simulator.dart';
 import 'sync_service.dart';
 
-
 enum SignalSource { simulator, headDevice, dataset }
-
 typedef AlertCallback = void Function(AlertItem alert);
 
 class MonitoringService {
-  MonitoringService({
-    required this.db,
-    required this.simulator,
-    required this.sync,
-    required this.auth,
-    required this.api,
-  });
-
+  MonitoringService({required this.db, required this.simulator, required this.sync,
+    required this.auth, required this.api});
   final LocalDatabase db;
   final SignalSimulator simulator;
   final SyncService sync;
   final AuthService auth;
   final ApiClient api;
-
+  final _uuid = const Uuid();
   Timer? _timer;
+  Future<void>? _inFlight;
   AlertCallback? onAlert;
   void Function()? onUpdate;
-
-
-  /// Seizure-cycle controller — drives the four-phase timeline.
+  void Function(VitalReading, RiskAssessment, AlertItem)? onPreAlert;
   final SeizureCycleController cycleController = SeizureCycleController(
-    interictalTicks: 5, // calm baseline
-    preIctalTicks: 2,   // rising pre-onset
-    ictalTicks: 3,      // active seizure
-    postIctalTicks: 2,  // post-seizure recovery
-  );
-
-  /// Fired when a forecast crosses the pre-alert threshold (prediction layer).
-  void Function(
-    VitalReading reading,
-    RiskAssessment assessment,
-    AlertItem preAlert,
-  )?
-  onPreAlert;
+    interictalTicks: 5, preIctalTicks: 2, ictalTicks: 3, postIctalTicks: 2);
 
   VitalReading? latestReading;
   RiskAssessment? latestAssessment;
-
-  /// Latest seizure-forecast state (additive, null until a forecast arrives).
   PredictionState? latestPrediction;
   List<VitalReading> chartReadings = [];
   List<AlertItem> alerts = [];
   bool running = false;
   String? activePatientId;
-  SignalSource source = SignalSource.simulator;
+  SignalSource source = AppConfig.demoMode ? SignalSource.simulator : SignalSource.headDevice;
   bool deviceConnected = false;
+  bool _deviceAssessmentValid = false;
   String? deviceId;
   int deviceBuffered = 0;
   String? lastDeviceSeen;
-
-  /// When false, automatic pre-alerts from the simulator are suppressed.
-  /// The simulator screen sets this to false so the user controls escalation
-  /// manually without being bombarded by auto-alerts every few minutes.
   bool _autoAlertEnabled = true;
   void enableAutoAlerts() => _autoAlertEnabled = true;
   void disableAutoAlerts() => _autoAlertEnabled = false;
   bool get autoAlertEnabled => _autoAlertEnabled;
-
-  /// Cooldown between consecutive pre-alerts: once a pre-alert fires, the
-  /// rising-edge latch will not re-arm for [_preAlertCooldown]. This prevents
-  /// the 5-minute simulator cycle from spamming the patient.
-  static const _preAlertCooldown = Duration(minutes: 20);
-  DateTime? _lastPreAlertAt;
-
-  // Rolling local history of preictal probabilities → sparkline fallback when
-  // the backend does not carry a trajectory (e.g. the offline/simulator path).
+  bool get hasUsableAssessment => running && _usable(latestAssessment);
+  final Map<String, DateTime> _lastPreAlertAt = {};
   final List<double> _localTrajectory = [];
-  // Rising-edge latch so a sustained forecast raises exactly one pre-alert.
   bool _lastPredicted = false;
 
-  final _uuid = const Uuid();
+  bool get _canSimulate => AppConfig.demoMode && auth.isDemoSession &&
+      auth.currentUser?.role == UserRole.patient;
 
-  /// Fold a fresh forecast into [latestPrediction], keeping a bounded local
-  /// trajectory so the gauge/countdown have history even without a backend one.
-  void _applyPrediction(PredictionState? p) {
-    if (p == null) return;
-    _localTrajectory.add(p.preictalProb);
-    if (_localTrajectory.length > 60) {
-      _localTrajectory.removeRange(0, _localTrajectory.length - 60);
+  bool _usable(RiskAssessment? assessment) {
+    if (assessment == null || assessment.patientId != activePatientId || assessment.confidence <= 0) return false;
+    final age = DateTime.now().difference(assessment.timestamp);
+    if (age.isNegative || age > const Duration(seconds: 30)) return false;
+    if (assessment.features['assessment_valid'] == false ||
+        (assessment.features['components'] as Map?)?['assessment_valid'] == false) {
+      return false;
     }
-    latestPrediction = p.trajectory.isEmpty
-        ? p.copyWith(trajectory: List<double>.from(_localTrajectory))
-        : p;
+    return source != SignalSource.headDevice || (deviceConnected && _deviceAssessmentValid);
+  }
+
+  void _applyPrediction(PredictionState? prediction) {
+    if (prediction == null) {
+      latestPrediction = null;
+      _localTrajectory.clear();
+      _lastPredicted = false;
+      return;
+    }
+    _localTrajectory.add(prediction.preictalProb);
+    if (_localTrajectory.length > 60) _localTrajectory.removeAt(0);
+    latestPrediction = prediction.trajectory.isEmpty
+        ? prediction.copyWith(trajectory: List.of(_localTrajectory)) : prediction;
   }
 
   Future<void> start(String patientId) async {
+    await stop(); // Also wait for an older patient's in-flight poll to finish.
+    if (activePatientId != patientId) {
+      latestReading = null;
+      latestAssessment = null;
+      _applyPrediction(null);
+      deviceConnected = false;
+      _deviceAssessmentValid = false;
+      chartReadings = [];
+      alerts = [];
+    }
     activePatientId = patientId;
+    if (!_canSimulate) source = SignalSource.headDevice;
     await refresh(patientId);
     running = true;
-    _timer?.cancel();
     await tick();
-    final interval = switch (source) {
-      SignalSource.headDevice ||
-      SignalSource.dataset => AppConfig.devicePollInterval,
-      _ => AppConfig.simulationInterval,
-    };
+    final interval = source == SignalSource.simulator
+        ? AppConfig.simulationInterval : AppConfig.devicePollInterval;
     _timer = Timer.periodic(interval, (_) => tick());
   }
 
   Future<void> setSource(SignalSource next) async {
+    if (next != SignalSource.headDevice && !_canSimulate) return;
     if (source == next) return;
-    source = next;
-    final patientId = activePatientId;
     await stop();
-    if (patientId != null) {
-      await start(patientId);
-    }
+    source = next;
+    _applyPrediction(null);
+    _deviceAssessmentValid = false;
+    final patientId = activePatientId;
+    if (patientId != null) await start(patientId);
     onUpdate?.call();
   }
 
@@ -132,227 +118,155 @@ class MonitoringService {
     _timer?.cancel();
     _timer = null;
     running = false;
+    await _inFlight;
     _lastPredicted = false;
     cycleController.reset();
   }
 
   Future<void> refresh(String patientId) async {
+    if (activePatientId != null && activePatientId != patientId) return;
     chartReadings = await db.recentReadings(patientId, limit: 30);
     latestReading = chartReadings.isEmpty ? null : chartReadings.first;
     latestAssessment = await db.latestAssessment(patientId);
-    // Recover any forecast persisted inside the assessment's features map. This
-    // is a re-read (not a new sample), so keep the accumulated local trajectory
-    // rather than appending again.
-    final recovered = PredictionState.fromMap(latestAssessment?.features);
-    if (recovered != null) {
-      latestPrediction =
-          recovered.trajectory.isEmpty && _localTrajectory.isNotEmpty
-          ? recovered.copyWith(trajectory: List<double>.from(_localTrajectory))
-          : recovered;
+    final recovered = _usable(latestAssessment) ? PredictionState.fromMap(latestAssessment?.features) : null;
+    if (recovered == null) {
+      _applyPrediction(null);
+    } else {
+      latestPrediction = recovered.trajectory.isEmpty && _localTrajectory.isNotEmpty
+          ? recovered.copyWith(trajectory: List.of(_localTrajectory)) : recovered;
     }
     alerts = await db.alertsFor(patientId);
     onUpdate?.call();
   }
 
   Future<void> tick({RiskLabel? forcePattern}) async {
+    if (_inFlight != null) return _inFlight!;
+    final future = _runTick(forcePattern);
+    _inFlight = future;
+    try { await future; } finally { _inFlight = null; }
+  }
+
+  Future<void> _runTick(RiskLabel? forcePattern) async {
     final patientId = activePatientId;
-    if (patientId == null) return;
-
-    if (source == SignalSource.headDevice) {
-      await _tickFromDevice(patientId);
-    } else if (source == SignalSource.dataset) {
-      await _tickFromDataset(patientId, forcePattern: forcePattern);
-    } else {
-      await _tickFromSimulator(patientId, forcePattern: forcePattern);
-    }
-    _maybePreAlert();
-  }
-
-  /// Central, source-agnostic pre-alert check: run after every tick so the
-  /// forecast can raise an early pre-alert regardless of signal source. Fires
-  /// only on the RISING EDGE of the "forecast predicted, not yet detected"
-  /// condition, so a sustained preictal ramp raises exactly one pre-alert.
-  ///
-  /// Additional guards:
-  ///   * [_autoAlertEnabled] — suppressed when the user is controlling the
-  ///     simulator manually (the simulator screen disables auto-alerts).
-  ///   * [_preAlertCooldown] — at most one pre-alert per 20 minutes so a short
-  ///     simulation cycle cannot spam the patient.
-  void _maybePreAlert() {
-    if (!_autoAlertEnabled) return;
-    final r = latestReading;
-    final a = latestAssessment;
-    final p = latestPrediction;
-    if (r == null || a == null || p == null) return;
-    final now = p.predicted && a.label != RiskLabel.highRisk;
-    final rising = now && !_lastPredicted;
-    _lastPredicted = now;
-    if (!rising) return;
-    // Cooldown guard: do not re-fire within [_preAlertCooldown] of the last one.
-    final lastAt = _lastPreAlertAt;
-    if (lastAt != null &&
-        DateTime.now().difference(lastAt) < _preAlertCooldown) {
-      return;
-    }
-    _lastPreAlertAt = DateTime.now();
-    final pre = sync.buildPreAlert(r, a, p);
-    if (pre != null) onPreAlert?.call(r, a, pre);
-  }
-
-  Future<void> _tickFromDataset(
-    String patientId, {
-    RiskLabel? forcePattern,
-  }) async {
+    if (patientId == null || auth.currentUser == null) return;
     try {
-      final prefer = forcePattern?.apiValue;
-      final body = await api.datasetNext(patientId, preferLabel: prefer);
-      final window = body['window'] as Map<String, dynamic>;
-      final assessmentMap = body['assessment'] as Map<String, dynamic>;
-      final reading = VitalReading(
-        id: _uuid.v4(),
-        patientId: patientId,
-        timestamp:
-            DateTime.tryParse(window['timestamp'] as String? ?? '') ??
-            DateTime.now(),
-        eeg: List<double>.from(
-          (window['eeg'] as List).map((e) => (e as num).toDouble()),
-        ),
-        ecg: List<double>.from(
-          (window['ecg'] as List).map((e) => (e as num).toDouble()),
-        ),
-        motion: List<double>.from(
-          (window['motion'] as List).map((e) => (e as num).toDouble()),
-        ),
-        hr: (window['hr'] as num?)?.toDouble() ?? 0,
-        synced: true,
-      );
-      await db.insertReading(reading);
-      latestReading = reading;
-
-      final features = Map<String, dynamic>.from(
-        assessmentMap['features'] as Map? ?? {},
-      );
-      // If the dataset player surfaced a forecast at top level, ride it inside
-      // features so it persists and drives the gauge like the other paths.
-      for (final k in const [
-        'preictal_prob',
-        'lead_time_min',
-        'horizon_min',
-        'predicted',
-        'prediction_source',
-      ]) {
-        if (assessmentMap[k] != null) features[k] = assessmentMap[k];
+      if (source == SignalSource.headDevice || !_canSimulate) {
+        await _tickFromDevice(patientId);
+      } else if (source == SignalSource.dataset) {
+        await _tickFromDataset(patientId, forcePattern);
+      } else {
+        await _tickFromSimulator(patientId, forcePattern);
       }
-      if (assessmentMap['components'] != null) {
-        features['components'] = assessmentMap['components'];
-      }
-
-      final assessment = RiskAssessment(
-        id: _uuid.v4(),
-        patientId: patientId,
-        timestamp: reading.timestamp,
-        label: RiskLabelX.fromApi(assessmentMap['label'] as String),
-        confidence: (assessmentMap['confidence'] as num).toDouble(),
-        features: features,
-        processingMs: 0,
-      );
-      await db.insertAssessment(assessment);
-      latestAssessment = assessment;
-      _applyPrediction(PredictionState.fromMap(features));
-      await auth.updatePatientStatus(patientId, assessment.label);
-
-      final alert = await sync.maybeCreateAlert(reading, assessment);
-      if (alert != null) onAlert?.call(alert);
-
-      // also push summary to cloud API (already done server-side for dataset)
-      deviceConnected = true;
-      deviceId = 'dataset-player';
-      await refresh(patientId);
+      _maybePreAlert();
     } catch (_) {
       deviceConnected = false;
+      _deviceAssessmentValid = false;
+      _applyPrediction(null);
       onUpdate?.call();
     }
   }
 
-  Future<void> _tickFromSimulator(
-    String patientId, {
-    RiskLabel? forcePattern,
-  }) async {
-    // Use the four-phase cycle controller when running automatically.
-    // forcePattern overrides it (manual escalation from the simulator UI).
+  void _maybePreAlert() {
+    final reading = latestReading;
+    final assessment = latestAssessment;
+    final prediction = latestPrediction;
+    if (!_autoAlertEnabled || auth.currentUser?.role != UserRole.patient ||
+        auth.currentUser?.uid != activePatientId || !_usable(assessment) ||
+        reading == null || prediction == null || reading.patientId != activePatientId ||
+        (reading.timestamp.difference(assessment!.timestamp).inSeconds).abs() > 5) {
+      return;
+    }
+    if (!auth.isDemoSession && prediction.source == 'simulated_heuristic') return;
+    final predicted = prediction.predicted && assessment.label != RiskLabel.highRisk;
+    final rising = predicted && !_lastPredicted;
+    _lastPredicted = predicted;
+    final lastAt = _lastPreAlertAt[reading.patientId];
+    if (!rising || (lastAt != null && DateTime.now().difference(lastAt) < const Duration(minutes: 20))) return;
+    final pre = sync.buildPreAlert(reading, assessment, prediction);
+    if (pre != null) {
+      _lastPreAlertAt[reading.patientId] = DateTime.now();
+      onPreAlert?.call(reading, assessment, pre);
+    }
+  }
+
+  Future<void> _tickFromSimulator(String patientId, RiskLabel? forcePattern) async {
+    final phase = cycleController.currentPhase;
     final pattern = forcePattern ?? cycleController.advance();
-    // Use phase-aware generation so post-ictal gets its distinct fatigue signal.
-    final currentPhase = cycleController.currentPhase;
     final reading = forcePattern != null
         ? simulator.generate(patientId: patientId, pattern: pattern)
-        : simulator.generateForPhase(
-            patientId: patientId, phase: currentPhase);
+        : simulator.generateForPhase(patientId: patientId, phase: phase);
     await db.insertReading(reading);
     latestReading = reading;
-
     final assessment = await sync.analyzeAndStore(reading);
     latestAssessment = assessment;
-    _applyPrediction(PredictionState.fromMap(assessment.features));
-
+    _applyPrediction(_usable(assessment) ? PredictionState.fromMap(assessment.features) : null);
     final alert = await sync.maybeCreateAlert(reading, assessment);
     if (alert != null) onAlert?.call(alert);
-
     await sync.syncPending(patientId);
     await refresh(patientId);
   }
 
-  Future<void> _tickFromDevice(String patientId) async {
-    try {
-      final st = await api.deviceStatus(patientId);
-      deviceConnected = st.connected;
-      deviceId = st.deviceId;
-      deviceBuffered = st.samplesBuffered;
-      lastDeviceSeen = st.lastSeen;
-
-      // Forecast carried on /device/status (additive). Drives the gauge and,
-      // ridden inside features below, persists to history like the other paths.
-      final prediction = PredictionState.fromMap(st.prediction);
-      _applyPrediction(prediction);
-
-      if (st.lastWindow != null) {
-        final reading = st.lastWindow!;
-        await db.insertReading(reading);
-        latestReading = reading;
-
-        if (st.lastLabel != null) {
-          final assessment = RiskAssessment(
-            id: _uuid.v4(),
-            patientId: patientId,
-            timestamp: reading.timestamp,
-            label: st.lastLabel!,
-            confidence: st.lastConfidence ?? 0.5,
-            // Previously `const {}` — the plumbing gap. Persist the forecast so
-            // device-sourced history sees prediction too.
-            features: Map<String, dynamic>.from(st.prediction)
-              ..removeWhere((_, v) => v == null),
-            processingMs: 0,
-          );
-          await db.insertAssessment(assessment);
-          latestAssessment = assessment;
-          await auth.updatePatientStatus(patientId, assessment.label);
-
-          final alert = await sync.maybeCreateAlert(reading, assessment);
-          if (alert != null) onAlert?.call(alert);
-        }
-      }
-      await sync.syncPending(patientId);
-      await refresh(patientId);
-    } catch (_) {
-      deviceConnected = false;
-      onUpdate?.call();
+  Future<void> _tickFromDataset(String patientId, RiskLabel? forcePattern) async {
+    final body = await api.datasetNext(patientId, preferLabel: forcePattern?.apiValue);
+    final window = Map<String, dynamic>.from(body['window'] as Map);
+    final raw = Map<String, dynamic>.from(body['assessment'] as Map);
+    final reading = VitalReading.fromMap({...window, 'id': _uuid.v4(), 'patientId': patientId,
+      'timestamp': window['timestamp'] ?? DateTime.now().toUtc().toIso8601String(), 'synced': true});
+    final features = Map<String, dynamic>.from(raw['features'] as Map? ?? {});
+    for (final key in ['preictal_prob', 'lead_time_min', 'horizon_min', 'predicted', 'prediction_source', 'components']) {
+      if (raw[key] != null) features[key] = raw[key];
     }
+    final assessment = RiskAssessment(id: _uuid.v4(), patientId: patientId, timestamp: reading.timestamp,
+      label: RiskLabelX.fromApi(raw['label'] as String), confidence: (raw['confidence'] as num).toDouble(),
+      features: features, processingMs: 0);
+    await db.insertReading(reading);
+    await db.insertAssessment(assessment);
+    latestReading = reading;
+    latestAssessment = assessment;
+    _applyPrediction(_usable(assessment) ? PredictionState.fromMap(features) : null);
+    deviceConnected = true;
+    deviceId = 'dataset-player';
+    await refresh(patientId);
+  }
+
+  Future<void> _tickFromDevice(String patientId) async {
+    final status = await api.deviceStatus(patientId);
+    deviceConnected = status.connected;
+    _deviceAssessmentValid = status.assessmentValid;
+    deviceId = status.deviceId;
+    deviceBuffered = status.samplesBuffered;
+    lastDeviceSeen = status.lastSeen;
+    final reading = status.lastWindow;
+    if (reading != null) {
+      await db.insertReading(reading);
+      latestReading = reading;
+      if (status.lastLabel != null) {
+        final assessment = RiskAssessment(
+          id: status.assessmentId ?? '${reading.id}-assessment', patientId: patientId, timestamp: reading.timestamp,
+          label: status.lastLabel!, confidence: status.lastConfidence ?? 0,
+          features: {...status.prediction, 'assessment_valid': status.assessmentValid}, processingMs: 0,
+        );
+        await db.insertAssessment(assessment);
+        latestAssessment = assessment;
+        await auth.updatePatientStatus(patientId, assessment.label);
+      }
+    }
+    _applyPrediction(_usable(latestAssessment) ? PredictionState.fromMap(status.prediction) : null);
+    // The server owns device alerts. Polling must not mint new alerts/IDs or
+    // enqueue a second notification for an event it has already persisted.
+    for (final alert in await sync.pullCloudAlerts(patientId)) {
+      await db.insertAlert(alert);
+    }
+    await sync.syncPending(patientId);
+    await refresh(patientId);
   }
 
   Future<void> acknowledge(String alertId) async {
     final user = auth.currentUser;
-    if (user == null || activePatientId == null) return;
-    await api.acknowledgeAlert(patientId: activePatientId!, alertId: alertId);
+    final patientId = activePatientId;
+    if (user == null || patientId == null) return;
+    await api.acknowledgeAlert(patientId: patientId, alertId: alertId);
     await db.acknowledgeAlert(alertId, user.uid);
-    await refresh(activePatientId!);
+    await refresh(patientId);
   }
 }

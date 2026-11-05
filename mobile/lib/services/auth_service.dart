@@ -17,25 +17,19 @@ class AuthService {
   final _uuid = const Uuid();
 
   AppUser? currentUser;
+  bool isDemoSession = false;
   final Map<String, PatientProfile> _patients = {};
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     // Do not restore session automatically on cold app start: require login on each startup.
     currentUser = null;
-    final patientsRaw = prefs.getString(_patientsKey);
-    if (patientsRaw != null) {
-      final map = jsonDecode(patientsRaw) as Map<String, dynamic>;
-      for (final e in map.entries) {
-        _patients[e.key] = PatientProfile.fromMap(
-          e.value as Map<String, dynamic>,
-        );
-      }
-    }
-    if (_patients.isEmpty) {
-      _seedDemoPatients();
-      await _persistPatients();
-    }
+    isDemoSession = false;
+    _patients.clear();
+    // Legacy preferences mixed real and demo profiles. Real profiles now live
+    // only in the authenticated session, not in an unencrypted shared cache.
+    await prefs.remove(_patientsKey);
+    await prefs.remove(_userKey);
   }
 
   void _seedDemoPatients() {
@@ -57,10 +51,12 @@ class AuthService {
     required String email,
     required UserRole role,
   }) async {
-    // Ensure demo patients exist
-    if (!_patients.containsKey('patient-demo')) {
-      _seedDemoPatients();
+    if (!AppConfig.demoMode) {
+      throw StateError('Demo sign-in is disabled in this build');
     }
+    _patients.clear();
+    isDemoSession = true;
+    _seedDemoPatients();
     final uid = switch (role) {
       UserRole.patient => 'patient-demo',
       UserRole.caregiver => 'caregiver-demo',
@@ -108,6 +104,7 @@ class AuthService {
   }
 
   Future<AppUser> applyBackendSession(Map<String, dynamic> body) async {
+    isDemoSession = false;
     final rawUser = Map<String, dynamic>.from(body['user'] as Map);
     final role = UserRoleX.fromString(rawUser['role'] as String? ?? 'patient');
     final rawPatients = body['patients'] as List? ?? const [];
@@ -123,10 +120,7 @@ class AuthService {
       final profile = PatientProfile.fromMap(normalized);
       _patients[profile.patientId] = profile;
     }
-    // If backend returns no patients for doctor in demo/local setup, preserve default patient
-    if (_patients.isEmpty && role != UserRole.patient) {
-      _seedDemoPatients();
-    }
+    // No authorized patients means an empty list, never a demo patient.
     final linked = role == UserRole.patient
         ? <String>[]
         : _patients.keys.toList(growable: false);
@@ -144,8 +138,11 @@ class AuthService {
 
   Future<void> signOut() async {
     currentUser = null;
+    isDemoSession = false;
+    _patients.clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_userKey);
+    await prefs.remove(_patientsKey);
   }
 
   List<PatientProfile> accessiblePatients() {
@@ -159,9 +156,6 @@ class AuthService {
         .map((id) => _patients[id])
         .whereType<PatientProfile>()
         .toList();
-    if (mapped.isEmpty && (user.role == UserRole.doctor || user.role == UserRole.caregiver)) {
-      return _patients.values.toList();
-    }
     return mapped;
   }
 
@@ -175,6 +169,9 @@ class AuthService {
     List<String> medications = const [],
     String? caregiverId,
   }) async {
+    if (!isDemoSession && patientId == null) {
+      throw StateError('A real patient must be created by the backend first');
+    }
     final pid = patientId ?? 'pat-${_uuid.v4().substring(0, 8)}';
     final docUid = currentUser?.uid ?? 'doctor-demo';
     final profile = PatientProfile(
@@ -223,13 +220,18 @@ class AuthService {
   }
 
   Future<void> _persistUser() async {
-    if (currentUser == null) return;
+    if (currentUser == null || !isDemoSession) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_userKey, jsonEncode(currentUser!.toMap()));
   }
 
   Future<void> _persistPatients() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!isDemoSession) {
+      await prefs.remove(_patientsKey);
+      await prefs.remove(_userKey);
+      return;
+    }
     final map = {for (final e in _patients.entries) e.key: e.value.toMap()};
     await prefs.setString(_patientsKey, jsonEncode(map));
   }

@@ -28,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app import cloud_store, device_store, security, users_store
+from app.database import transaction
 from app.auth import (
     Role,
     create_token,
@@ -46,9 +47,8 @@ _LOCKOUT_WINDOW_SECONDS = 900
 
 
 def _get_client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # Uvicorn's trusted proxy configuration resolves request.client. Never trust
+    # an arbitrary client-supplied X-Forwarded-For header here.
     return request.client.host if request.client else "unknown"
 
 
@@ -362,27 +362,7 @@ def admin_create_doctor(body: CreateDoctorRequest, actor: dict = Depends(require
 
 @router.post("/admin/patients", status_code=201)
 def admin_create_patient(body: CreatePatientRequest, actor: dict = Depends(require_admin)):
-    if users_store.username_taken(body.username):
-        raise HTTPException(status_code=409, detail="username already exists")
-    if body.doctor_id:
-        _require_doctor_exists(body.doctor_id)
-    password_hash, generated = _issue_password(body.password)
-    try:
-        patient = users_store.create_user(
-            username=body.username,
-            name=body.name,
-            role="patient",
-            password_hash=password_hash,
-            created_by=actor.get("sub"),
-            primary_doctor_id=body.doctor_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    _mirror_patient_to_cloud(patient)
-    if body.doctor_id:
-        users_store.assign_patient(patient["id"], body.doctor_id, by=actor.get("sub"))
-    users_store.log(actor.get("sub"), "admin", "create_patient", target=patient["id"])
-    return {"user": _patient_view(patient), "generatedPassword": generated}
+    return _create_patient_account(body, actor, body.doctor_id)
 
 
 @router.post("/admin/users", status_code=201)
@@ -390,6 +370,8 @@ def admin_create_user(body: CreateUserRequest, actor: dict = Depends(require_adm
     """General-purpose create for admins (any role, incl. caregiver/admin)."""
     if body.role not in users_store.ROLES:
         raise HTTPException(status_code=422, detail="invalid role")
+    if body.role == "patient":
+        return _create_patient_account(CreatePatientRequest(**body.model_dump(exclude={"role"})), actor, body.doctor_id)
     if users_store.username_taken(body.username):
         raise HTTPException(status_code=409, detail="username already exists")
     if body.role == "patient" and body.doctor_id:
@@ -610,65 +592,50 @@ def doctor_patients(actor: dict = Depends(require_doctor)):
 
 @router.post("/doctor/patients", status_code=201)
 def doctor_create_patient(body: CreatePatientRequest, actor: dict = Depends(require_doctor)):
-    """A doctor creates a patient auto-assigned to themselves. Admins may pass
-    an explicit doctor_id; for doctors it is forced to their own id."""
-    if users_store.username_taken(body.username):
-        raise HTTPException(status_code=409, detail="username already exists")
-    if actor.get("role") == "admin":
-        doctor_id = body.doctor_id
-        if doctor_id:
-            _require_doctor_exists(doctor_id)
-    else:
-        doctor_id = actor.get("sub")
-    password_hash, generated = _issue_password(body.password)
-    try:
-        patient = users_store.create_user(
-            username=body.username,
-            name=body.name,
-            role="patient",
-            password_hash=password_hash,
-            created_by=actor.get("sub"),
-            primary_doctor_id=doctor_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    _mirror_patient_to_cloud(patient)
-    if body.diagnosis or body.phone or body.notes:
-        cloud_store.update_patient(patient["id"], {
-            "diagnosis": body.diagnosis or "صرع عام",
-            "phone": body.phone,
-            "notes": body.notes,
-        })
-    if doctor_id:
-        users_store.assign_patient(patient["id"], doctor_id, by=actor.get("sub"))
+    doctor_id = body.doctor_id if actor.get("role") == "admin" else actor.get("sub")
+    return _create_patient_account(body, actor, doctor_id)
 
+
+def _create_patient_account(body: CreatePatientRequest, actor: dict, doctor_id: str | None) -> dict:
+    """Account, profile, caregiver and assignment commit together or not at all."""
+    if doctor_id:
+        _require_doctor_exists(doctor_id)
+    password_hash, generated = _issue_password(body.password)
     caregiver_user = None
     cg_generated = None
-    if body.caregiver_name:
-        cg_username = body.caregiver_username or f"cg_{body.username}"
-        cg_pass_hash, cg_generated = _issue_password(body.caregiver_password)
-        existing_cg = users_store.get_by_username(cg_username)
-        if not existing_cg:
-            try:
-                caregiver_user = users_store.create_user(
-                    username=cg_username,
-                    name=body.caregiver_name,
-                    role="caregiver",
-                    password_hash=cg_pass_hash,
-                    created_by=actor.get("sub"),
-                )
-            except Exception:
-                pass
-        else:
-            caregiver_user = existing_cg
-        if caregiver_user:
-            users_store.link_caregiver(patient["id"], caregiver_user["id"], by=actor.get("sub"))
-
-    users_store.log(actor.get("sub"), actor.get("role"), "create_patient", target=patient["id"])
+    try:
+        with transaction():
+            if body.caregiver_name:
+                cg_username = body.caregiver_username or f"cg_{body.username}"
+                caregiver_user = users_store.get_by_username(cg_username)
+                if caregiver_user and (caregiver_user["role"] != "caregiver" or caregiver_user["disabled"]):
+                    raise HTTPException(status_code=409, detail="username is not an active caregiver account")
+                if caregiver_user is None:
+                    cg_hash, cg_generated = _issue_password(body.caregiver_password)
+                    caregiver_user = users_store.create_user(
+                        username=cg_username, name=body.caregiver_name, role="caregiver",
+                        password_hash=cg_hash, created_by=actor.get("sub"),
+                        meta={"phone": body.caregiver_phone, "relation": body.caregiver_relation},
+                    )
+            patient = users_store.create_user(
+                username=body.username, name=body.name, role="patient",
+                password_hash=password_hash, created_by=actor.get("sub"), primary_doctor_id=doctor_id,
+            )
+            cloud_store.upsert_patient(patient["id"], {
+                "name": body.name, "diagnosis": body.diagnosis, "phone": body.phone,
+                "notes": body.notes, "age": body.age,
+            })
+            if doctor_id:
+                users_store.assign_patient(patient["id"], doctor_id, by=actor.get("sub"))
+            if caregiver_user:
+                users_store.link_caregiver(patient["id"], caregiver_user["id"], by=actor.get("sub"))
+            users_store.log(actor.get("sub"), actor.get("role"), "create_patient", target=patient["id"])
+            result = _patient_view(patient)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
-        "user": _patient_view(patient),
-        "generatedPassword": generated,
-        "caregiver": users_store.public_user(caregiver_user) if caregiver_user else None,
+        "user": result, "generatedPassword": generated,
+        "caregiver": users_store.public_user(caregiver_user),
         "caregiverGeneratedPassword": cg_generated,
     }
 
@@ -738,12 +705,17 @@ class UpdateCaregiverRequest(BaseModel):
 def patient_list_caregivers(actor: dict = Depends(require_patient)):
     """List all family / caregiver accounts linked to the calling patient."""
     patient_id = actor.get("sub")
-    caregiver_ids = users_store.caregivers_for_patient(patient_id)
+    caregiver_ids = users_store.caregivers_for_patient(patient_id, include_disabled=True)
+    active_ids = set(users_store.caregivers_for_patient(patient_id))
     caregivers = []
     for cg_id in caregiver_ids:
         cg = users_store.get_user(cg_id)
         if cg:
             user_data = users_store.public_user(cg)
+            user_data["accountDisabled"] = cg["disabled"]
+            user_data["disabled"] = cg_id not in active_ids
+            user_data["phone"] = cg.get("meta", {}).get("phone")
+            user_data["relation"] = cg.get("meta", {}).get("relation")
             try:
                 extra = cloud_store.get_patient(cg_id)
                 if extra:
@@ -827,23 +799,24 @@ def patient_update_caregiver(
 @router.post("/patient/caregivers/{caregiver_id}/disable")
 def patient_disable_caregiver(caregiver_id: str, actor: dict = Depends(require_patient)):
     """A patient temporarily disables a family member's access."""
-    patient_id = actor.get("sub")
-    if caregiver_id not in users_store.caregivers_for_patient(patient_id):
-        raise HTTPException(status_code=403, detail="هذا الفرد غير مرتبط بحسابك")
-    if not users_store.set_disabled(caregiver_id, True):
-        raise HTTPException(status_code=404, detail="لم يتم العثور على الفرد")
-    users_store.log(patient_id, "patient", "disable_caregiver", caregiver_id)
-    return {"ok": True}
+    return _set_caregiver_access(actor, caregiver_id, disabled=True)
 
 
 @router.post("/patient/caregivers/{caregiver_id}/enable")
 def patient_enable_caregiver(caregiver_id: str, actor: dict = Depends(require_patient)):
-    """A patient re-enables a previously disabled family member."""
+    return _set_caregiver_access(actor, caregiver_id, disabled=False)
+
+
+def _set_caregiver_access(actor: dict, caregiver_id: str, *, disabled: bool) -> dict:
     patient_id = actor.get("sub")
-    if caregiver_id not in users_store.caregivers_for_patient(patient_id):
+    if caregiver_id not in users_store.caregivers_for_patient(patient_id, include_disabled=True):
         raise HTTPException(status_code=403, detail="هذا الفرد غير مرتبط بحسابك")
-    if not users_store.set_disabled(caregiver_id, False):
-        raise HTTPException(status_code=404, detail="لم يتم العثور على الفرد")
-    users_store.log(patient_id, "patient", "enable_caregiver", caregiver_id)
+    try:
+        changed = users_store.set_caregiver_link_disabled(patient_id, caregiver_id, disabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not changed:
+        raise HTTPException(status_code=404, detail="لم يتم العثور على الرابط")
+    users_store.log(patient_id, "patient", "disable_caregiver_link" if disabled else "enable_caregiver_link", caregiver_id)
     return {"ok": True}
 

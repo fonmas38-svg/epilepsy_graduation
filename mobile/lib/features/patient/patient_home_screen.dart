@@ -15,6 +15,7 @@ import '../../providers/app_state.dart';
 import '../../services/medication_service.dart';
 import '../../services/monitoring_service.dart';
 import '../../widgets/lead_time_card.dart';
+import '../../widgets/monitoring_capability_notice.dart';
 import '../../widgets/prediction_gauge.dart';
 import '../../widgets/signal_chart.dart';
 import '../shared/alerts_list.dart';
@@ -330,6 +331,8 @@ class _DashboardTabState extends State<_DashboardTab> {
                 lastUpdateLabel: TimeAgo.since(app.lastObservedAt, l),
                 pendingCount: app.care.pendingCount,
               ),
+              MonitoringCapabilityNotice(app: app),
+              Gap.vMd,
               RiskGauge(
                 view: app.riskView,
                 leadTimeMin: prediction?.leadTimeMin,

@@ -737,7 +737,7 @@ const Map<String, String> _ar = {
   'needHelpConfirmBody':
       'سيتم إبلاغ أفراد أسرتك والطبيب فوراً، مع موقعك إن كان متاحاً.',
   'send': 'إرسال',
-  'sosSent': 'تم إبلاغ من يستطيع مساعدتك',
+  'sosSent': 'حُفظ نداء الاستغاثة؛ وصوله غير مؤكد. راجع حالة الرسائل وأكّد إرسال SMS يدويًا إن فُتحت.',
   'sosFailed': 'تعذّر إرسال الطلب — أعد المحاولة أو اتصل مباشرة',
   'deviceSection': 'الجهاز',
   'deviceConnected': 'متصل',
@@ -1310,7 +1310,7 @@ const Map<String, String> _en = {
   'needHelpConfirmBody':
       'Your family and doctor will be alerted immediately, with your location if available.',
   'send': 'Send',
-  'sosSent': 'The people who can help you were alerted',
+  'sosSent': 'SOS saved; delivery is unconfirmed. Check message status and confirm SMS sending if opened.',
   'sosFailed': 'Could not send — retry or call directly',
   'deviceSection': 'Device',
   'deviceConnected': 'Connected',

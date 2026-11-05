@@ -45,6 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>sms</string>
+		<string>tel</string>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>يحتاج تطبيق مراقبة الصرع إلى تحديد موقعك الجغرافي لإرسال إحداثيات الاستغاثة فوراً إلى أفراد الأسرة عند حدوث نوبة أو طلب النجدة.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

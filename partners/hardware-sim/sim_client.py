@@ -38,7 +38,7 @@ DEFAULT_API_URL = "http://127.0.0.1:8000"
 DEFAULT_PATIENT_ID = "patient-demo"
 DEFAULT_DEVICE_ID = "headband-01"
 DEFAULT_ENROLLMENT_SECRET = "enroll-device-demo"
-DEFAULT_BATCH_SIZE = 32
+DEFAULT_BATCH_SIZE = 256
 SAMPLE_RATE_HZ = 256
 
 
@@ -207,6 +207,8 @@ def run_simulation(args: argparse.Namespace) -> None:
     if args.batches < 1 or not 1 <= args.batch_size <= 512:
         raise ValueError("Positive batches and batch size 1..512 are required")
     if args.interval is None:
+        # Keep headroom under the production API's per-minute request quota.
+        # 256 samples/packet at 256 Hz requires 60 requests/minute, not 480.
         args.interval = args.batch_size / SAMPLE_RATE_HZ
     if not math.isfinite(args.interval) or args.interval <= 0:
         raise ValueError("Interval must be finite and positive")
@@ -318,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="نمط المحاكاة: stable (مستقر), watch (مراقبة), high_risk (خطر), ramp (تدرج للتنبؤ بالنوبة)",
     )
     parser.add_argument("--batches", type=int, default=20, help="عدد الدفعات المراد إرسالها (Default: 20)")
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="عدد العينات لكل دفعة (Default: 32)")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="عدد العينات لكل دفعة (Default: 256)")
     parser.add_argument("--seed", type=int, default=42, help="Reproducible synthetic signals")
     parser.add_argument("--interval", type=float, default=None, help="الزمن بالثواني بين كل دفعة وأخرى (Default: batch-size / 256)")
     return parser

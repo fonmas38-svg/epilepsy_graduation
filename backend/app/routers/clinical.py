@@ -25,6 +25,16 @@ class OutcomeRequest(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+@router.get("/{patient_id}/alerts/{alert_id}")
+def alert_details(patient_id: str, alert_id: str,
+                  principal: dict = Depends(get_optional_principal)):
+    authorize_patient_access(patient_id, principal, enforce=True)
+    alert = cloud_store.get_alert(patient_id, alert_id)
+    if alert is None:
+        raise HTTPException(status_code=404, detail="alert not found or no longer retained")
+    return {"alert": alert}
+
+
 @router.post("/{patient_id}/alerts/{alert_id}/acknowledgments", status_code=201)
 def acknowledge_alert(
     patient_id: str, alert_id: str, body: AcknowledgeRequest,

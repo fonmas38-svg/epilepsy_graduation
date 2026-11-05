@@ -159,6 +159,7 @@ class AlertItem {
     required this.severity,
     required this.message,
     required this.recipients,
+    this.details = const {},
     this.acknowledged = false,
     this.acknowledgedBy,
   });
@@ -169,6 +170,7 @@ class AlertItem {
   final String severity;
   final String message;
   final List<String> recipients;
+  final Map<String, dynamic> details;
   final bool acknowledged;
   final String? acknowledgedBy;
 
@@ -179,6 +181,7 @@ class AlertItem {
         severity: severity,
         message: message,
         recipients: recipients,
+        details: details,
         acknowledged: acknowledged ?? this.acknowledged,
         acknowledgedBy: acknowledgedBy ?? this.acknowledgedBy,
       );
@@ -190,6 +193,7 @@ class AlertItem {
         'severity': severity,
         'message': message,
         'recipients': recipients,
+        'details': details,
         'acknowledged': acknowledged,
         'acknowledgedBy': acknowledgedBy,
       };
@@ -201,6 +205,7 @@ class AlertItem {
         severity: map['severity'] as String? ?? 'info',
         message: map['message'] as String? ?? '',
         recipients: List<String>.from(map['recipients'] ?? const ['patient', 'caregiver', 'doctor']),
+        details: Map<String, dynamic>.from(map['details'] as Map? ?? {}),
         acknowledged: map['acknowledged'] as bool? ?? false,
         acknowledgedBy: map['acknowledgedBy'] as String?,
       );

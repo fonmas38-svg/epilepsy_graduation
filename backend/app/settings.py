@@ -101,8 +101,10 @@ def validate_production_settings() -> None:
         errors.append("CORS_ORIGINS must contain explicit origins in production")
     if not os.getenv("ADMIN_PASSWORD"):
         errors.append("ADMIN_PASSWORD is required in production")
+    if os.getenv("SEED_DEMO_ACCOUNTS", "0") == "1":
+        errors.append("SEED_DEMO_ACCOUNTS must be 0 in production")
     notification_channel = os.getenv("NOTIFICATION_CHANNEL", "stub").strip().lower()
     if notification_channel != "fcm":
         errors.append("NOTIFICATION_CHANNEL must be fcm in production")
     if errors:
-        raise RuntimeError("Invalid production settings: " + "; ".join(errors))
+        raise RuntimeError("Invalid production settings: " + "; ".join(errors))

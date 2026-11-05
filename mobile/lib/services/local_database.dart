@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
@@ -13,6 +13,13 @@ import '../models/message_model.dart';
 import '../models/models.dart';
 import 'secure_store.dart';
 import 'signal_simulator.dart';
+
+/// Additive and idempotent: preserve every existing alert and acknowledgment.
+Future<void> migrateAlertDetails(DatabaseExecutor db) async {
+  final columns = await db.rawQuery('PRAGMA table_info(alerts)');
+  if (columns.any((column) => column['name'] == 'details')) return;
+  await db.execute("ALTER TABLE alerts ADD COLUMN details TEXT NOT NULL DEFAULT '{}'");
+}
 
 /// Platform-adaptive local database.
 ///
@@ -40,9 +47,8 @@ class LocalDatabase {
   /// for (emergency contacts, medical card, trigger diary, consents, access log,
   /// seizure logs, adjudications, alert responses, clinical notes) plus the
   /// outgoing `outbox` queue. v4 = + messages table for doctor and family channels.
-  /// Bumping this triggers [_onUpgrade], which only CREATEs new tables — existing
-  /// tables are never altered, so no patient data is touched.
-  static const _dbVersion = 4;
+  /// v5 adds alert details through an additive migration, preserving existing rows.
+  static const _dbVersion = 5;
 
   /// True on desktop platforms where SQLCipher is unavailable.
   static bool get _isDesktop =>
@@ -67,6 +73,7 @@ class LocalDatabase {
     final key = await SecureStore.instance.readOrCreateSecret(
       _kDbKey,
       byteLength: 32,
+      allowCreate: !await File(path).exists(),
     );
     return openDatabase(
       path,
@@ -126,7 +133,8 @@ class LocalDatabase {
             message TEXT NOT NULL,
             recipients TEXT NOT NULL,
             acknowledged INTEGER NOT NULL DEFAULT 0,
-            acknowledgedBy TEXT
+            acknowledgedBy TEXT,
+            details TEXT NOT NULL DEFAULT '{}'
           )
         ''');
     // v2/v3/v4 tables are created here for fresh installs and in _onUpgrade for
@@ -136,8 +144,7 @@ class LocalDatabase {
     await _createV4Tables(db);
   }
 
-  /// Additive migrations. Only ever CREATE new tables — never ALTER or DROP the
-  /// existing readings/assessments/alerts, so upgrades cannot lose data.
+  /// Additive migrations preserve existing rows; v5 adds alert context.
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await _createV2Tables(db);
@@ -147,6 +154,9 @@ class LocalDatabase {
     }
     if (oldVersion < 4) {
       await _createV4Tables(db);
+    }
+    if (oldVersion < 5) {
+      await migrateAlertDetails(db);
     }
   }
 
@@ -424,9 +434,10 @@ class LocalDatabase {
     await batch.commit(noResult: true);
   }
 
-  Future<void> insertAssessment(RiskAssessment a) async {
+  Future<void> insertAssessment(RiskAssessment a, {OutboxItem? delivery}) async {
     final db = await database;
-    await db.insert('assessments', {
+    await db.transaction((txn) async {
+    await txn.insert('assessments', {
       'id': a.id,
       'patientId': a.patientId,
       'timestamp': a.timestamp.toIso8601String(),
@@ -435,6 +446,10 @@ class LocalDatabase {
       'features': jsonEncode(a.features),
       'processingMs': a.processingMs,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
+      if (delivery != null) {
+        await txn.insert('outbox', delivery.toMap(), conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    });
   }
 
   Future<RiskAssessment?> latestAssessment(String patientId) async {
@@ -502,6 +517,7 @@ class LocalDatabase {
         'recipients': jsonEncode(alert.recipients),
         'acknowledged': alert.acknowledged ? 1 : 0,
         'acknowledgedBy': alert.acknowledgedBy,
+        'details': jsonEncode(alert.details),
       }, conflictAlgorithm: ConflictAlgorithm.replace);
       if (delivery != null) {
         await txn.insert(
@@ -535,6 +551,7 @@ class LocalDatabase {
             ),
             acknowledged: (r['acknowledged'] as int) == 1,
             acknowledgedBy: r['acknowledgedBy'] as String?,
+            details: Map<String, dynamic>.from(jsonDecode(r['details'] as String? ?? '{}') as Map),
           ),
         )
         .toList();

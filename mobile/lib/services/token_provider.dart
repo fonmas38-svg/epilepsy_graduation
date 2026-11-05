@@ -27,6 +27,8 @@ class TokenProvider {
   static const _kRole = 'jwt_role';
   static const _kSubject = 'jwt_subject';
   static const _kRefreshMode = 'jwt_refresh_mode';
+  static const _kOrigin = 'jwt_origin';
+  String? _origin;
 
   String? _token;
   DateTime? _expiry;
@@ -51,6 +53,7 @@ class TokenProvider {
 
   /// Restore a previously cached token so the app is authenticated on launch.
   Future<void> init() async {
+    _origin = await _store.read(_kOrigin);
     _token = await _store.read(_kToken);
     _role = await _store.read(_kRole);
     _subject = await _store.read(_kSubject);
@@ -74,6 +77,7 @@ class TokenProvider {
     required String role,
     required String subject,
   }) async {
+    _origin = _baseUrl;
     _token = token;
     _role = role;
     _subject = subject;
@@ -86,6 +90,7 @@ class TokenProvider {
     required String role,
     required String subject,
   }) async {
+    if (!AppConfig.demoMode) return false;
     try {
       final r = await _client
           .post(
@@ -102,6 +107,7 @@ class TokenProvider {
       final body = jsonDecode(r.body) as Map<String, dynamic>;
       final token = body['access_token'] as String?;
       if (token == null || token.isEmpty) return false;
+      _origin = _baseUrl;
       _token = token;
       _role = role;
       _subject = subject;
@@ -117,6 +123,7 @@ class TokenProvider {
   /// A valid `Bearer` token, re-authenticating if it is missing or (about to be)
   /// expired. Returns null when no session exists or the backend is unreachable.
   Future<String?> bearer({bool forceRefresh = false}) async {
+    if (_origin != _baseUrl) return null;
     final needsRefresh = forceRefresh ||
         _token == null ||
         _expiry == null ||
@@ -133,7 +140,7 @@ class TokenProvider {
 
   String? get subject => _subject;
 
-  bool get hasSession => _role != null && _subject != null;
+  bool get hasSession => _role != null && _subject != null && _origin == _baseUrl;
 
   Future<void> clear() async {
     _token = null;
@@ -141,6 +148,8 @@ class TokenProvider {
     _role = null;
     _subject = null;
     _refreshMode = null;
+    _origin = null;
+    await _store.delete(_kOrigin);
     await _store.delete(_kToken);
     await _store.delete(_kExpiry);
     await _store.delete(_kRole);
@@ -149,6 +158,7 @@ class TokenProvider {
   }
 
   Future<void> _persist() async {
+    if (_origin != null) await _store.write(_kOrigin, _origin!);
     if (_token != null) await _store.write(_kToken, _token!);
     if (_role != null) await _store.write(_kRole, _role!);
     if (_subject != null) await _store.write(_kSubject, _subject!);

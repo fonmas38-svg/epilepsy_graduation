@@ -3,8 +3,32 @@ import 'package:epilepsy_monitor/services/token_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'dart:convert';
 
 void main() {
+  test('repeated device polling preserves reading and assessment identities', () async {
+    final at = DateTime.now().toUtc().toIso8601String();
+    final api = ApiClient(client: MockClient((_) async => http.Response(jsonEncode({
+      'connected': true, 'assessment_valid': true, 'last_reading_id': 'r1', 'last_assessment_id': 'e1',
+      'last_window': {'timestamp': at, 'eeg': [0.1, 0.2], 'ecg': [0.1, 0.2], 'motion': [0, 0], 'hr': 72},
+    }), 200)), baseUrl: 'http://backend.test', tokens: TokenProvider(baseUrl: 'http://backend.test'));
+    final first = await api.deviceStatus('p1');
+    final next = await api.deviceStatus('p1');
+    expect(first.lastWindow!.id, next.lastWindow!.id);
+    expect(first.assessmentId, 'e1');
+    expect(first.assessmentValid, isTrue);
+  });
+  test('alert details retain patient and forecast context from the scoped endpoint', () async {
+    late Uri path;
+    final api = ApiClient(client: MockClient((request) async {
+      path = request.url;
+      return http.Response(jsonEncode({'alert': {'id': 'a1', 'patientId': 'p1', 'timestamp': DateTime.now().toIso8601String(),
+        'details': {'forecast_status': 'no_prior_alert_in_available_history'}}}), 200);
+    }), baseUrl: 'http://backend.test', tokens: TokenProvider(baseUrl: 'http://backend.test'));
+    final alert = await api.alertDetails('p1', 'a1');
+    expect(path.path, '/patients/p1/alerts/a1');
+    expect(alert.details['forecast_status'], 'no_prior_alert_in_available_history');
+  });
   test('acknowledgeAlert uses the backend patient-scoped route', () async {
     late Uri requested;
     final client = MockClient((request) async {

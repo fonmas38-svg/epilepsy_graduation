@@ -10,7 +10,6 @@ from app.schemas import VitalWindow, validate_utc_timestamp
 from app.auth import (
     get_current_principal,
     get_optional_principal,
-    AuthError,
     authorize_patient_access,
 )
 from app.settings import settings
@@ -84,11 +83,7 @@ def _check_token(authorization: str | None, patient_id: str, device_id: str) -> 
     """Authenticate an ingest call. Prefers JWT; falls back to the legacy static
     token only while AUTH_ALLOW_LEGACY_TOKEN is enabled (default on for the demo).
     Returns the decoded principal so callers can log who ingested."""
-    try:
-        principal = get_current_principal(authorization)
-    except AuthError as e:
-        # keep the historical contract: bad/absent creds -> 403 on this endpoint
-        raise HTTPException(status_code=403, detail=e.detail)
+    principal = get_current_principal(authorization)
     if principal.get("role") not in ("device", "admin"):
         raise HTTPException(status_code=403, detail="Role not permitted to ingest")
     if principal.get("legacy") and settings.require_patient_auth:
@@ -143,14 +138,14 @@ def ingest_samples(
             sample.ts = s.ts
         samples.append(sample)
 
-    result = hub.ingest(
-        patient_id=body.patient_id,
-        device_id=body.device_id,
-        samples=samples,
-        classifier=request.app.state.classifier,
-        batch_id=body.batch_id,
-        sequence_number=body.sequence_number,
-    )
+    try:
+        result = hub.ingest(
+            patient_id=body.patient_id, device_id=body.device_id, samples=samples,
+            classifier=request.app.state.classifier, batch_id=body.batch_id,
+            sequence_number=body.sequence_number,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True, **result}
 
 
@@ -162,37 +157,18 @@ def ingest_window(
 ):
     """Accept a full analysis window from the device firmware or PC gateway."""
     _check_token(authorization, body.patient_id, body.device_id)
-    window = VitalWindow(
-        eeg=body.eeg,
-        ecg=body.ecg,
-        motion=body.motion,
-        hr=body.hr,
-        timestamp=body.timestamp,
-        patient_id=body.patient_id,
-    )
-    result = request.app.state.classifier.predict_window(window)
-    features = result.features
-    label, confidence = result.label, result.confidence
-
-    hub = get_hub(request)
-    samples = [
-        DeviceSample(eeg=body.eeg[i], ecg=body.ecg[i], motion=body.motion[i], hr=body.hr)
-        for i in range(len(body.eeg))
-    ]
-    hub.ingest(
-        body.patient_id, body.device_id, samples, request.app.state.classifier,
-        batch_id=body.batch_id,
-        sequence_number=body.sequence_number,
-    )
-
-    return {
-        "ok": True,
-        "assessment": {
-            "label": label,
-            "confidence": confidence,
-            "features": features.model_dump(),
-        },
-    }
+    samples = [DeviceSample(
+        eeg=body.eeg[i], ecg=body.ecg[i], motion=body.motion[i], hr=body.hr,
+        **({"ts": body.timestamp} if body.timestamp else {}),
+    ) for i in range(len(body.eeg))]
+    try:
+        result = get_hub(request).ingest(
+            body.patient_id, body.device_id, samples, request.app.state.classifier,
+            batch_id=body.batch_id, sequence_number=body.sequence_number,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, **result}
 
 
 @router.get("/status/{patient_id}")
@@ -228,6 +204,10 @@ def device_status(
         "samples_buffered": status.samples_buffered,
         "last_label": status.last_label,
         "last_confidence": status.last_confidence,
+        "assessment_valid": status.assessment_valid,
+        "last_reading_id": status.last_reading_id,
+        "last_assessment_id": status.last_assessment_id,
+        "last_sequence": status.last_sequence,
         "last_window": status.last_window.model_dump() if status.last_window else None,
         "last_engine": status.last_engine,
         "last_deep_prob": status.last_deep_prob,

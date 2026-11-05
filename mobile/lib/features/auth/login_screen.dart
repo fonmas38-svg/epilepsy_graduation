@@ -182,21 +182,17 @@ class _LoginScreenState extends State<LoginScreen>
     );
     if (!ok || !mounted) return;
 
-    final boundPass = await app.biometrics.getPasswordForUser(targetUser);
-    final demoCredentials = <String, String>{
-      'doctor': 'doctor123',
-      'patient': 'patient123',
-      'caregiver': 'caregiver123',
-      'admin': 'admin123',
-    };
-
-    final pass = boundPass ?? demoCredentials[targetUser] ?? 'password123';
-
-    setState(() {
-      _usernameCtrl.text = targetUser;
-      _passwordCtrl.text = pass;
-    });
-    await _submitAccount();
+    setState(() { _loading = true; _failure = null; });
+    try {
+      await app.signInWithBiometrics(targetUser);
+      if (mounted) {
+        Navigator.pushNamedAndRemoveUntil(context, AppRouter.rootFor(app.auth.currentUser?.role), (r) => false);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _failure = Failure.from(e));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   void _fillRoleDemo(UserRole role) {

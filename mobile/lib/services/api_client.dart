@@ -33,10 +33,14 @@ class DeviceStatusResult {
     this.lastConfidence,
     this.lastWindow,
     this.prediction = const {},
+    this.assessmentValid = false,
+    this.assessmentId,
   });
 
   final String patientId;
   final bool connected;
+  final bool assessmentValid;
+  final String? assessmentId;
   final int samplesBuffered;
   final String? deviceId;
   final String? lastSeen;
@@ -307,6 +311,16 @@ class ApiClient {
     }
   }
 
+  Future<AlertItem> alertDetails(String patientId, String alertId) async {
+    final response = await _client.get(_u('/patients/$patientId/alerts/$alertId'), headers: await _headers())
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode != 200) {
+      throw ApiException('Alert details unavailable', statusCode: response.statusCode);
+    }
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    return AlertItem.fromMap(Map<String, dynamic>.from(body['alert'] as Map));
+  }
+
   Future<DeviceStatusResult> deviceStatus(String patientId) async {
     final r = await _client
         .get(_u('/device/status/$patientId'), headers: await _headers())
@@ -320,7 +334,7 @@ class ApiClient {
     if (rawWindow is Map) {
       final m = Map<String, dynamic>.from(rawWindow);
       window = VitalReading(
-        id: 'device-${DateTime.now().millisecondsSinceEpoch}',
+        id: body['last_reading_id'] as String? ?? 'device-$patientId-${m['timestamp']}',
         patientId: patientId,
         timestamp:
             DateTime.tryParse(m['timestamp'] as String? ?? '') ??
@@ -341,6 +355,8 @@ class ApiClient {
     return DeviceStatusResult(
       patientId: patientId,
       connected: body['connected'] as bool? ?? false,
+      assessmentValid: body['assessment_valid'] == true,
+      assessmentId: body['last_assessment_id'] as String?,
       samplesBuffered: body['samples_buffered'] as int? ?? 0,
       deviceId: body['device_id'] as String?,
       lastSeen: body['last_seen'] as String?,
@@ -351,6 +367,8 @@ class ApiClient {
       lastWindow: window,
       // Forecast layer (additive) — mapped to PredictionState.fromMap's keys.
       prediction: {
+        'engine': body['last_engine'],
+        'assessment_valid': body['assessment_valid'] == true,
         'preictal_prob': body['last_preictal_prob'],
         'lead_time_min': body['last_lead_time_min'],
         'horizon_min': body['last_horizon_min'],

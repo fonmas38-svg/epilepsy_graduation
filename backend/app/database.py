@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from threading import RLock
 from typing import Iterator
@@ -27,6 +28,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     event,
+    false,
     func,
 )
 from sqlalchemy.engine import Connection, Engine
@@ -104,6 +106,7 @@ caregiver_links = Table(
     ),
     Column("linked_by", String(64)),
     Column("linked_at", String(64), nullable=False),
+    Column("disabled", Boolean, nullable=False, default=False, server_default=false()),
 )
 Index("ix_caregiver_links_caregiver_id", caregiver_links.c.caregiver_id)
 
@@ -282,6 +285,43 @@ alert_outbox = Table(
 )
 Index("ix_alert_outbox_due", alert_outbox.c.status, alert_outbox.c.next_attempt_at)
 
+# Leases prevent healthy concurrent workers from delivering the same pending row.
+alert_outbox.append_column(Column("lease_token", String(64)))
+alert_outbox.append_column(Column("lease_expires_at", String(64)))
+
+prescriptions = Table(
+    "prescriptions", metadata,
+    Column("id", String(64), primary_key=True),
+    Column("patient_id", String(64), ForeignKey("patients.patient_id", ondelete="CASCADE"), nullable=False),
+    Column("doctor_id", String(64)),
+    Column("name", String(200), nullable=False),
+    Column("dose", String(100), nullable=False),
+    Column("schedule", String(200), nullable=False),
+    Column("notes", Text),
+    Column("active", Boolean, nullable=False, default=True),
+    Column("created_at", String(64), nullable=False),
+    Column("updated_at", String(64), nullable=False),
+)
+Index("ix_prescriptions_patient", prescriptions.c.patient_id)
+
+# Persist bounded signal buffers and replay protection with the derived events.
+# PostgreSQL locks one stream row; SQLite serializes writes in the local profile.
+device_streams = Table(
+    "device_streams", metadata,
+    Column("patient_id", String(64), ForeignKey("patients.patient_id", ondelete="CASCADE"), primary_key=True),
+    Column("device_id", String(128), primary_key=True),
+    Column("state_json", Text, nullable=False),
+    Column("updated_at", String(64), nullable=False),
+)
+
+sso_codes = Table(
+    "sso_codes", metadata,
+    Column("code_hash", String(64), primary_key=True),
+    Column("user_id", String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("session_version", Integer, nullable=False),
+    Column("expires_at", String(64), nullable=False),
+)
+
 # FCM registration tokens are credentials-like routing data. Keep them outside
 # users.meta_json so /auth/me and admin profile responses can never expose them.
 push_tokens = Table(
@@ -344,6 +384,7 @@ Index("ix_messages_created_at", messages.c.created_at)
 _engines: dict[str, Engine] = {}
 _engine_lock = RLock()
 _initialized: set[str] = set()
+_active_transaction: ContextVar[Connection | None] = ContextVar("db_transaction", default=None)
 
 
 def database_path() -> Path:
@@ -482,13 +523,31 @@ def initialize_database() -> None:
 
 @contextmanager
 def transaction() -> Iterator[Connection]:
+    """A unit of work; nested store calls join the caller's transaction.
+
+    Context-local rather than global/thread-local so unrelated requests cannot
+    share a connection. Exceptions must propagate to the outermost scope, which
+    commits or rolls back the complete business operation.
+    """
+    active = _active_transaction.get()
+    if active is not None:
+        yield active
+        return
     initialize_database()
-    with get_engine().begin() as connection:
-        yield connection
+    with get_engine().begin() as db_connection:
+        token = _active_transaction.set(db_connection)
+        try:
+            yield db_connection
+        finally:
+            _active_transaction.reset(token)
 
 
 @contextmanager
 def connection() -> Iterator[Connection]:
+    active = _active_transaction.get()
+    if active is not None:
+        yield active
+        return
     initialize_database()
     with get_engine().connect() as db_connection:
         yield db_connection

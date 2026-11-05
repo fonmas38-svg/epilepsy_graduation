@@ -22,11 +22,11 @@ class AppConfig {
   static String get apiBaseUrl {
     const override = String.fromEnvironment('API_BASE_URL');
     if (override.isNotEmpty) return override;
-    return cloudProductionUrl;
+    return demoMode ? defaultLocalUrl : cloudProductionUrl;
   }
 
-  /// Demo mode works fully offline without a real Firebase project.
-  static const demoMode = bool.fromEnvironment('DEMO_MODE', defaultValue: true);
+  /// Demo mode must be explicitly enabled and never targets the live API by default.
+  static const demoMode = bool.fromEnvironment('DEMO_MODE', defaultValue: false);
 
   static const simulationInterval = Duration(minutes: 5);
 

@@ -49,6 +49,9 @@ from app.database import (  # noqa: E402  (import after sys.path fix)
     caregiver_links,
     database_path,
     devices,
+    device_streams,
+    prescriptions,
+    sso_codes,
     is_sqlite_url,
     messages,
     normalize_database_url,
@@ -78,6 +81,9 @@ COPY_ORDER: tuple[Table, ...] = (
     alert_outbox,
     store_imports,
     messages,
+    prescriptions,
+    device_streams,
+    sso_codes,
 )
 
 BATCH_SIZE = 500

@@ -1114,17 +1114,19 @@ class _PrivacySectionState extends State<_PrivacySection> {
         if (mounted) AppSnack.warn(context, 'لم يتم التحقق من البصمة عبر المستشعر');
         return;
       }
-      final p = app.currentSessionPassword ??
-          (u == 'patient'
-              ? 'patient123'
-              : (u == 'doctor'
-                  ? 'doctor123'
-                  : (u == 'admin' ? 'admin123' : 'caregiver123')));
-      await _biometrics.enableForUser(
-        username: u,
-        userId: user?.uid ?? u,
-        password: p,
+      final token = await app.api.tokens.bearer();
+      if (token == null || user == null || app.auth.isDemoSession) {
+        if (mounted) AppSnack.warn(context, l.signIn);
+        return;
+      }
+      final enabled = await _biometrics.enableForUser(
+        username: u, userId: user.uid, token: token,
+        role: user.role.name, baseUrl: app.api.baseUrl,
       );
+      if (!enabled) {
+        if (mounted) AppSnack.warn(context, l.signIn);
+        return;
+      }
     } else {
       await _biometrics.disableForUser(u);
     }

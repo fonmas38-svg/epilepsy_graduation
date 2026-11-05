@@ -1,58 +1,130 @@
+import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 
-/// A single best-effort location fix for the SOS feature.
-class GpsFix {
-  const GpsFix({required this.latitude, required this.longitude, this.accuracy});
+enum LocationStatus {
+  available,
+  serviceDisabled,
+  permissionDenied,
+  permissionDeniedForever,
+  timedOut,
+  unsupported,
+  stale,
+  invalidFix,
+  unavailable,
+}
 
+class GpsFix {
+  const GpsFix({
+    required this.latitude,
+    required this.longitude,
+    this.accuracy,
+    this.capturedAt,
+  });
   final double latitude;
   final double longitude;
   final double? accuracy;
-
-  /// A tappable Google Maps link for the alert message.
+  final DateTime? capturedAt;
   String get mapsUrl =>
       'https://maps.google.com/?q=${latitude.toStringAsFixed(6)},${longitude.toStringAsFixed(6)}';
-
+  bool get valid =>
+      latitude.isFinite &&
+      longitude.isFinite &&
+      latitude.abs() <= 90 &&
+      longitude.abs() <= 180 &&
+      (accuracy == null || (accuracy!.isFinite && accuracy! >= 0));
   @override
-  String toString() => '${latitude.toStringAsFixed(6)}, ${longitude.toStringAsFixed(6)}';
+  String toString() =>
+      '${latitude.toStringAsFixed(6)}, ${longitude.toStringAsFixed(6)}';
 }
 
-/// Thin, **isolated** wrapper around `geolocator` — the only file in the app that
-/// imports it. Everything here is optional-by-behavior: every failure mode
-/// (plugin missing, service off, permission denied, timeout) resolves to `null`
-/// rather than throwing, so the SOS path can fire an alert with or without
-/// coordinates and no core path ever depends on GPS being available.
+class LocationResult {
+  const LocationResult(this.status, [this.fix]);
+  final LocationStatus status;
+  final GpsFix? fix;
+}
+
+abstract class LocationPlatform {
+  Future<bool> enabled();
+  Future<LocationPermission> permission();
+  Future<LocationPermission> requestPermission();
+  Future<GpsFix> acquire();
+}
+
+class GeolocatorPlatformAdapter implements LocationPlatform {
+  @override
+  Future<bool> enabled() => Geolocator.isLocationServiceEnabled();
+  @override
+  Future<LocationPermission> permission() => Geolocator.checkPermission();
+  @override
+  Future<LocationPermission> requestPermission() =>
+      Geolocator.requestPermission();
+  @override
+  Future<GpsFix> acquire() async {
+    final p = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+    );
+    return GpsFix(
+      latitude: p.latitude,
+      longitude: p.longitude,
+      accuracy: p.accuracy,
+      capturedAt: p.timestamp,
+    );
+  }
+}
+
+/// Positioning may work without internet. Failures never establish that a SIM
+/// or satellite-messaging component is missing; they identify the actual cause.
 class LocationService {
-  /// Try to obtain a location fix within [timeout]. Returns `null` on any
-  /// problem — callers must treat a null fix as "send SOS without coordinates".
-  Future<GpsFix?> currentFix({
+  LocationService({LocationPlatform? platform})
+    : _platform = platform ?? GeolocatorPlatformAdapter();
+  final LocationPlatform _platform;
+  LocationResult? lastResult;
+  Future<LocationResult> currentResult({
     Duration timeout = const Duration(seconds: 8),
   }) async {
     try {
-      final enabled = await Geolocator.isLocationServiceEnabled();
-      if (!enabled) return null;
-
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        return null;
-      }
-
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-      ).timeout(timeout);
-
-      return GpsFix(
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-        accuracy: pos.accuracy,
-      );
+      lastResult = await _locate().timeout(timeout);
+    } on TimeoutException {
+      lastResult = const LocationResult(LocationStatus.timedOut);
+    } on MissingPluginException {
+      lastResult = const LocationResult(LocationStatus.unsupported);
+    } on UnsupportedError {
+      lastResult = const LocationResult(LocationStatus.unsupported);
     } catch (_) {
-      // Plugin unavailable (e.g. desktop), timeout, or any platform error →
-      // degrade silently. SOS still works without a location.
-      return null;
+      lastResult = const LocationResult(LocationStatus.unavailable);
     }
+    return lastResult!;
   }
+
+  Future<LocationResult> _locate() async {
+    if (!await _platform.enabled()) {
+      return const LocationResult(LocationStatus.serviceDisabled);
+    }
+    var permission = await _platform.permission();
+    if (permission == LocationPermission.denied) {
+      permission = await _platform.requestPermission();
+    }
+    if (permission == LocationPermission.deniedForever) {
+      return const LocationResult(LocationStatus.permissionDeniedForever);
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.unableToDetermine) {
+      return const LocationResult(LocationStatus.permissionDenied);
+    }
+    final fix = await _platform.acquire();
+    if (!fix.valid) return const LocationResult(LocationStatus.invalidFix);
+    if (fix.capturedAt != null) {
+      final age = DateTime.now().difference(fix.capturedAt!);
+      if (age > const Duration(minutes: 1) ||
+          age < const Duration(seconds: -30)) {
+        return const LocationResult(LocationStatus.stale);
+      }
+    }
+    return LocationResult(LocationStatus.available, fix);
+  }
+
+  Future<GpsFix?> currentFix({
+    Duration timeout = const Duration(seconds: 8),
+  }) async => (await currentResult(timeout: timeout)).fix;
 }

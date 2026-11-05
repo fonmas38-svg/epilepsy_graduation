@@ -1,238 +1,148 @@
-import 'package:flutter/foundation.dart';
+import 'dart:convert';
+
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Secure Biometric Authentication Service.
-///
-/// Communicates directly with native OS biometric hardware (Windows Hello on
-/// Windows desktop, BiometricPrompt on Android / iOS).
-///
-/// Features:
-/// 1. Strict hardware & enrolled biometric verification.
-/// 2. Hides biometrics completely if device is unsupported or has no enrolled biometric.
-/// 3. Strict single-account binding: prevents using biometrics to access accounts
-///    other than the one explicitly enrolled by the user.
+import 'secure_store.dart';
+
+/// A revocable, expiring backend session, never the account password.
+class BiometricSession {
+  const BiometricSession({required this.token, required this.userId,
+    required this.username, required this.role, required this.baseUrl});
+  final String token;
+  final String userId;
+  final String username;
+  final String role;
+  final String baseUrl;
+
+  Map<String, String> toMap() => {
+    'token': token, 'userId': userId, 'username': username, 'role': role, 'baseUrl': baseUrl,
+  };
+
+  static BiometricSession? parse(String? raw) {
+    try {
+      final data = jsonDecode(raw!) as Map<String, dynamic>;
+      final session = BiometricSession(token: data['token'] as String,
+        userId: data['userId'] as String, username: data['username'] as String,
+        role: data['role'] as String, baseUrl: data['baseUrl'] as String);
+      final parts = session.token.split('.');
+      final claims = jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(parts[1])))) as Map;
+      final expiry = claims['exp'] as num;
+      if (claims['sub'] != session.userId || claims['role'] != session.role ||
+          expiry * 1000 <= DateTime.now().millisecondsSinceEpoch) {
+        return null;
+      }
+      // The backend, not this local decode, verifies the signature on login.
+      return session;
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
 class BiometricService {
-  BiometricService() : _auth = LocalAuthentication();
-
+  BiometricService({LocalAuthentication? auth, SecureStore? store})
+      : _auth = auth ?? LocalAuthentication(), _store = store ?? SecureStore.instance;
   final LocalAuthentication _auth;
+  final SecureStore _store;
+  static const _sessionKey = 'biometrics_session_v2';
+  DateTime? _verifiedAt;
 
-  static const _prefKeyBiometricsEnabled = 'biometrics_enabled_pref';
-  static const _prefKeyBoundUsername = 'biometrics_bound_username';
-  static const _prefKeyBoundUserId = 'biometrics_bound_user_id';
-  static const _prefKeyBoundPassword = 'biometrics_bound_password';
+  Future<void> purgeLegacySecrets() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in prefs.getKeys().toList()) {
+      if (key.startsWith('biometrics_password_') || key == 'biometrics_bound_password' ||
+          key.startsWith('biometrics_enabled_') || key == 'biometrics_bound_user_id') {
+        await prefs.remove(key);
+      }
+    }
+  }
 
-  /// Check if physical hardware supports biometric sensors.
   Future<bool> get isHardwareSupported async {
     try {
-      final isSupported = await _auth.isDeviceSupported();
-      final canCheck = await _auth.canCheckBiometrics;
-      return isSupported && canCheck;
-    } catch (e) {
-      debugPrint('BiometricService.isHardwareSupported error: $e');
-      return false;
-    }
+      return await _auth.isDeviceSupported() && await _auth.canCheckBiometrics;
+    } catch (_) { return false; }
   }
-
-  /// Check if at least one biometric (fingerprint or face) is enrolled in the OS.
   Future<bool> get hasEnrolledBiometrics async {
-    try {
-      final list = await _auth.getAvailableBiometrics();
-      return list.isNotEmpty;
-    } catch (e) {
-      debugPrint('BiometricService.hasEnrolledBiometrics error: $e');
-      return false;
-    }
+    try { return (await _auth.getAvailableBiometrics()).isNotEmpty; }
+    catch (_) { return false; }
   }
-
-  /// Returns true ONLY if the device hardware supports biometrics AND
-  /// at least one biometric is registered/enrolled in Windows Hello or Android.
-  /// If false, the biometric option must be completely hidden from UI.
-  Future<bool> get isAvailable async {
-    try {
-      final supported = await isHardwareSupported;
-      if (!supported) return false;
-      return await hasEnrolledBiometrics;
-    } catch (e) {
-      debugPrint('BiometricService.isAvailable error: $e');
-      return false;
-    }
-  }
-
-  /// Get list of available enrolled biometric types from OS.
+  Future<bool> get isAvailable async => await isHardwareSupported && await hasEnrolledBiometrics;
   Future<List<BiometricType>> get availableBiometrics async {
-    try {
-      return await _auth.getAvailableBiometrics();
-    } catch (_) {
-      return const [];
-    }
+    try { return await _auth.getAvailableBiometrics(); }
+    catch (_) { return const []; }
   }
 
-  static String _keyEnabledFor(String username) =>
-      'biometrics_enabled_${username.trim().toLowerCase()}';
-  static String _keyPasswordFor(String username) =>
-      'biometrics_password_${username.trim().toLowerCase()}';
-
-  /// Check if biometric authentication is enabled specifically for [username].
-  Future<bool> isEnabledForUser(String username) async {
-    final u = username.trim().toLowerCase();
-    if (u.isEmpty) return false;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getBool(_keyEnabledFor(u)) ?? false;
-    } catch (_) {
-      return false;
-    }
+  Future<BiometricSession?> _session() async {
+    await purgeLegacySecrets();
+    try { return BiometricSession.parse(await _store.readSecret(_sessionKey)); }
+    catch (_) { return null; }
   }
 
-  /// Retrieve the password for the specific user for secure biometric sign-in.
-  Future<String?> getPasswordForUser(String username) async {
-    final u = username.trim().toLowerCase();
-    if (u.isEmpty) return null;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getString(_keyPasswordFor(u));
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<bool> isEnabledForUser(String username) async =>
+      (await _session())?.username == username.trim().toLowerCase();
+  Future<bool> isEnabled([String? username]) async => username == null
+      ? await _session() != null : isEnabledForUser(username);
+  Future<bool> isBoundToUser(String username) => isEnabledForUser(username);
+  Future<String?> getBoundUsername() async => (await _session())?.username;
 
-  /// Check if biometric authentication is enabled and bound to an account.
-  Future<bool> isEnabled([String? username]) async {
-    if (username != null && username.isNotEmpty) {
-      return isEnabledForUser(username);
-    }
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final boundUser = prefs.getString(_prefKeyBoundUsername);
-      if (boundUser == null || boundUser.isEmpty) return false;
-      return prefs.getBool(_keyEnabledFor(boundUser)) ??
-          prefs.getBool(_prefKeyBiometricsEnabled) ??
-          false;
-    } catch (_) {
-      return false;
-    }
-  }
+  bool get _recentlyVerified => _verifiedAt != null &&
+      DateTime.now().difference(_verifiedAt!) < const Duration(seconds: 30);
 
-  /// Retrieve the username of the account bound to biometrics.
-  Future<String?> getBoundUsername() async {
+  Future<bool> enableForUser({required String username, required String userId,
+    required String token, required String role, required String baseUrl}) async {
+    if (!_recentlyVerified) return false;
+    final session = BiometricSession(token: token, userId: userId,
+      username: username.trim().toLowerCase(), role: role, baseUrl: baseUrl);
+    if (BiometricSession.parse(jsonEncode(session.toMap())) == null) return false;
     try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getString(_prefKeyBoundUsername);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Retrieve the password for the bound account for secure biometric sign-in.
-  Future<String?> getBoundPassword([String? username]) async {
-    if (username != null && username.isNotEmpty) {
-      final p = await getPasswordForUser(username);
-      if (p != null) return p;
-    }
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getString(_prefKeyBoundPassword);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Verify if the given username matches an account with enabled biometrics.
-  Future<bool> isBoundToUser(String username) async {
-    return isEnabledForUser(username);
-  }
-
-  /// Enable biometrics and bind strictly to a specific user account.
-  Future<bool> enableForUser({
-    required String username,
-    required String userId,
-    required String password,
-  }) async {
-    final u = username.trim().toLowerCase();
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_keyEnabledFor(u), true);
-      await prefs.setString(_keyPasswordFor(u), password);
-      await prefs.setBool(_prefKeyBiometricsEnabled, true);
-      await prefs.setString(_prefKeyBoundUsername, u);
-      await prefs.setString(_prefKeyBoundUserId, userId);
-      await prefs.setString(_prefKeyBoundPassword, password);
+      await purgeLegacySecrets();
+      await _store.writeSecret(_sessionKey, jsonEncode(session.toMap()));
+      _verifiedAt = null;
       return true;
-    } catch (e) {
-      debugPrint('BiometricService.enableForUser error: $e');
-      return false;
-    }
+    } catch (_) { return false; }
   }
 
-  /// Disable biometrics for a specific user account.
-  Future<bool> disableForUser(String username) async {
-    final u = username.trim().toLowerCase();
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_keyEnabledFor(u), false);
-      await prefs.remove(_keyPasswordFor(u));
-      return true;
-    } catch (e) {
-      debugPrint('BiometricService.disableForUser error: $e');
-      return false;
-    }
+  /// A successful native challenge grants one short-lived read. The server URL
+  /// is bound too: a saved production token must not be sent to another server.
+  Future<BiometricSession?> takeSession(String username, String baseUrl) async {
+    if (!_recentlyVerified) return null;
+    _verifiedAt = null;
+    final session = await _session();
+    if (session?.username != username.trim().toLowerCase() || session?.baseUrl != baseUrl) return null;
+    return session;
   }
 
-  /// Disable biometrics and remove account binding.
+  Future<bool> disableForUser(String username) => disableBiometrics(username);
   Future<bool> disableBiometrics([String? username]) async {
+    _verifiedAt = null;
     try {
+      await purgeLegacySecrets();
+      // Single-account binding: disabling clears the entire credential, including
+      // an expired session that cannot be parsed anymore.
+      await _store.deleteSecret(_sessionKey);
       final prefs = await SharedPreferences.getInstance();
-      if (username != null && username.isNotEmpty) {
-        await disableForUser(username);
-      }
-      await prefs.setBool(_prefKeyBiometricsEnabled, false);
-      await prefs.remove(_prefKeyBoundUsername);
-      await prefs.remove(_prefKeyBoundUserId);
-      await prefs.remove(_prefKeyBoundPassword);
+      await prefs.remove('biometrics_bound_username');
       return true;
-    } catch (e) {
-      debugPrint('BiometricService.disableBiometrics error: $e');
-      return false;
-    }
+    } catch (_) { return false; }
   }
 
-  /// Authenticate using the native OS sensor (Windows Hello or Android BiometricPrompt).
-  Future<bool> authenticate({
-    required String localizedReason,
-    bool biometricOnly = true,
-  }) async {
+  Future<bool> authenticate({required String localizedReason, bool biometricOnly = true}) async {
+    _verifiedAt = null;
     try {
-      final available = await isAvailable;
-      if (!available) {
-        debugPrint('BiometricService: Device does not have enrolled biometrics.');
-        return false;
-      }
-
-      try {
-        return await _auth.authenticate(
-          localizedReason: localizedReason,
-          biometricOnly: biometricOnly,
-          persistAcrossBackgrounding: true,
-        );
-      } catch (e) {
-        debugPrint('Biometric primary sensor failed ($e), trying fallback...');
-        return await _auth.authenticate(
-          localizedReason: localizedReason,
-          biometricOnly: false,
-          persistAcrossBackgrounding: true,
-        );
-      }
-    } catch (e) {
-      debugPrint('BiometricService.authenticate error: $e');
+      if (!await isAvailable) return false;
+      final ok = await _auth.authenticate(localizedReason: localizedReason,
+        biometricOnly: biometricOnly, persistAcrossBackgrounding: true);
+      if (ok) _verifiedAt = DateTime.now();
+      return ok;
+    } catch (_) {
+      // Never silently downgrade a requested biometric-only challenge to PIN.
       return false;
     }
   }
 
-  /// Cancel any ongoing authentication request.
   Future<void> stopAuthentication() async {
-    try {
-      await _auth.stopAuthentication();
-    } catch (_) {}
+    _verifiedAt = null;
+    try { await _auth.stopAuthentication(); } catch (_) {}
   }
 }

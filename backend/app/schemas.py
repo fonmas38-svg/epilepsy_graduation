@@ -41,6 +41,7 @@ class VitalWindow(BaseModel):
     """One analysis window of vital signals."""
 
     timestamp: str | None = None
+    sample_rate_hz: float = Field(default=256.0, ge=1, le=8192, allow_inf_nan=False)
     eeg: list[float] = Field(..., min_length=8, max_length=4096)
     ecg: list[float] = Field(..., min_length=8, max_length=4096)
     motion: list[float] = Field(..., min_length=8, max_length=4096)

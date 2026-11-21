@@ -1,11 +1,13 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart'
+    show debugPrint, defaultTargetPlatform, kIsWeb;
 import 'package:http/http.dart' as http;
 
 import '../core/config.dart';
 import '../core/enums.dart';
 import '../models/models.dart';
+import 'secure_store.dart';
 import 'token_provider.dart';
 
 class AnalyzeResult {
@@ -70,8 +72,18 @@ class ApiException implements Exception {
 class ApiClient {
   ApiClient({http.Client? client, String? baseUrl, TokenProvider? tokens})
     : _client = client ?? http.Client(),
-      _baseUrl = (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(RegExp(r'/+$'), ''),
-      tokens = tokens ?? TokenProvider(baseUrl: (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(RegExp(r'/+$'), ''));
+      _baseUrl = (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(
+        RegExp(r'/+$'),
+        '',
+      ),
+      tokens =
+          tokens ??
+          TokenProvider(
+            baseUrl: (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(
+              RegExp(r'/+$'),
+              '',
+            ),
+          );
 
   final http.Client _client;
   String _baseUrl;
@@ -92,7 +104,12 @@ class ApiClient {
   Future<Map<String, String>> _headers({bool auth = true}) async {
     final headers = {'Content-Type': 'application/json'};
     if (auth) {
+      final revision = tokens.revision;
+      final origin = _baseUrl;
       final token = await tokens.bearer();
+      if (revision != tokens.revision || origin != _baseUrl) {
+        throw ApiException('Session changed', statusCode: 401);
+      }
       if (token != null && token.isNotEmpty) {
         headers['Authorization'] = 'Bearer $token';
       }
@@ -107,39 +124,49 @@ class ApiClient {
     Object body, {
     Duration timeout = const Duration(seconds: 15),
   }) async {
-    final payload = jsonEncode(body);
-    var r = await _client
-        .post(_u(path), headers: await _headers(), body: payload)
-        .timeout(timeout);
-    if (r.statusCode == 401) {
-      final token = await tokens.bearer(forceRefresh: true);
-      if (token != null && token.isNotEmpty) {
-        r = await _client
-            .post(_u(path), headers: await _headers(), body: payload)
-            .timeout(timeout);
-      }
-    }
-    return r;
+    return _requestAuthed('POST', path, body: body, timeout: timeout);
   }
 
   String _detail(http.Response response, String fallback) {
     try {
       final body = jsonDecode(response.body);
       if (body is Map && body['detail'] != null) {
-        return body['detail'].toString();
+        final detail = body['detail'];
+        // Validation payloads may echo passwords and other submitted values.
+        return detail is String ? detail : fallback;
       }
     } catch (_) {}
     return fallback;
   }
 
-  Future<Map<String, dynamic>> login(String username, String password) async {
+  Future<Map<String, dynamic>> login(
+    String username,
+    String password, {
+    Duration timeout = const Duration(seconds: 35),
+    String? deviceId,
+  }) async {
+    final origin = _baseUrl;
+    final revision = tokens.revision;
+    final resolvedDeviceId =
+        deviceId ?? await SecureStore.instance.getOrCreateDeviceId();
     final r = await _client
         .post(
           _u('/auth/login'),
           headers: await _headers(auth: false),
-          body: jsonEncode({'username': username, 'password': password}),
+          body: jsonEncode({
+            'username': username,
+            'password': password,
+            'device_name': kIsWeb
+                ? 'Web browser'
+                : 'App on ${defaultTargetPlatform.name}',
+            'platform': kIsWeb ? 'web' : defaultTargetPlatform.name,
+            'device_id': resolvedDeviceId,
+          }),
         )
-        .timeout(const Duration(seconds: 10));
+        .timeout(timeout);
+    if (origin != _baseUrl || revision != tokens.revision) {
+      throw ApiException('Session changed during login', statusCode: 401);
+    }
     if (r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر تسجيل الدخول'),
@@ -157,9 +184,11 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> sessionContext() async {
-    final r = await _client
-        .get(_u('/auth/me'), headers: await _headers())
-        .timeout(const Duration(seconds: 8));
+    final r = await _requestAuthed(
+      'GET',
+      '/auth/me',
+      timeout: const Duration(seconds: 8),
+    );
     if (r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر استرجاع بيانات الجلسة'),
@@ -224,14 +253,38 @@ class ApiClient {
     }
   }
 
-  Future<bool> health([String? overrideUrl, Duration timeout = const Duration(seconds: 10)]) async {
+  final _healthRequests = <String, Future<bool>>{};
+
+  Future<bool> health([
+    String? overrideUrl,
+    Duration timeout = const Duration(seconds: 10),
+  ]) async {
+    final target = (overrideUrl ?? baseUrl).replaceAll(RegExp(r'/+$'), '');
+    final key = '$target:${timeout.inMicroseconds}';
+    final pending = _healthRequests[key];
+    if (pending != null) return pending;
+    final request = _probeHealth(target, timeout);
+    _healthRequests[key] = request;
+    try {
+      return await request;
+    } finally {
+      if (identical(_healthRequests[key], request)) _healthRequests.remove(key);
+    }
+  }
+
+  Future<bool> _probeHealth([
+    String? overrideUrl,
+    Duration timeout = const Duration(seconds: 10),
+  ]) async {
     try {
       final uri = overrideUrl != null
           ? Uri.parse('${overrideUrl.replaceAll(RegExp(r"/+$"), "")}/health')
           : _u('/health');
       final r = await _client.get(uri).timeout(timeout);
       final ok = r.statusCode == 200;
-      debugPrint('[ApiClient] Health check on $uri: ${ok ? "ONLINE (200 OK)" : "STATUS ${r.statusCode}"}');
+      debugPrint(
+        '[ApiClient] Health check on $uri: ${ok ? "ONLINE (200 OK)" : "STATUS ${r.statusCode}"}',
+      );
       return ok;
     } catch (e) {
       debugPrint('[ApiClient] Health check failed: $e');
@@ -241,16 +294,23 @@ class ApiClient {
 
   /// Measures round-trip ping latency to [targetUrl] in milliseconds.
   /// Returns null if host is unreachable or times out.
-  Future<int?> ping(String targetUrl, {Duration timeout = const Duration(seconds: 10)}) async {
+  Future<int?> ping(
+    String targetUrl, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
     final sw = Stopwatch()..start();
     try {
       final clean = targetUrl.trim().replaceAll(RegExp(r'/+$'), '');
       final uri = Uri.parse('$clean/health');
-      debugPrint('[ApiClient] Pinging server: $uri (timeout: ${timeout.inSeconds}s)...');
+      debugPrint(
+        '[ApiClient] Pinging server: $uri (timeout: ${timeout.inSeconds}s)...',
+      );
       final r = await _client.get(uri).timeout(timeout);
       sw.stop();
       if (r.statusCode == 200) {
-        debugPrint('[ApiClient] Server reachable! Ping: ${sw.elapsedMilliseconds}ms ($clean)');
+        debugPrint(
+          '[ApiClient] Server reachable! Ping: ${sw.elapsedMilliseconds}ms ($clean)',
+        );
         return sw.elapsedMilliseconds;
       }
       debugPrint('[ApiClient] Server responded with status ${r.statusCode}');
@@ -312,10 +372,17 @@ class ApiClient {
   }
 
   Future<AlertItem> alertDetails(String patientId, String alertId) async {
-    final response = await _client.get(_u('/patients/$patientId/alerts/$alertId'), headers: await _headers())
+    final response = await _client
+        .get(
+          _u('/patients/$patientId/alerts/$alertId'),
+          headers: await _headers(),
+        )
         .timeout(const Duration(seconds: 8));
     if (response.statusCode != 200) {
-      throw ApiException('Alert details unavailable', statusCode: response.statusCode);
+      throw ApiException(
+        'Alert details unavailable',
+        statusCode: response.statusCode,
+      );
     }
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     return AlertItem.fromMap(Map<String, dynamic>.from(body['alert'] as Map));
@@ -334,7 +401,9 @@ class ApiClient {
     if (rawWindow is Map) {
       final m = Map<String, dynamic>.from(rawWindow);
       window = VitalReading(
-        id: body['last_reading_id'] as String? ?? 'device-$patientId-${m['timestamp']}',
+        id:
+            body['last_reading_id'] as String? ??
+            'device-$patientId-${m['timestamp']}',
         patientId: patientId,
         timestamp:
             DateTime.tryParse(m['timestamp'] as String? ?? '') ??
@@ -449,33 +518,42 @@ class ApiClient {
     Object? body,
     Duration timeout = const Duration(seconds: 15),
   }) async {
+    final revision = tokens.revision;
+    final origin = _baseUrl;
+    void checkSession() {
+      if (revision != tokens.revision || origin != _baseUrl) {
+        throw ApiException('Session changed', statusCode: 401);
+      }
+    }
+
     final payload = body == null ? null : jsonEncode(body);
 
     Future<http.Response> attempt() async {
+      checkSession();
       final headers = await _headers();
+      checkSession();
       final uri = _u(path);
       return switch (method.toUpperCase()) {
         'GET' => _client.get(uri, headers: headers).timeout(timeout),
-        'PUT' => _client
-            .put(uri, headers: headers, body: payload)
-            .timeout(timeout),
-        'PATCH' => _client
-            .patch(uri, headers: headers, body: payload)
-            .timeout(timeout),
-        'DELETE' => _client
-            .delete(uri, headers: headers, body: payload)
-            .timeout(timeout),
-        _ => _client
-            .post(uri, headers: headers, body: payload)
-            .timeout(timeout),
+        'PUT' =>
+          _client.put(uri, headers: headers, body: payload).timeout(timeout),
+        'PATCH' =>
+          _client.patch(uri, headers: headers, body: payload).timeout(timeout),
+        'DELETE' =>
+          _client.delete(uri, headers: headers, body: payload).timeout(timeout),
+        _ =>
+          _client.post(uri, headers: headers, body: payload).timeout(timeout),
       };
     }
 
     var r = await attempt();
+    checkSession();
     if (r.statusCode == 401) {
       final token = await tokens.bearer(forceRefresh: true);
+      checkSession();
       if (token != null && token.isNotEmpty) r = await attempt();
     }
+    checkSession();
     return r;
   }
 
@@ -526,9 +604,14 @@ class ApiClient {
     }
     final decoded = jsonDecode(r.body);
     final raw = decoded is Map
-        ? (decoded['items'] ?? decoded['results'] ?? decoded['data'])
+        ? (decoded['items'] ??
+              decoded['results'] ??
+              decoded['data'] ??
+              decoded['triggers'])
         : decoded;
-    if (raw is! List) return const [];
+    if (raw is! List || raw.any((item) => item is! Map)) {
+      throw const FormatException('Invalid list resource response');
+    }
     return raw
         .whereType<Map>()
         .map((e) => Map<String, dynamic>.from(e))
@@ -632,19 +715,32 @@ class ApiClient {
         .get(_u('/admin/overview'), headers: await _headers())
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر تحميل بيانات لوحة الإدارة'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل بيانات لوحة الإدارة'),
+        statusCode: r.statusCode,
+      );
     }
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
-  Future<List<Map<String, dynamic>>> getAdminUsers({String? role, String? query}) async {
+  Future<List<Map<String, dynamic>>> getAdminUsers({
+    String? role,
+    String? query,
+  }) async {
     final params = <String, String>{};
     if (role != null) params['role'] = role;
     if (query != null && query.isNotEmpty) params['q'] = query;
-    final uri = _u('/admin/users').replace(queryParameters: params.isEmpty ? null : params);
-    final r = await _client.get(uri, headers: await _headers()).timeout(const Duration(seconds: 10));
+    final uri = _u(
+      '/admin/users',
+    ).replace(queryParameters: params.isEmpty ? null : params);
+    final r = await _client
+        .get(uri, headers: await _headers())
+        .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر تحميل قائمة المستخدمين'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل قائمة المستخدمين'),
+        statusCode: r.statusCode,
+      );
     }
     final data = jsonDecode(r.body) as Map<String, dynamic>;
     final list = data['users'] as List? ?? [];
@@ -667,7 +763,10 @@ class ApiClient {
     };
     final r = await _postAuthed('/admin/doctors', payload);
     if (r.statusCode != 201) {
-      throw ApiException(_detail(r, 'تعذّر إنشاء حساب الطبيب'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر إنشاء حساب الطبيب'),
+        statusCode: r.statusCode,
+      );
     }
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
@@ -678,8 +777,11 @@ class ApiClient {
   }) async {
     final payload = {'doctor_id': doctorId, 'patient_id': patientId};
     final r = await _postAuthed('/admin/assignments', payload);
-    if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر تعيين المريض للطبيب'), statusCode: r.statusCode);
+    if (r.statusCode != 200 && r.statusCode != 201) {
+      throw ApiException(
+        _detail(r, 'تعذّر تعيين المريض للطبيب'),
+        statusCode: r.statusCode,
+      );
     }
   }
 
@@ -687,12 +789,22 @@ class ApiClient {
     required String doctorId,
     required String patientId,
   }) async {
-    final payload = jsonEncode({'doctor_id': doctorId, 'patient_id': patientId});
+    final payload = jsonEncode({
+      'doctor_id': doctorId,
+      'patient_id': patientId,
+    });
     final r = await _client
-        .delete(_u('/admin/assignments'), headers: await _headers(), body: payload)
+        .delete(
+          _u('/admin/assignments'),
+          headers: await _headers(),
+          body: payload,
+        )
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر إلغاء ربط المريض'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر إلغاء ربط المريض'),
+        statusCode: r.statusCode,
+      );
     }
   }
 
@@ -701,7 +813,10 @@ class ApiClient {
         .get(_u('/admin/audit?limit=$limit'), headers: await _headers())
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر تحميل سجل التدقيق الأمني'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل سجل التدقيق الأمني'),
+        statusCode: r.statusCode,
+      );
     }
     final data = jsonDecode(r.body) as Map<String, dynamic>;
     final list = data['audit'] as List? ?? [];
@@ -715,7 +830,10 @@ class ApiClient {
         .get(_u('/patient/caregivers'), headers: await _headers())
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر تحميل قائمة الأسرة'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل قائمة الأسرة'),
+        statusCode: r.statusCode,
+      );
     }
     final data = jsonDecode(r.body) as Map<String, dynamic>;
     return (data['caregivers'] as List? ?? [])
@@ -738,10 +856,17 @@ class ApiClient {
       'password': ?password,
     });
     final r = await _client
-        .post(_u('/patient/caregivers'), headers: await _headers(), body: payload)
+        .post(
+          _u('/patient/caregivers'),
+          headers: await _headers(),
+          body: payload,
+        )
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 201) {
-      throw ApiException(_detail(r, 'تعذّر إضافة فرد الأسرة'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر إضافة فرد الأسرة'),
+        statusCode: r.statusCode,
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
   }
@@ -758,18 +883,31 @@ class ApiClient {
       'relation': ?relation,
     });
     final r = await _client
-        .patch(_u('/patient/caregivers/$caregiverId'), headers: await _headers(), body: payload)
+        .patch(
+          _u('/patient/caregivers/$caregiverId'),
+          headers: await _headers(),
+          body: payload,
+        )
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر تعديل بيانات الفرد'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر تعديل بيانات الفرد'),
+        statusCode: r.statusCode,
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
   }
 
-  Future<void> patientSetCaregiverDisabled(String caregiverId, {required bool disabled}) async {
+  Future<void> patientSetCaregiverDisabled(
+    String caregiverId, {
+    required bool disabled,
+  }) async {
     final action = disabled ? 'disable' : 'enable';
     final r = await _client
-        .post(_u('/patient/caregivers/$caregiverId/$action'), headers: await _headers())
+        .post(
+          _u('/patient/caregivers/$caregiverId/$action'),
+          headers: await _headers(),
+        )
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
       throw ApiException(
@@ -781,12 +919,17 @@ class ApiClient {
 
   // ─────────────────────────────────────────── Doctor prescriptions
 
-  Future<List<Map<String, dynamic>>> getDoctorPatientTriggers(String patientId) async {
+  Future<List<Map<String, dynamic>>> getDoctorPatientTriggers(
+    String patientId,
+  ) async {
     final r = await _client
         .get(_u('/patients/$patientId/triggers'), headers: await _headers())
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر تحميل محفزات المريض'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل محفزات المريض'),
+        statusCode: r.statusCode,
+      );
     }
     final data = jsonDecode(r.body) as Map<String, dynamic>;
     return (data['triggers'] as List? ?? [])
@@ -809,17 +952,29 @@ class ApiClient {
       'notes': ?notes,
     });
     final r = await _client
-        .post(_u('/doctor/patients/$patientId/prescriptions'), headers: await _headers(), body: payload)
+        .post(
+          _u('/doctor/patients/$patientId/prescriptions'),
+          headers: await _headers(),
+          body: payload,
+        )
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 201) {
-      throw ApiException(_detail(r, 'تعذّر وصف الدواء'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر وصف الدواء'),
+        statusCode: r.statusCode,
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
   }
 
-  Future<List<Map<String, dynamic>>> getDoctorPrescriptions(String patientId) async {
+  Future<List<Map<String, dynamic>>> getDoctorPrescriptions(
+    String patientId,
+  ) async {
     final r = await _client
-        .get(_u('/doctor/patients/$patientId/prescriptions'), headers: await _headers())
+        .get(
+          _u('/doctor/patients/$patientId/prescriptions'),
+          headers: await _headers(),
+        )
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) return [];
     final data = jsonDecode(r.body) as Map<String, dynamic>;
@@ -828,13 +983,18 @@ class ApiClient {
         .toList();
   }
 
-  Future<List<Map<String, dynamic>>> patientGetPrescriptions({String? patientId}) async {
+  Future<List<Map<String, dynamic>>> patientGetPrescriptions({
+    String? patientId,
+  }) async {
     final query = patientId != null ? '?patient_id=$patientId' : '';
     final r = await _client
         .get(_u('/patient/prescriptions$query'), headers: await _headers())
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر تحميل الوصفات الطبية'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل الوصفات الطبية'),
+        statusCode: r.statusCode,
+      );
     }
     final data = jsonDecode(r.body) as Map<String, dynamic>;
     return (data['prescriptions'] as List? ?? [])
@@ -856,12 +1016,18 @@ class ApiClient {
       'note': ?note,
     });
     final r = await _client
-        .post(_u('/patients/$patientId/location'), headers: await _headers(), body: payload)
+        .post(
+          _u('/patients/$patientId/location'),
+          headers: await _headers(),
+          body: payload,
+        )
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
-      throw ApiException(_detail(r, 'تعذّر مشاركة الموقع الجغرافي'), statusCode: r.statusCode);
+      throw ApiException(
+        _detail(r, 'تعذّر مشاركة الموقع الجغرافي'),
+        statusCode: r.statusCode,
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
   }
 }
-

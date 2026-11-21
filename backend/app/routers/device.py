@@ -235,3 +235,14 @@ def token_info():
     if not settings.is_production and settings.allow_legacy_token:
         info["demo_token"] = DEVICE_TOKEN
     return info
+
+
+@router.get("/contract")
+def device_contract():
+    return {
+        "sample_rate_hz": 256,
+        "eeg_channels": 1,
+        "analysis_window_samples": DEVICE_WINDOW_SAMPLES,
+        "physical_device_compatible": False,
+        "description": "Normalized prototype contract for EEG/ECG/Motion ingestion",
+    }

@@ -27,13 +27,17 @@ from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app import cloud_store, device_store, security, users_store
+from app import account_sessions_store, cloud_store, device_store, security, users_store
 from app.database import transaction
 from app.auth import (
+    JWT_EXPIRE_MINUTES,
     Role,
     create_token,
+    decode_token_for_refresh,
     get_current_principal,
+    issue_access_token,
     require_role,
+    _extract_bearer,
 )
 
 router = APIRouter(tags=["accounts"])
@@ -103,12 +107,22 @@ require_doctor = require_role("doctor", "admin")
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
+    device_name: str = Field(default="Unknown device", min_length=1, max_length=120)
+    platform: str = Field(default="unknown", min_length=1, max_length=32)
+    device_id: str | None = Field(default=None, max_length=128)
 
 
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     role: Role
+    user: dict
+
+
+class RefreshResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
     user: dict
 
 
@@ -152,6 +166,11 @@ class UpdateUserRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     password: str | None = Field(default=None, min_length=6, max_length=128)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=12, max_length=128)
 
 
 class AssignmentRequest(BaseModel):
@@ -269,25 +288,127 @@ def login(body: LoginRequest, request: Request):
         raise HTTPException(status_code=403, detail="account disabled")
 
     _reset_attempts(body.username)
-    token = create_token(user["id"], user["role"], extra={"username": user["username"]})
+    if user["role"] in ("patient", "caregiver"):
+        conflicting = account_sessions_store.get_active_session_on_other_device(
+            user["id"], body.device_id
+        )
+        if conflicting:
+            users_store.log(
+                actor=user["id"],
+                actor_role=user["role"],
+                action="login_rejected_device_conflict",
+                target=f"ip:{client_ip}",
+                detail={
+                    "ip": client_ip,
+                    "device_id": body.device_id,
+                    "conflicting_session_id": conflicting.get("id"),
+                    "conflicting_device_id": conflicting.get("device_id"),
+                },
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="هذا الحساب مسجل ونشط حالياً على جهاز آخر. يرجى تسجيل الخروج من الجهاز السابق أولاً.",
+            )
+
     is_admin = user["role"] == "admin"
-    users_store.log(
-        actor=user["id"],
-        actor_role=user["role"],
-        action="admin_login_success" if is_admin else "login",
-        target=user["id"],
-        detail={
-            "ip": client_ip,
-            "user_agent": user_agent[:120],
-            "security_level": "maximum" if is_admin else "standard",
-            "timestamp": time.time(),
-        },
-    )
+    with transaction():
+        token = create_token(user["id"], user["role"], extra={"username": user["username"]},
+            session_context={
+                "device_name": body.device_name,
+                "platform": body.platform,
+                "device_id": body.device_id,
+                "is_hardware_bound": bool(body.device_id and user["role"] in ("patient", "caregiver")),
+            },
+            expected_session_version=int(user["sessionVersion"]))
+        users_store.log(
+            actor=user["id"], actor_role=user["role"],
+            action="admin_login_success" if is_admin else "login", target=user["id"],
+            detail={"ip": client_ip, "user_agent": user_agent[:120],
+                "security_level": "maximum" if is_admin else "standard", "timestamp": time.time()},
+        )
     return LoginResponse(
         access_token=token,
         role=user["role"],
         user=users_store.public_user(user),
     )
+
+
+@router.post("/auth/refresh", response_model=RefreshResponse)
+def refresh_session_token(request: Request):
+    """Issue a fresh access token for an active, unrevoked session."""
+    raw_token = _extract_bearer(request.headers.get("authorization"))
+    try:
+        claims = decode_token_for_refresh(raw_token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid token for refresh") from exc
+
+    role = claims.get("role")
+    sub = claims.get("sub")
+    sid = claims.get("sid")
+    version = claims.get("session_version", 0)
+
+    if role not in ("patient", "caregiver", "doctor", "admin") or not sid or not sub:
+        raise HTTPException(status_code=401, detail="Token cannot be refreshed")
+
+    session = account_sessions_store.refresh_session(sid, str(sub), int(version))
+    if not session:
+        users_store.log(
+            actor=str(sub),
+            actor_role=str(role),
+            action="session_refresh_rejected",
+            target=f"session:{sid}",
+            detail={"reason": "session_inactive_or_revoked"},
+        )
+        raise HTTPException(status_code=401, detail="Session is inactive or revoked; sign in again")
+
+    user = users_store.get_user(str(sub))
+    if not user or user.get("disabled"):
+        raise HTTPException(status_code=401, detail="Account is disabled")
+
+    new_token = issue_access_token(
+        subject=user["id"],
+        role=user["role"],
+        sid=sid,
+        session_version=int(user["sessionVersion"]),
+        extra={"username": user["username"]},
+    )
+
+    users_store.log(
+        actor=user["id"],
+        actor_role=user["role"],
+        action="session_refreshed",
+        target=f"session:{sid}",
+        detail={"device_name": session.get("device_name"), "platform": session.get("platform")},
+    )
+
+    return RefreshResponse(
+        access_token=new_token,
+        token_type="bearer",
+        expires_in=JWT_EXPIRE_MINUTES * 60,
+        user=users_store.public_user(user),
+    )
+
+
+@router.post("/auth/password")
+def change_own_password(
+    body: ChangePasswordRequest, request: Request,
+    principal: dict = Depends(require_role("patient", "caregiver", "doctor", "admin")),
+):
+    user = users_store.get_user(principal["sub"])
+    if not user:
+        raise HTTPException(status_code=401, detail="account unavailable")
+    ip = _get_client_ip(request)
+    _check_rate_limit(user["username"], ip)
+    if not security.verify_password(body.current_password, user["passwordHash"]):
+        _record_failed_attempt(user["username"], ip)
+        raise HTTPException(status_code=400, detail="current password is incorrect")
+    if body.current_password == body.new_password:
+        raise HTTPException(status_code=400, detail="new password must be different")
+    users_store.set_password(user["id"], security.hash_password(body.new_password))
+    _reset_attempts(user["username"])
+    users_store.log(user["id"], user["role"], "change_own_password", target=user["id"])
+    # set_password increments the version, invalidating all old login tokens.
+    return {"ok": True, "sign_in_required": True}
 
 
 @router.get("/auth/me")
@@ -300,6 +421,39 @@ def me(principal: dict = Depends(get_current_principal)):
             "patients": _accessible_patient_views(user),
         }
     return {"user": None, "principal": principal}
+
+
+require_account = require_role("patient", "caregiver", "doctor", "admin")
+
+
+@router.get("/auth/sessions")
+def own_sessions(principal: dict = Depends(require_account)):
+    return account_sessions_store.list_for_user(principal["sub"], principal["sid"])
+
+
+@router.post("/auth/logout")
+def logout_current_session(principal: dict = Depends(require_account)):
+    with transaction():
+        account_sessions_store.revoke(principal["sub"], session_id=principal["sid"])
+        users_store.log(principal["sub"], principal["role"], "logout_session", principal["sid"])
+    return {"ok": True, "sign_in_required": True}
+
+
+@router.post("/auth/sessions/revoke-others")
+def revoke_other_sessions(principal: dict = Depends(require_account)):
+    with transaction():
+        count = account_sessions_store.revoke(principal["sub"], except_id=principal["sid"])
+        users_store.log(principal["sub"], principal["role"], "revoke_other_sessions", principal["sub"], {"count": count})
+    return {"ok": True, "revoked": count}
+
+
+@router.delete("/auth/sessions/{session_id}")
+def revoke_own_session(session_id: str, principal: dict = Depends(require_account)):
+    with transaction():
+        if account_sessions_store.revoke(principal["sub"], session_id=session_id) is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        users_store.log(principal["sub"], principal["role"], "revoke_session", session_id)
+    return {"ok": True, "sign_in_required": session_id == principal["sid"]}
 
 
 # ----------------------------------------------------------------------------- admin
@@ -446,6 +600,23 @@ def admin_delete_user(user_id: str, actor: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="user not found")
     users_store.log(actor.get("sub"), "admin", "delete_user", target=user_id)
     return {"ok": True}
+
+
+@router.post("/admin/users/{user_id}/revoke-sessions")
+def admin_revoke_user_sessions(user_id: str, actor: dict = Depends(require_admin)):
+    user = users_store.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+    with transaction():
+        count = account_sessions_store.revoke(user_id) or 0
+        users_store.log(
+            actor.get("sub"),
+            "admin",
+            "admin_revoke_user_sessions",
+            target=user_id,
+            detail={"revoked_count": count},
+        )
+    return {"ok": True, "revoked": count}
 
 
 # ------------------------------------------------------------------------ assignments
@@ -719,8 +890,9 @@ def patient_list_caregivers(actor: dict = Depends(require_patient)):
             try:
                 extra = cloud_store.get_patient(cg_id)
                 if extra:
-                    user_data["phone"] = extra.get("phone")
-                    user_data["relation"] = extra.get("relation")
+                    for field in ("phone", "relation"):
+                        if field not in cg.get("meta", {}):
+                            user_data[field] = extra.get(field)
             except Exception:
                 pass
             caregivers.append(user_data)
@@ -738,28 +910,19 @@ def patient_add_caregiver(body: CreateCaregiverRequest, actor: dict = Depends(re
     if users_store.username_taken(body.username):
         raise HTTPException(status_code=409, detail="اسم المستخدم مستخدم بالفعل")
     password_hash, generated = _issue_password(body.password)
+    from app.database import transaction
     try:
-        caregiver = users_store.create_user(
-            username=body.username,
-            name=body.name,
-            role="caregiver",
-            password_hash=password_hash,
-            created_by=patient_id,
-        )
+        with transaction():
+            caregiver = users_store.create_user(
+                username=body.username, name=body.name, role="caregiver",
+                password_hash=password_hash, created_by=patient_id,
+                meta={"phone": body.phone, "relation": body.relation},
+            )
+            users_store.link_caregiver(patient_id, caregiver["id"], by=patient_id)
+            users_store.log(patient_id, "patient", "add_caregiver", caregiver["id"],
+                            {"username": body.username})
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    # Store extra fields (phone, relation) in the cloud store if available.
-    if body.phone or body.relation:
-        try:
-            cloud_store.upsert_patient(caregiver["id"], {
-                "phone": body.phone,
-                "relation": body.relation,
-            })
-        except Exception:
-            pass
-    users_store.link_caregiver(patient_id, caregiver["id"], by=patient_id)
-    users_store.log(patient_id, "patient", "add_caregiver", caregiver["id"],
-                    {"username": body.username})
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
         "caregiver": users_store.public_user(caregiver),
         "generatedPassword": generated,
@@ -780,19 +943,24 @@ def patient_update_caregiver(
     cg = users_store.get_user(caregiver_id)
     if not cg or cg.get("role") != "caregiver":
         raise HTTPException(status_code=404, detail="لم يتم العثور على الفرد")
+    if body.name is not None and not body.name.strip():
+        raise HTTPException(status_code=422, detail="name must not be blank")
+    from app.database import transaction
+    patch = {}
+    if body.name is not None:
+        patch["name"] = body.name
+    metadata = dict(cg.get("meta", {}))
+    # Explicit empty/null clears a field; absent fields remain unchanged.
+    for field in ("phone", "relation"):
+        if field in body.model_fields_set:
+            metadata[field] = getattr(body, field)
+    patch["meta"] = metadata
     try:
-        updated = users_store.update_user(caregiver_id, {"name": body.name})
+        with transaction():
+            updated = users_store.update_user(caregiver_id, patch)
+            users_store.log(patient_id, "patient", "update_caregiver", caregiver_id)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    if body.phone or body.relation:
-        try:
-            cloud_store.upsert_patient(caregiver_id, {
-                "phone": body.phone,
-                "relation": body.relation,
-            })
-        except Exception:
-            pass
-    users_store.log(patient_id, "patient", "update_caregiver", caregiver_id)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"caregiver": users_store.public_user(updated)}
 
 

@@ -37,9 +37,20 @@ def _outcome(row) -> dict:
 def add_outcome(*, patient_id: str, outcome: str, occurred_at: str,
                 recorded_by: str, assessment_id: str | None = None,
                 alert_id: str | None = None, notes: str | None = None,
-                metadata: dict | None = None) -> dict:
-    outcome_id, recorded_at = str(uuid4()), _now()
+                metadata: dict | None = None, client_id: str | None = None) -> dict:
+    outcome_id, recorded_at = client_id or str(uuid4()), _now()
     with transaction() as conn:
+        if client_id:
+            previous = conn.execute(select(outcomes).where(outcomes.c.id == client_id)).first()
+            if previous:
+                saved = _outcome(previous)
+                if (saved["patientId"] != patient_id or saved["recordedBy"] != recorded_by
+                        or saved["outcome"] != outcome or saved["occurredAt"] != occurred_at
+                        or saved["alertId"] != alert_id or saved["notes"] != notes
+                        or saved["assessmentId"] != assessment_id
+                        or load_json(previous._mapping["payload_json"], {}) != (metadata or {})):
+                    raise ValueError("client id is already used by another record")
+                return saved
         if assessment_id and conn.execute(select(assessments.c.patient_id).where(
             assessments.c.id == assessment_id
         )).scalar_one_or_none() != patient_id:

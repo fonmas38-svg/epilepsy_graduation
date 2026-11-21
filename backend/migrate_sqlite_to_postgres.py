@@ -40,6 +40,7 @@ from sqlalchemy import Table, create_engine, delete, func, insert, select
 from sqlalchemy.engine import Connection, Engine
 
 from app.database import (  # noqa: E402  (import after sys.path fix)
+    account_sessions,
     alert_acknowledgments,
     alert_outbox,
     alerts,
@@ -47,9 +48,14 @@ from app.database import (  # noqa: E402  (import after sys.path fix)
     assignments,
     audit_logs,
     caregiver_links,
+    care_records,
     database_path,
     devices,
     device_streams,
+    doctor_profiles,
+    idempotency_keys,
+    medication_logs,
+    moh_registry,
     prescriptions,
     sso_codes,
     is_sqlite_url,
@@ -67,9 +73,14 @@ from app.database import (  # noqa: E402  (import after sys.path fix)
 # is inserted, because the copy runs with foreign keys enforced (the default).
 COPY_ORDER: tuple[Table, ...] = (
     users,
+    doctor_profiles,
+    moh_registry,
+    idempotency_keys,
+    account_sessions,
     patients,
     assignments,
     caregiver_links,
+    care_records,
     devices,
     push_tokens,
     audit_logs,
@@ -82,6 +93,7 @@ COPY_ORDER: tuple[Table, ...] = (
     store_imports,
     messages,
     prescriptions,
+    medication_logs,
     device_streams,
     sso_codes,
 )

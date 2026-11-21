@@ -1,23 +1,19 @@
-import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
-
 import '../core/enums.dart';
 import '../core/errors/failure.dart';
 import '../models/message_model.dart';
+import '../models/models.dart';
 import 'api_client.dart';
 import 'auth_service.dart';
 import 'local_database.dart';
 
 class MessageService extends ChangeNotifier {
   MessageService({required this.db, required this.api, required this.auth});
-
   final LocalDatabase db;
   final ApiClient api;
   final AuthService auth;
-
   final _uuid = const Uuid();
-
   List<ChatMessage> doctorMessages = [];
   List<ChatMessage> familyMessages = [];
   Map<String, dynamic>? lastSharedLocation;
@@ -25,222 +21,253 @@ class MessageService extends ChangeNotifier {
   Failure? failure;
   bool _flushing = false;
   String? _patientId;
+  int _session = 0;
+  int _loadRevision = 0;
+  String? get patientId => _patientId;
+
+  bool canAccess(String patientId, {String? channel}) {
+    final user = auth.currentUser;
+    if (user == null || user.role == UserRole.admin) return false;
+    if (channel != null &&
+        !['doctor_patient', 'family_patient'].contains(channel)) {
+      return false;
+    }
+    if (user.role == UserRole.caregiver && channel == 'doctor_patient') {
+      return false;
+    }
+    return user.role == UserRole.patient
+        ? user.uid == patientId
+        : auth.accessiblePatients().any((p) => p.patientId == patientId);
+  }
+
+  bool _current(
+    AppUser? user,
+    String origin,
+    int generation,
+    String pid, [
+    String? channel,
+  ]) =>
+      generation == _session &&
+      identical(auth.currentUser, user) &&
+      api.baseUrl == origin &&
+      canAccess(pid, channel: channel);
 
   void clearSession() {
+    _session++;
+    _loadRevision++;
     _patientId = null;
     doctorMessages = [];
     familyMessages = [];
     lastSharedLocation = null;
     failure = null;
+    loading = false;
     notifyListeners();
   }
 
-  /// Load messages for [patientId] from local SQLite first, then refresh from cloud if online.
   Future<void> loadFor(String patientId, {String? channel}) async {
+    if (!canAccess(patientId, channel: channel)) {
+      clearSession();
+      return;
+    }
+    final user = auth.currentUser;
+    final origin = api.baseUrl;
+    final generation = _session;
+    final revision = ++_loadRevision;
+    bool valid() =>
+        revision == _loadRevision &&
+        _patientId == patientId &&
+        _current(user, origin, generation, patientId, channel);
     if (_patientId != patientId) {
       doctorMessages = [];
       familyMessages = [];
       lastSharedLocation = null;
-      _patientId = patientId;
     }
+    _patientId = patientId;
     loading = true;
     failure = null;
     notifyListeners();
-
-    final role = auth.currentUser?.role ?? UserRole.patient;
-
     try {
-      // 1. Load from local database immediately
-      if (role != UserRole.caregiver) {
-        doctorMessages = await db.messagesForChannel(
-          patientId,
-          'doctor_patient',
-        );
-      } else {
-        doctorMessages =
-            []; // Caregiver never sees private doctor consultations
-      }
-      familyMessages = await db.messagesForChannel(patientId, 'family_patient');
+      final doctor = user!.role == UserRole.caregiver
+          ? <ChatMessage>[]
+          : await db.messagesForChannel(patientId, 'doctor_patient');
+      if (!valid()) return;
+      final family = await db.messagesForChannel(patientId, 'family_patient');
+      if (!valid()) return;
+      doctorMessages = doctor;
+      familyMessages = family;
       notifyListeners();
-
-      // 2. Fetch from cloud API if user has active session
       if (api.tokens.hasSession) {
-        if (role != UserRole.caregiver &&
+        if (user.role != UserRole.caregiver &&
             (channel == null || channel == 'doctor_patient')) {
-          await _syncChannelFromCloud(patientId, 'doctor_patient');
+          await _pull(patientId, 'doctor_patient', valid);
         }
+        if (!valid()) return;
         if (channel == null || channel == 'family_patient') {
-          await _syncChannelFromCloud(patientId, 'family_patient');
+          await _pull(patientId, 'family_patient', valid);
         }
-
-        // Also fetch latest location
-        await fetchLatestLocation(patientId);
+        if (valid()) await fetchLatestLocation(patientId);
       }
-    } catch (e) {
-      failure = Failure.from(e);
+    } catch (error) {
+      if (valid()) failure = Failure.from(error);
     } finally {
-      loading = false;
-      notifyListeners();
+      if (valid()) {
+        loading = false;
+        notifyListeners();
+      }
     }
   }
 
-  Future<void> _syncChannelFromCloud(
-    String patientId,
-    String channelType,
-  ) async {
-    try {
-      final res = await api.sendJson(
-        method: 'GET',
-        path:
-            '/patients/$patientId/messages?channel_type=$channelType&latest=true',
-      );
-      if (_patientId != patientId) return;
-      final rawList = res['messages'] as List? ?? [];
-      for (final item in rawList) {
-        if (item is Map<String, dynamic>) {
-          final msg = ChatMessage.fromMap(item);
-          await db.insertMessage(msg);
-        }
+  Future<void> _pull(String pid, String channel, bool Function() valid) async {
+    if (!valid()) return;
+    final res = await api.sendJson(
+      method: 'GET',
+      path:
+          '/patients/${Uri.encodeComponent(pid)}/messages?channel_type=$channel&latest=true',
+    );
+    if (!valid()) return;
+    for (final raw in res['messages'] as List? ?? []) {
+      if (!valid()) return;
+      if (raw is! Map) continue;
+      final msg = ChatMessage.fromMap(Map<String, dynamic>.from(raw));
+      if (msg.patientId != pid || msg.channelType != channel || msg.id.isEmpty) {
+        throw StateError('Message identity mismatch');
       }
-      // Re-read local for consistency
-      if (channelType == 'doctor_patient') {
-        doctorMessages = await db.messagesForChannel(
-          patientId,
-          'doctor_patient',
-        );
-      } else {
-        familyMessages = await db.messagesForChannel(
-          patientId,
-          'family_patient',
-        );
-      }
-    } catch (_) {
-      // Offline fallback: keep locally cached rows
+      await db.insertMessage(msg);
     }
+    if (!valid()) return;
+    final rows = await db.messagesForChannel(pid, channel);
+    if (!valid()) return;
+    if (channel == 'doctor_patient') {
+      doctorMessages = rows;
+    } else {
+      familyMessages = rows;
+    }
+    notifyListeners();
   }
 
-  /// Send a message with instant local optimistic UI + cloud sync
   Future<ChatMessage> sendMessage({
     required String patientId,
     required String channelType,
     required String content,
   }) async {
     final user = auth.currentUser;
-    final role = user?.role ?? UserRole.patient;
+    final origin = api.baseUrl;
+    final generation = _session;
     if (user == null ||
+        !canAccess(patientId, channel: channelType) ||
         content.trim().isEmpty ||
         content.trim().length > 5000) {
       throw ArgumentError(
-        'A signed-in user and a message of 1–5000 characters are required',
+        'Authorized patient/channel and a message of 1–5000 characters are required',
       );
     }
-    if (!['doctor_patient', 'family_patient'].contains(channelType) ||
-        (role == UserRole.caregiver && channelType == 'doctor_patient')) {
-      throw ArgumentError('Message channel is not permitted');
-    }
-
-    final localMsg = ChatMessage(
+    bool valid() => _current(user, origin, generation, patientId, channelType);
+    final local = ChatMessage(
       id: _uuid.v4(),
       patientId: patientId,
       senderId: user.uid,
       senderName: user.name,
-      senderRole: role,
+      senderRole: user.role,
       channelType: channelType,
       content: content.trim(),
       createdAt: DateTime.now(),
       synced: false,
     );
-
-    // Save locally
-    await db.insertMessage(localMsg);
-    if (channelType == 'doctor_patient') {
-      doctorMessages.add(localMsg);
-    } else {
-      familyMessages.add(localMsg);
+    await db.insertMessage(local);
+    if (!valid()) return local;
+    if (_patientId == patientId) {
+      (channelType == 'doctor_patient' ? doctorMessages : familyMessages).add(
+        local,
+      );
+      failure = null;
+      notifyListeners();
     }
-    notifyListeners();
-
-    // Cloud sync
-    if (api.tokens.hasSession) {
+    if (api.tokens.hasSession && valid()) {
       try {
-        final res = await api.sendJson(
-          method: 'POST',
-          path: '/patients/$patientId/messages',
-          body: {
-            'channel_type': channelType,
-            'client_message_id': localMsg.id,
-            'content': content.trim(),
-          },
-        );
-        final serverMap = res['message'] as Map<String, dynamic>?;
-        if (serverMap != null) {
-          final serverMsg = ChatMessage.fromMap(serverMap);
-          await db.replacePendingMessage(localMsg.id, serverMsg);
-          _replaceMessage(localMsg.id, serverMsg);
+        final server = await _post(local);
+        if (!valid()) return local;
+        await db.replacePendingMessage(local.id, server);
+        if (valid() && _patientId == patientId) {
+          _replaceMessage(local.id, server);
           notifyListeners();
-          return serverMsg;
         }
-      } catch (_) {
-        // Stays unsynced in local SQLite for later sync
+        return server;
+      } catch (error) {
+        if (valid() && _patientId == patientId) {
+          failure = Failure.from(error);
+          notifyListeners();
+        }
       }
     }
-    return localMsg;
+    return local;
   }
 
-  void _replaceMessage(String oldId, ChatMessage newMsg) {
-    final list = newMsg.channelType == 'doctor_patient'
-        ? doctorMessages
-        : familyMessages;
-    final idx = list.indexWhere((m) => m.id == oldId);
-    if (idx != -1) {
-      list[idx] = newMsg;
+  Future<ChatMessage> _post(ChatMessage local) async {
+    final res = await api.sendJson(
+      method: 'POST',
+      path: '/patients/${Uri.encodeComponent(local.patientId)}/messages',
+      body: {
+        'channel_type': local.channelType,
+        'client_message_id': local.id,
+        'content': local.content,
+      },
+    );
+    if (res['message'] is! Map) {
+      throw StateError('Message acceptance not confirmed');
     }
+    final server = ChatMessage.fromMap(
+      Map<String, dynamic>.from(res['message'] as Map),
+    );
+    if (server.patientId != local.patientId ||
+        server.channelType != local.channelType ||
+        server.senderId != local.senderId ||
+        server.id.isEmpty) {
+      throw StateError('Message acknowledgment identity mismatch');
+    }
+    return server;
   }
 
-  /// Drain pending offline messages from SQLite to the backend API when connected.
+  void _replaceMessage(String oldId, ChatMessage message) {
+    final list = message.isDoctorPatient ? doctorMessages : familyMessages;
+    final index = list.indexWhere((row) => row.id == oldId);
+    if (index >= 0) list[index] = message;
+  }
+
   Future<int> flushPendingMessages() async {
-    final senderId = auth.currentUser?.uid;
-    if (!api.tokens.hasSession || senderId == null || _flushing) return 0;
+    final user = auth.currentUser;
+    final origin = api.baseUrl;
+    final generation = _session;
+    if (!api.tokens.hasSession || user == null || _flushing) return 0;
     _flushing = true;
+    var count = 0;
     try {
-      final pending = await db.unsyncedMessages(senderId);
-      if (pending.isEmpty) return 0;
-      int flushed = 0;
-      for (final msg in pending) {
-        if (auth.currentUser?.uid != senderId) break;
-        try {
-          final res = await api.sendJson(
-            method: 'POST',
-            path: '/patients/${msg.patientId}/messages',
-            body: {
-              'channel_type': msg.channelType,
-              'client_message_id': msg.id,
-              'content': msg.content,
-            },
-          );
-          final serverMap = res['message'] as Map<String, dynamic>?;
-          if (serverMap != null) {
-            final serverMsg = ChatMessage.fromMap(serverMap);
-            await db.replacePendingMessage(msg.id, serverMsg);
-            _replaceMessage(msg.id, serverMsg);
-            flushed++;
-          }
-        } catch (_) {
-          break; // Network still unavailable, retry on next cycle
+      final pending = await db.unsyncedMessages(user.uid);
+      for (final row in pending) {
+        bool valid() =>
+            _current(user, origin, generation, row.patientId, row.channelType);
+        if (!valid()) break;
+        if (row.senderId != user.uid) continue;
+        final server = await _post(row);
+        if (!valid()) break;
+        await db.replacePendingMessage(row.id, server);
+        if (valid() && _patientId == row.patientId) {
+          _replaceMessage(row.id, server);
         }
+        count++;
       }
-      if (flushed > 0) {
-        notifyListeners();
-      }
-      return flushed;
     } catch (_) {
-      return 0;
+      /* Keep pending rows with their original sender and ID. */
     } finally {
       _flushing = false;
     }
+    if (count > 0 &&
+        identical(auth.currentUser, user) &&
+        generation == _session) {
+      notifyListeners();
+    }
+    return count;
   }
 
-  /// Share current patient location with family
   Future<Map<String, dynamic>?> shareLocation({
     required String patientId,
     required double latitude,
@@ -248,54 +275,71 @@ class MessageService extends ChangeNotifier {
     double? accuracy,
     String? note,
   }) async {
-    if (!api.tokens.hasSession) {
+    final user = auth.currentUser;
+    final origin = api.baseUrl;
+    final generation = _session;
+    if (user?.role != UserRole.patient ||
+        user?.uid != patientId ||
+        !api.tokens.hasSession ||
+        !latitude.isFinite ||
+        !longitude.isFinite ||
+        latitude.abs() > 90 ||
+        longitude.abs() > 180 ||
+        (accuracy != null && (!accuracy.isFinite || accuracy < 0))) {
       throw StateError(
-        'Location sharing requires a connection and an active session',
+        'A signed-in patient, connection and valid coordinates are required',
       );
     }
-    if (api.tokens.hasSession) {
-      try {
-        final res = await api.sendJson(
-          method: 'POST',
-          path: '/patients/$patientId/location',
-          body: {
-            'latitude': latitude,
-            'longitude': longitude,
-            'accuracy': accuracy,
-            'note': note,
-          },
-        );
-        final loc = res['location'] as Map<String, dynamic>?;
-        if (loc != null) {
-          lastSharedLocation = loc;
-          // Reload family messages because a location broadcast was posted!
-          await _syncChannelFromCloud(patientId, 'family_patient');
-          notifyListeners();
-          return loc;
-        }
-      } catch (e) {
-        failure = Failure.from(e);
-        notifyListeners();
-        rethrow;
-      }
+    bool valid() => _current(user, origin, generation, patientId);
+    final res = await api.sendJson(
+      method: 'POST',
+      path: '/patients/${Uri.encodeComponent(patientId)}/location',
+      body: {
+        'latitude': latitude,
+        'longitude': longitude,
+        'accuracy': accuracy,
+        'note': note,
+      },
+    );
+    if (!valid()) return null;
+    final loc = res['location'] is Map
+        ? Map<String, dynamic>.from(res['location'] as Map)
+        : null;
+    if (loc == null) throw StateError('Location sharing was not confirmed');
+    if (_patientId == patientId) {
+      lastSharedLocation = loc;
+      notifyListeners();
     }
-    throw StateError('Server did not confirm location sharing');
+    return loc;
   }
 
   Future<Map<String, dynamic>?> fetchLatestLocation(String patientId) async {
-    if (!api.tokens.hasSession) return lastSharedLocation;
+    final user = auth.currentUser;
+    final origin = api.baseUrl;
+    final generation = _session;
+    if (!canAccess(patientId)) return null;
+    if (!api.tokens.hasSession) {
+      return _patientId == patientId ? lastSharedLocation : null;
+    }
     try {
       final res = await api.sendJson(
         method: 'GET',
-        path: '/patients/$patientId/location',
+        path: '/patients/${Uri.encodeComponent(patientId)}/location',
       );
-      final loc = res['location'] as Map<String, dynamic>?;
-      if (loc != null) {
+      if (!_current(user, origin, generation, patientId)) return null;
+      final loc = res['location'] is Map
+          ? Map<String, dynamic>.from(res['location'] as Map)
+          : null;
+      if (_patientId == patientId) {
         lastSharedLocation = loc;
         notifyListeners();
-        return loc;
       }
-    } catch (_) {}
-    return lastSharedLocation;
+      return loc;
+    } catch (_) {
+      return _patientId == patientId &&
+              _current(user, origin, generation, patientId)
+          ? lastSharedLocation
+          : null;
+    }
   }
 }

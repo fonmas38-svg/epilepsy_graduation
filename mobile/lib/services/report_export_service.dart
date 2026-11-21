@@ -34,14 +34,21 @@ class ReportExportService {
     excel.setDefaultSheet('ملخص الحالة');
 
     summarySheet.appendRow([
-      TextCellValue('النظام الذكي لمراقبة مرضى الصرع — التقرير الطبي الشامل'),
+      TextCellValue('النظام الذكي لمراقبة مرضى الصرع — تقرير البيانات المحلية'),
     ]);
     summarySheet.appendRow([
       TextCellValue('اسم المريض: $patientName'),
       TextCellValue('رقم الملف: $patientId'),
-      TextCellValue('تاريخ التصدير: ${DateTime.now().toLocal().toString().split('.')[0]}'),
+      TextCellValue(
+        'تاريخ التصدير: ${DateTime.now().toLocal().toString().split('.')[0]}',
+      ),
     ]);
-    summarySheet.appendRow([]); // Empty spacer row
+    summarySheet.appendRow([
+      TextCellValue(
+        'بيانات محلية قد تكون غير مكتملة. أحداث الفترة حسب اختيار المستخدم، والأدوية هي القائمة الحالية.',
+      ),
+    ]);
+    summarySheet.appendRow([]);
 
     summarySheet.appendRow([
       TextCellValue('المؤشر'),
@@ -50,7 +57,9 @@ class ReportExportService {
     ]);
 
     final escalatedCount = events.where((e) => e.outcome == 'escalated').length;
-    final falseAlarms = events.where((e) => e.outcome == 'cancelled_false_alarm').length;
+    final falseAlarms = events
+        .where((e) => e.outcome == 'cancelled_false_alarm')
+        .length;
     final totalAlerts = alerts.length;
 
     summarySheet.appendRow([
@@ -61,12 +70,12 @@ class ReportExportService {
     summarySheet.appendRow([
       TextCellValue('أحداث التنبؤ المصعدة'),
       IntCellValue(escalatedCount),
-      TextCellValue('تم التنبؤ بها وتأكيدها'),
+      TextCellValue('تم التصعيد؛ لا يثبت حدوث نوبة'),
     ]);
     summarySheet.appendRow([
       TextCellValue('الإنذارات الكاذبة الملغاة'),
       IntCellValue(falseAlarms),
-      TextCellValue('ألغاها المريض خلال مهلة 30 ثانية'),
+      TextCellValue('إلغاء أبلغ عنه المستخدم؛ ليس حكمًا سريريًا'),
     ]);
     summarySheet.appendRow([
       TextCellValue('عدد الأدوية المجدولة'),
@@ -88,7 +97,9 @@ class ReportExportService {
 
     for (final alert in alerts) {
       alertsSheet.appendRow([
-        TextCellValue(alert.id.substring(0, alert.id.length > 8 ? 8 : alert.id.length)),
+        TextCellValue(
+          alert.id.substring(0, alert.id.length > 8 ? 8 : alert.id.length),
+        ),
         TextCellValue(alert.timestamp.toLocal().toString().split('.')[0]),
         TextCellValue(alert.severity),
         TextCellValue(alert.message),
@@ -116,13 +127,30 @@ class ReportExportService {
       ]);
     }
 
+    final eventSheet = excel['أحداث النموذج'];
+    eventSheet.appendRow([
+      TextCellValue('المعرف'),
+      TextCellValue('الوقت'),
+      TextCellValue('حالة الحدث المسجلة'),
+      TextCellValue('المصدر'),
+    ]);
+    for (final event in events) {
+      eventSheet.appendRow([
+        TextCellValue(event.id),
+        TextCellValue(event.firedAt.toIso8601String()),
+        TextCellValue(event.outcome),
+        TextCellValue(event.source ?? ''),
+      ]);
+    }
     // Save workbook to app documents directory
     final dir = await getApplicationDocumentsDirectory();
-    final filename = 'Medical_Report_${patientId}_${DateTime.now().millisecondsSinceEpoch}.xlsx';
+    final filename =
+        'Medical_Report_${patientId}_${DateTime.now().millisecondsSinceEpoch}.xlsx';
     final file = File('${dir.path}/$filename');
 
     final bytes = excel.encode();
-    if (bytes != null) {
+    if (bytes == null) throw StateError('Workbook encoding failed');
+    {
       await file.writeAsBytes(bytes, flush: true);
     }
     return file;

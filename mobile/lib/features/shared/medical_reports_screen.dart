@@ -1,472 +1,602 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
-import '../../core/theme/app_colors.dart';
-import '../../core/theme/app_spacing.dart';
-import '../../core/theme/risk_view.dart';
+import '../../core/enums.dart';
 import '../../core/ui/common.dart';
 import '../../core/ui/states.dart';
+import '../../core/errors/failure.dart';
 import '../../core/utils/time_ago.dart';
 import '../../l10n/app_localizations.dart';
-import '../../models/models.dart';
 import '../../providers/app_state.dart';
+import '../../services/report_selection.dart';
 
-enum ReportFilterType { all, seizures, alerts, medications }
-
-/// Comprehensive Medical Reports & Analytics Screen.
-///
-/// Provides multi-dimensional filtering across time horizons, severity levels,
-/// and clinical event categories, with native Excel (.xlsx) and PDF export.
 class MedicalReportsScreen extends StatefulWidget {
-  const MedicalReportsScreen({
-    super.key,
-    this.patientId,
-    this.patientName,
-  });
-
+  const MedicalReportsScreen({super.key, this.patientId, this.patientName});
   final String? patientId;
   final String? patientName;
-
   @override
   State<MedicalReportsScreen> createState() => _MedicalReportsScreenState();
 }
 
 class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
-  ReportFilterType _filterType = ReportFilterType.all;
-  bool _isExporting = false;
+  String? _patientId;
+  String? _owner;
+  Future<ReportSelection>? _data;
+  ReportCategory _category = ReportCategory.all;
+  int _days = 7;
+  bool _exporting = false;
+  final _anchor = DateTime.now();
 
-  String _effectivePatientId(AppState app) =>
-      widget.patientId ?? app.activePatientId ?? app.auth.currentUser?.uid ?? '';
-
-  String _effectivePatientName(AppState app) =>
-      widget.patientName ?? app.auth.currentUser?.name ?? 'المريض';
-
-  Future<void> _exportExcel(BuildContext context) async {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     final app = context.read<AppState>();
+    if (_owner != app.auth.currentUser?.uid) {
+      _owner = app.auth.currentUser?.uid;
+      final allowed = app.auth.accessiblePatients();
+      final requested = widget.patientId ?? app.activePatientId;
+      _patientId = allowed.any((p) => p.patientId == requested)
+          ? requested
+          : allowed.length == 1
+          ? allowed.first.patientId
+          : null;
+      _data = _load();
+    }
+  }
+
+  Future<ReportSelection> _load() async {
+    final app = context.read<AppState>();
+    final pid = _patientId;
+    if (pid == null ||
+        !app.auth.accessiblePatients().any((p) => p.patientId == pid)) {
+      return const ReportSelection(alerts: [], events: [], medications: []);
+    }
+    final alerts = await app.db.alertsFor(pid, limit: 10000);
+    final events = await app.db.predictionEventsFor(pid, limit: 10000);
+    final meds = await app.db.medicationsFor(pid);
+    return ReportSelection(alerts: alerts, events: events, medications: meds);
+  }
+
+  ReportSelection _selected(ReportSelection data) => ReportSelection.filter(
+    patientId: _patientId!,
+    category: _category,
+    alerts: data.alerts,
+    events: data.events,
+    medications: data.medications,
+    since: _days == 0 ? null : _anchor.subtract(Duration(days: _days)),
+  );
+
+  Future<void> _export(ReportSelection selected) async {
+    final app = context.read<AppState>();
+    final pid = _patientId;
+    final profile = pid == null ? null : app.auth.patientById(pid);
+    if (profile == null ||
+        app.auth.currentUser?.uid != _owner ||
+        !app.auth.accessiblePatients().any((p) => p.patientId == pid)) {
+      return;
+    }
+    setState(() => _exporting = true);
     final l = AppLocalizations.of(context);
-    final pid = _effectivePatientId(app);
-    final pname = _effectivePatientName(app);
-    setState(() => _isExporting = true);
-
     try {
-      final alerts = await app.db.alertsFor(pid);
-      final events = await app.db.predictionEventsFor(pid);
-      final meds = await app.db.medicationsFor(pid);
-
       final file = await app.reportExporter.exportToExcel(
-        patientName: pname,
-        patientId: pid,
-        alerts: alerts,
-        events: events,
-        medications: meds,
+        patientName: profile.name,
+        patientId: pid!,
+        alerts: selected.alerts,
+        events: selected.events,
+        medications: selected.medications,
         l: l,
       );
-
-      if (context.mounted) {
-        AppSnack.success(context, 'تم تصدير ملف الإكسل بنجاح: ${file.path.split(RegExp(r'[\\/]')).last}');
+      if (mounted && app.auth.currentUser?.uid == _owner) {
+        AppSnack.success(
+          context,
+          '${l.isArabic ? 'حُفظ التقرير' : 'Report saved'}: ${file.path}',
+        );
       }
-    } catch (e) {
-      if (context.mounted) {
-        AppSnack.error(context, 'فشل تصدير ملف الإكسل: $e');
-      }
+    } catch (_) {
+      if (mounted) AppSnack.error(context, l.exportFailed);
     } finally {
-      if (mounted) setState(() => _isExporting = false);
+      if (mounted) setState(() => _exporting = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l.reportsTitle),
-        actions: [
-          IconButton(
-            tooltip: l.exportExcel,
-            icon: _isExporting
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.table_view_outlined),
-            onPressed: _isExporting ? null : () => _exportExcel(context),
-          ),
-        ],
-      ),
-      body: Builder(
-        builder: (context) {
-          final pid = _effectivePatientId(app);
-          final pname = _effectivePatientName(app);
-          return FutureBuilder<List<dynamic>>(
-            future: Future.wait([
-              app.db.alertsFor(pid),
-              app.db.predictionEventsFor(pid),
-              app.db.medicationsFor(pid),
-            ]),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              final alerts = (snapshot.data?[0] as List<AlertItem>?) ?? const [];
-              final events = (snapshot.data?[1] as List<PredictionEvent>?) ?? const [];
-              final meds = (snapshot.data?[2] as List<Medication>?) ?? const [];
-
-              return ListView(
-                padding: const EdgeInsets.all(Gap.md),
-                children: [
-                  _buildSummaryHeader(context, alerts, events, meds, pname),
-                  const SizedBox(height: Gap.md),
-                  _buildFilterChips(context),
-                  const SizedBox(height: Gap.md),
-                  _buildEventList(context, alerts, events, meds),
-                ],
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-
-  String _friendlyReportMessage(String msg) {
-    final m = msg.trim();
-    if (m.contains('High seizure risk detected') || m.contains('high_risk')) {
-      return 'رصد احتمال نوبة محتملة — تنبيه استباقي وقائي';
-    }
-    if (m.contains('Patient needs closer monitoring') || m.contains('watch')) {
-      return 'ملاحظة سريرية: مؤشرات حيوية تستلزم المتابعة الهادئة';
-    }
-    if (m.contains('Patient vitals look stable')) {
-      return 'المؤشرات الحيوية مستقرة وطبيعية تماماً';
-    }
-    if (m.contains('SOS')) {
-      return 'نداء استغاثة طارئ (SOS) — تم إشعار الطبيب والمرافق فوراً';
-    }
-    return m;
-  }
-
-  Widget _buildSummaryHeader(
-    BuildContext context,
-    List<AlertItem> alerts,
-    List<PredictionEvent> events,
-    List<Medication> meds,
-    String patientName,
-  ) {
-    final theme = Theme.of(context);
     final l = AppLocalizations.of(context);
-    final escalated = events.where((e) => e.outcome == 'escalated').length;
-    final falseAlarms = events.where((e) => e.outcome == 'cancelled_false_alarm').length;
-    final criticalCount = alerts.where((a) => a.severity == 'critical').length;
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(Gap.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0284C7).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.analytics_rounded, color: Color(0xFF38BDF8), size: 24),
-                ),
-                Gap.hSm,
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'ملخص مؤشرات الحالة — $patientName',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'منظومة درع الأعصاب الذكي • تقرير سريري متكامل',
-                        style: TextStyle(
-                          color: theme.colorScheme.onSurfaceVariant,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: Gap.lg),
-            Wrap(
-              spacing: Gap.sm,
-              runSpacing: Gap.sm,
-              children: [
-                _buildMetricBadge(
-                  context,
-                  label: 'إجمالي السجلات',
-                  value: '${alerts.length + events.length}',
-                  view: RiskView.safe,
-                ),
-                _buildMetricBadge(
-                  context,
-                  label: 'نوبات حرجة / SOS',
-                  value: '$criticalCount',
-                  view: RiskView.danger,
-                ),
-                _buildMetricBadge(
-                  context,
-                  label: 'تنبؤات مصعدة',
-                  value: '$escalated',
-                  view: RiskView.danger,
-                ),
-                _buildMetricBadge(
-                  context,
-                  label: 'إنذارات كاذبة ملغاة',
-                  value: '$falseAlarms',
-                  view: RiskView.caution,
-                ),
-                _buildMetricBadge(
-                  context,
-                  label: 'أدوية مجدولة',
-                  value: '${meds.length}',
-                  view: RiskView.safe,
-                ),
-              ],
-            ),
-            const SizedBox(height: Gap.md),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF10B981).withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.25)),
+    final ar = l.isArabic;
+    final patients = app.auth.accessiblePatients();
+    final allowed = patients.any((p) => p.patientId == _patientId);
+    final name = allowed ? app.auth.patientById(_patientId!)!.name : null;
+    return Scaffold(
+      appBar: AppBar(title: Text(l.reportsTitle)),
+      body: ResponsiveContent(
+        maxWidth: 960,
+        child: FutureBuilder<ReportSelection>(
+          future: _data,
+          builder: (context, snapshot) => ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              Text(
+                ar ? 'تقرير المريض' : 'Patient report',
+                style: Theme.of(context).textTheme.headlineSmall,
               ),
-              child: const Row(
-                children: [
-                  Icon(Icons.health_and_safety_outlined, color: Color(0xFF10B981), size: 20),
-                  Gap.hSm,
-                  Expanded(
-                    child: Text(
-                      'خلاصة التقييم السريري: الحالة العامة مستقرة، مع فاعلية عالية في استباق النوبات وتوثيق الاستجابة الطارئة.',
-                      style: TextStyle(fontSize: 12, height: 1.4, fontWeight: FontWeight.w600),
+              const SizedBox(height: 16),
+              if (patients.isEmpty)
+                EmptyState(
+                  title: ar ? 'لا يوجد مريض متاح' : 'No accessible patient',
+                ),
+              if (patients.isNotEmpty) ...[
+                if (app.auth.currentUser?.role == UserRole.patient || patients.length <= 1)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x06000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 3),
+                        ),
+                      ],
                     ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.person_rounded,
+                            size: 22,
+                            color: Color(0xFF0066FF),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                ar ? 'ملف المريض المصرح له' : 'Authorized Patient Profile',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF64748B),
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                name ?? (ar ? 'ملفي الشخصي' : 'My Profile'),
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF0D253C),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFECFDF5),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFA7F3D0)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.lock_outline, size: 13, color: Color(0xFF059669)),
+                              const SizedBox(width: 4),
+                              Text(
+                                ar ? 'خاص ومحمي' : 'Private & Secure',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF059669),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  DropdownButtonFormField<String>(
+                    initialValue: allowed ? _patientId : null,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: ar ? 'المريض' : 'Patient',
+                      prefixIcon: const Icon(Icons.person_outline),
+                    ),
+                    items: patients
+                        .map(
+                          (p) => DropdownMenuItem(
+                            value: p.patientId,
+                            child: Text(p.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _exporting
+                        ? null
+                        : (value) => setState(() {
+                            _patientId = value;
+                            _data = _load();
+                          }),
                   ),
-                ],
+              ],
+              const SizedBox(height: 16),
+              InfoNote(
+                text: ar
+                    ? 'هذا التقرير من بيانات الجهاز وقد يكون غير مكتمل. التنبيهات ومخرجات النموذج ليست نوبات مؤكدة. الأدوية تمثل القائمة الحالية، لا سجلًا تاريخيًا للفترة.'
+                    : 'This device report may be incomplete. Alerts and model outputs are not confirmed seizures. Medication is the current list, not a historical record for the period.',
               ),
-            ),
-            const SizedBox(height: Gap.md),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _isExporting ? null : () => _exportExcel(context),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF0284C7),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                icon: const Icon(Icons.file_download_outlined),
-                label: Text(
-                  _isExporting ? 'جارٍ تصدير السجلات...' : '${l.exportExcel} (تقرير شامل معتمد)',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: ReportCategory.values.map((category) {
+                  final label = switch (category) {
+                    ReportCategory.all => ar ? 'الكل' : 'All',
+                    ReportCategory.alerts => ar ? 'التنبيهات' : 'Alerts',
+                    ReportCategory.predictions =>
+                      ar ? 'أحداث النموذج' : 'Model events',
+                    ReportCategory.medications => ar ? 'الأدوية' : 'Medication',
+                  };
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: _category == category,
+                    onSelected: _exporting
+                        ? null
+                        : (_) => setState(() => _category = category),
+                  );
+                }).toList(),
               ),
-            ),
-          ],
+              const SizedBox(height: 16),
+              DropdownButtonFormField<int>(
+                initialValue: _days,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: ar ? 'فترة الأحداث' : 'Event period',
+                ),
+                items: [7, 30, 0]
+                    .map(
+                      (days) => DropdownMenuItem(
+                        value: days,
+                        child: Text(
+                          days == 0
+                              ? (ar ? 'كل المحفوظ محليًا' : 'All local records')
+                              : (ar ? 'آخر $days يومًا' : 'Last $days days'),
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _exporting
+                    ? null
+                    : (value) => setState(() => _days = value ?? 7),
+              ),
+              const SizedBox(height: 20),
+              if (!allowed && patients.isNotEmpty)
+                EmptyState(
+                  title: ar ? 'اختر المريض لعرض سجله' : 'Select a patient',
+                ),
+              if (allowed &&
+                  snapshot.connectionState == ConnectionState.waiting)
+                const Center(child: CircularProgressIndicator()),
+              if (allowed && snapshot.hasError) ...[
+                Text(Failure.from(snapshot.error!).message(l)),
+                TextButton(
+                  onPressed: () => setState(() => _data = _load()),
+                  child: Text(l.refresh),
+                ),
+              ],
+              if (allowed && snapshot.hasData)
+                ..._content(_selected(snapshot.data!), name!, ar),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildMetricBadge(
-    BuildContext context, {
-    required String label,
-    required String value,
-    required RiskView view,
-  }) {
-    final color = AppColors.of(context, view).foreground;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(Radii.pill),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
+  List<Widget> _content(ReportSelection data, String name, bool ar) => [
+    const SizedBox(height: 10),
+    Text(
+      name,
+      style: const TextStyle(
+        fontSize: 18,
+        fontWeight: FontWeight.w800,
+        color: Color(0xFF0D253C),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            '$label: ',
-            style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w500),
+    ),
+    const SizedBox(height: 12),
+    Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF1F2),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFFECDD3)),
           ),
-          Text(
-            value,
-            style: TextStyle(color: color, fontSize: 12.5, fontWeight: FontWeight.bold),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFilterChips(BuildContext context) {
-    final l = AppLocalizations.of(context);
-
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          FilterChip(
-            selected: _filterType == ReportFilterType.all,
-            label: Text(l.filterAll),
-            onSelected: (_) => setState(() => _filterType = ReportFilterType.all),
-          ),
-          const SizedBox(width: Gap.xs),
-          FilterChip(
-            selected: _filterType == ReportFilterType.seizures,
-            label: const Text('النوبات والاستغاثات الحرجة'),
-            onSelected: (_) => setState(() => _filterType = ReportFilterType.seizures),
-          ),
-          const SizedBox(width: Gap.xs),
-          FilterChip(
-            selected: _filterType == ReportFilterType.alerts,
-            label: const Text('التنبيهات والمتابعة'),
-            onSelected: (_) => setState(() => _filterType = ReportFilterType.alerts),
-          ),
-          const SizedBox(width: Gap.xs),
-          FilterChip(
-            selected: _filterType == ReportFilterType.medications,
-            label: Text(l.filterMedications),
-            onSelected: (_) => setState(() => _filterType = ReportFilterType.medications),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEventList(
-    BuildContext context,
-    List<AlertItem> alerts,
-    List<PredictionEvent> events,
-    List<Medication> meds,
-  ) {
-    if (_filterType == ReportFilterType.medications) {
-      if (meds.isEmpty) return const EmptyState(title: 'لا توجد أدوية مسجلة');
-      return Column(
-        children: meds
-            .map(
-              (m) => Card(
-                child: ListTile(
-                  leading: const Icon(Icons.medication_outlined, color: Color(0xFF10B981)),
-                  title: Text(m.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('${m.dosage} · ${m.schedule}'),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.notifications_active_outlined,
+                size: 16,
+                color: Color(0xFFE11D48),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '${ar ? 'التنبيهات' : 'Alerts'}: ${data.alerts.length}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFE11D48),
                 ),
               ),
-            )
-            .toList(),
-      );
-    }
-
-    final filteredAlerts = switch (_filterType) {
-      ReportFilterType.seizures => alerts.where((a) => a.severity == 'critical').toList(),
-      ReportFilterType.alerts => alerts.where((a) => a.severity != 'critical').toList(),
-      _ => alerts,
-    };
-
-    if (filteredAlerts.isEmpty && events.isEmpty) {
-      return const EmptyState(title: 'لا توجد سجلات تطابق الفلتر المحدد');
-    }
-
-    return Column(
-      children: filteredAlerts.map((a) {
-        final isCritical = a.severity == 'critical';
-        final isSos = a.message.contains('SOS');
-        final categoryTag = isSos
-            ? 'نداء استغاثة طارئ SOS'
-            : isCritical
-                ? 'تنبؤ باقتراب نوبة'
-                : 'متابعة سريرية مستمرة';
-
-        final tagColor = isCritical ? const Color(0xFFEF4444) : const Color(0xFF0284C7);
-
-        return Card(
-          margin: const EdgeInsets.only(bottom: Gap.sm),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: tagColor.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    isCritical ? Icons.warning_amber_rounded : Icons.notifications_active_outlined,
-                    color: tagColor,
-                    size: 22,
-                  ),
-                ),
-                Gap.hMd,
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: tagColor.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              categoryTag,
-                              style: TextStyle(
-                                color: tagColor,
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          const Spacer(),
-                          Text(
-                            TimeAgo.stamp(a.timestamp),
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                ),
-                          ),
-                        ],
-                      ),
-                      Gap.vXs,
-                      Text(
-                        _friendlyReportMessage(a.message),
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
-                      ),
-                      Gap.vXs,
-                      Text(
-                        'التاريخ: ${a.timestamp.year}-${a.timestamp.month.toString().padLeft(2, '0')}-${a.timestamp.day.toString().padLeft(2, '0')}  الساعة: ${a.timestamp.hour.toString().padLeft(2, '0')}:${a.timestamp.minute.toString().padLeft(2, '0')}',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            ],
           ),
-        );
-      }).toList(),
-    );
-  }
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF3C7),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFFDE68A)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.analytics_outlined,
+                size: 16,
+                color: Color(0xFFD97706),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '${ar ? 'أحداث النموذج' : 'Model events'}: ${data.events.length}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFD97706),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEFF6FF),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFBFDBFE)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.medication_outlined,
+                size: 16,
+                color: Color(0xFF0066FF),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '${ar ? 'الأدوية الحالية' : 'Current medication'}: ${data.medications.length}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0066FF),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 18),
+    SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: FilledButton.icon(
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF0066FF),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          elevation: 0,
+        ),
+        onPressed: _exporting ? null : () => _export(data),
+        icon: _exporting
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : const Icon(Icons.download_rounded, size: 20),
+        label: Text(
+          ar ? 'تصدير النتائج المعروضة (Excel)' : 'Export shown results (Excel)',
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+        ),
+      ),
+    ),
+    const SizedBox(height: 20),
+    if (data.alerts.isEmpty && data.events.isEmpty && data.medications.isEmpty)
+      EmptyState(
+        title: ar ? 'لا توجد بيانات تطابق الاختيار' : 'No matching records',
+      ),
+    ...data.alerts.map(
+      (a) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF1F2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.notifications_outlined,
+                color: Color(0xFFE11D48),
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    a.message,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF0D253C),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    TimeAgo.stamp(a.timestamp),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF64748B),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+    ...data.events.map(
+      (e) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.analytics_outlined,
+                color: Color(0xFFD97706),
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    ar ? 'حدث من النموذج' : 'Model event',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF0D253C),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${TimeAgo.stamp(e.firedAt)} · ${_outcome(e.outcome, ar)}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF64748B),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+    ...data.medications.map(
+      (m) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.medication_outlined,
+                color: Color(0xFF0066FF),
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    m.name,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF0D253C),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${m.dosage} · ${m.schedule}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF64748B),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  ];
+  String _outcome(String value, bool ar) => switch (value) {
+    'escalated' =>
+      ar ? 'تم التصعيد، دون تأكيد نوبة' : 'Escalated; seizure unconfirmed',
+    'cancelled_false_alarm' => ar ? 'ألغاه المستخدم' : 'Cancelled by user',
+    'onset_confirmed' => ar ? 'سُجّل بدء حدث' : 'Event onset recorded',
+    _ => ar ? 'غير محسوم' : 'Unresolved',
+  };
 }

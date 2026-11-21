@@ -151,6 +151,7 @@ class EmergencyContact {
     this.relation = '',
     this.priority = 0,
     this.synced = false,
+    this.serverOrigin = '',
   });
 
   final String id;
@@ -164,6 +165,7 @@ class EmergencyContact {
   final int priority;
 
   final bool synced;
+  final String serverOrigin;
 
   EmergencyContact copyWith({
     String? name,
@@ -171,6 +173,7 @@ class EmergencyContact {
     String? relation,
     int? priority,
     bool? synced,
+    String? serverOrigin,
   }) => EmergencyContact(
     id: id,
     patientId: patientId,
@@ -179,6 +182,7 @@ class EmergencyContact {
     relation: relation ?? this.relation,
     priority: priority ?? this.priority,
     synced: synced ?? this.synced,
+    serverOrigin: serverOrigin ?? this.serverOrigin,
   );
 
   Map<String, Object?> toMap() => {
@@ -189,6 +193,7 @@ class EmergencyContact {
     'relation': relation,
     'priority': priority,
     'synced': synced ? 1 : 0,
+    'serverOrigin': serverOrigin,
   };
 
   Map<String, Object?> toApiJson() => {
@@ -207,6 +212,7 @@ class EmergencyContact {
     relation: m['relation'] as String? ?? '',
     priority: (m['priority'] as num?)?.toInt() ?? 0,
     synced: (m['synced'] as num?)?.toInt() == 1,
+    serverOrigin: m['serverOrigin'] as String? ?? '',
   );
 }
 
@@ -223,6 +229,7 @@ class MedicalCard {
     this.notes = '',
     this.updatedAt,
     this.synced = false,
+    this.serverOrigin = '',
   });
 
   final String patientId;
@@ -234,6 +241,7 @@ class MedicalCard {
   final String notes;
   final DateTime? updatedAt;
   final bool synced;
+  final String serverOrigin;
 
   bool get isEmpty =>
       diagnosis.isEmpty &&
@@ -251,6 +259,7 @@ class MedicalCard {
     String? notes,
     DateTime? updatedAt,
     bool? synced,
+    String? serverOrigin,
   }) => MedicalCard(
     patientId: patientId,
     diagnosis: diagnosis ?? this.diagnosis,
@@ -261,6 +270,7 @@ class MedicalCard {
     notes: notes ?? this.notes,
     updatedAt: updatedAt ?? this.updatedAt,
     synced: synced ?? this.synced,
+    serverOrigin: serverOrigin ?? this.serverOrigin,
   );
 
   Map<String, Object?> toMap() => {
@@ -273,6 +283,7 @@ class MedicalCard {
     'notes': notes,
     'updatedAt': (updatedAt ?? DateTime.now()).toIso8601String(),
     'synced': synced ? 1 : 0,
+    'serverOrigin': serverOrigin,
   };
 
   Map<String, Object?> toApiJson() => {
@@ -297,6 +308,7 @@ class MedicalCard {
       (m['updatedAt'] ?? m['updated_at'] ?? '') as String,
     ),
     synced: (m['synced'] as num?)?.toInt() == 1,
+    serverOrigin: m['serverOrigin'] as String? ?? '',
   );
 }
 
@@ -310,6 +322,7 @@ class TriggerEntry {
     this.intensity = 3,
     this.note = '',
     this.synced = false,
+    this.serverOrigin = '',
   });
 
   final String id;
@@ -323,6 +336,7 @@ class TriggerEntry {
 
   final String note;
   final bool synced;
+  final String serverOrigin;
 
   Map<String, Object?> toMap() => {
     'id': id,
@@ -332,11 +346,12 @@ class TriggerEntry {
     'intensity': intensity,
     'note': note,
     'synced': synced ? 1 : 0,
+    'serverOrigin': serverOrigin,
   };
 
   Map<String, Object?> toApiJson() => {
     'id': id,
-    'occurred_at': occurredAt.toIso8601String(),
+    'occurred_at': occurredAt.toUtc().toIso8601String(),
     'kind': kind.value,
     'intensity': intensity,
     'note': note,
@@ -354,6 +369,7 @@ class TriggerEntry {
     intensity: ((m['intensity'] as num?)?.toInt() ?? 3).clamp(1, 5),
     note: m['note'] as String? ?? '',
     synced: (m['synced'] as num?)?.toInt() == 1,
+    serverOrigin: m['serverOrigin'] as String? ?? '',
   );
 }
 
@@ -369,6 +385,7 @@ class CaregiverConsent {
     this.grantedAt,
     this.revokedAt,
     this.synced = false,
+    this.serverOrigin = '',
   });
 
   final String id;
@@ -384,6 +401,7 @@ class CaregiverConsent {
   final DateTime? revokedAt;
 
   final bool synced;
+  final String serverOrigin;
 
   bool get isActive => revokedAt == null;
 
@@ -393,6 +411,7 @@ class CaregiverConsent {
     DateTime? revokedAt,
     bool clearRevoked = false,
     bool? synced,
+    String? serverOrigin,
   }) => CaregiverConsent(
     id: id,
     patientId: patientId,
@@ -403,6 +422,7 @@ class CaregiverConsent {
     grantedAt: grantedAt,
     revokedAt: clearRevoked ? null : (revokedAt ?? this.revokedAt),
     synced: synced ?? this.synced,
+    serverOrigin: serverOrigin ?? this.serverOrigin,
   );
 
   Map<String, Object?> toMap() => {
@@ -415,6 +435,7 @@ class CaregiverConsent {
     'grantedAt': (grantedAt ?? DateTime.now()).toIso8601String(),
     'revokedAt': revokedAt?.toIso8601String(),
     'synced': synced ? 1 : 0,
+    'serverOrigin': serverOrigin,
   };
 
   Map<String, Object?> toApiJson() => {
@@ -444,6 +465,7 @@ class CaregiverConsent {
       (m['revokedAt'] ?? m['revoked_at'] ?? '') as String? ?? '',
     ),
     synced: (m['synced'] as num?)?.toInt() == 1,
+    serverOrigin: m['serverOrigin'] as String? ?? '',
   );
 }
 
@@ -455,6 +477,7 @@ class AccessLogEntry {
     required this.actorName,
     required this.action,
     required this.at,
+    this.serverOrigin = '',
   });
 
   final String id;
@@ -466,6 +489,7 @@ class AccessLogEntry {
   final String action;
 
   final DateTime at;
+  final String serverOrigin;
 
   Map<String, Object?> toMap() => {
     'id': id,
@@ -473,6 +497,7 @@ class AccessLogEntry {
     'actorName': actorName,
     'action': action,
     'at': at.toIso8601String(),
+    'serverOrigin': serverOrigin,
   };
 
   static AccessLogEntry fromMap(Map<String, dynamic> m) => AccessLogEntry(
@@ -481,6 +506,7 @@ class AccessLogEntry {
     actorName: m['actorName'] as String? ?? m['actor_name'] as String? ?? '',
     action: m['action'] as String? ?? '',
     at: DateTime.tryParse((m['at'] ?? '') as String) ?? DateTime.now(),
+    serverOrigin: m['serverOrigin'] as String? ?? '',
   );
 }
 
@@ -496,6 +522,7 @@ class SeizureLog {
     this.reportedBy = '',
     this.alertId,
     this.synced = false,
+    this.serverOrigin = '',
   });
 
   final String id;
@@ -511,6 +538,7 @@ class SeizureLog {
   final String? alertId;
 
   final bool synced;
+  final String serverOrigin;
 
   Map<String, Object?> toMap() => {
     'id': id,
@@ -522,11 +550,12 @@ class SeizureLog {
     'reportedBy': reportedBy,
     'alertId': alertId,
     'synced': synced ? 1 : 0,
+    'serverOrigin': serverOrigin,
   };
 
   Map<String, Object?> toApiJson() => {
     'id': id,
-    'occurred_at': occurredAt.toIso8601String(),
+    'occurred_at': occurredAt.toUtc().toIso8601String(),
     'duration_seconds': durationSeconds,
     'seizure_type': type.value,
     'notes': notes,
@@ -546,14 +575,12 @@ class SeizureLog {
         (m['durationSeconds'] ?? m['duration_seconds'] as Object?) is num
         ? ((m['durationSeconds'] ?? m['duration_seconds']) as num).toInt()
         : null,
-    type: SeizureType.fromValue(
-      (m['type'] ?? m['seizure_type']) as String?,
-    ),
+    type: SeizureType.fromValue((m['type'] ?? m['seizure_type']) as String?),
     notes: m['notes'] as String? ?? '',
-    reportedBy:
-        m['reportedBy'] as String? ?? m['reported_by'] as String? ?? '',
+    reportedBy: m['reportedBy'] as String? ?? m['reported_by'] as String? ?? '',
     alertId: (m['alertId'] ?? m['alert_id']) as String?,
     synced: (m['synced'] as num?)?.toInt() == 1,
+    serverOrigin: m['serverOrigin'] as String? ?? '',
   );
 }
 
@@ -568,6 +595,7 @@ class Adjudication {
     this.notes = '',
     this.doctorId = '',
     this.synced = false,
+    this.serverOrigin = '',
   });
 
   final String id;
@@ -578,6 +606,7 @@ class Adjudication {
   final String notes;
   final String doctorId;
   final bool synced;
+  final String serverOrigin;
 
   Map<String, Object?> toMap() => {
     'id': id,
@@ -588,17 +617,19 @@ class Adjudication {
     'notes': notes,
     'doctorId': doctorId,
     'synced': synced ? 1 : 0,
+    'serverOrigin': serverOrigin,
   };
 
   /// Maps onto the existing `POST /patients/{id}/outcomes` contract, whose
   /// `outcome` literal set is `seizure | no_seizure | false_alarm | unknown`.
   Map<String, Object?> toApiJson() => {
+    'id': id,
     'outcome': switch (verdict) {
       AdjudicationVerdict.seizure => 'seizure',
       AdjudicationVerdict.falseAlarm => 'false_alarm',
       AdjudicationVerdict.undetermined => 'unknown',
     },
-    'occurred_at': decidedAt.toIso8601String(),
+    'occurred_at': decidedAt.toUtc().toIso8601String(),
     'alert_id': alertId,
     'notes': notes,
   };
@@ -618,6 +649,7 @@ class Adjudication {
     notes: m['notes'] as String? ?? '',
     doctorId: m['doctorId'] as String? ?? m['doctor_id'] as String? ?? '',
     synced: (m['synced'] as num?)?.toInt() == 1,
+    serverOrigin: m['serverOrigin'] as String? ?? '',
   );
 }
 
@@ -632,6 +664,7 @@ class AlertResponse {
     required this.at,
     this.responderId = '',
     this.synced = false,
+    this.serverOrigin = '',
   });
 
   final String id;
@@ -642,6 +675,7 @@ class AlertResponse {
   final ResponseStatus status;
   final DateTime at;
   final bool synced;
+  final String serverOrigin;
 
   Map<String, Object?> toMap() => {
     'id': id,
@@ -652,6 +686,7 @@ class AlertResponse {
     'status': status.value,
     'at': at.toIso8601String(),
     'synced': synced ? 1 : 0,
+    'serverOrigin': serverOrigin,
   };
 
   Map<String, Object?> toApiJson() => {
@@ -660,7 +695,7 @@ class AlertResponse {
     'responder_id': responderId,
     'responder_name': responderName,
     'status': status.value,
-    'at': at.toIso8601String(),
+    'at': at.toUtc().toIso8601String(),
   };
 
   static AlertResponse fromMap(Map<String, dynamic> m) => AlertResponse(
@@ -674,6 +709,7 @@ class AlertResponse {
     status: ResponseStatus.fromValue(m['status'] as String?),
     at: DateTime.tryParse((m['at'] ?? '') as String) ?? DateTime.now(),
     synced: (m['synced'] as num?)?.toInt() == 1,
+    serverOrigin: m['serverOrigin'] as String? ?? '',
   );
 }
 
@@ -686,6 +722,7 @@ class ClinicalNote {
     required this.writtenAt,
     this.doctorId = '',
     this.synced = false,
+    this.serverOrigin = '',
   });
 
   final String id;
@@ -694,6 +731,7 @@ class ClinicalNote {
   final DateTime writtenAt;
   final String doctorId;
   final bool synced;
+  final String serverOrigin;
 
   Map<String, Object?> toMap() => {
     'id': id,
@@ -702,12 +740,13 @@ class ClinicalNote {
     'writtenAt': writtenAt.toIso8601String(),
     'doctorId': doctorId,
     'synced': synced ? 1 : 0,
+    'serverOrigin': serverOrigin,
   };
 
   Map<String, Object?> toApiJson() => {
     'id': id,
     'text': text,
-    'written_at': writtenAt.toIso8601String(),
+    'written_at': writtenAt.toUtc().toIso8601String(),
     'doctor_id': doctorId,
   };
 
@@ -716,9 +755,13 @@ class ClinicalNote {
     patientId: m['patientId'] as String? ?? '',
     text: m['text'] as String? ?? '',
     writtenAt:
-        DateTime.tryParse((m['writtenAt'] ?? '') as String) ?? DateTime.now(),
-    doctorId: m['doctorId'] as String? ?? '',
+        DateTime.tryParse(
+          (m['writtenAt'] ?? m['written_at'] ?? '') as String,
+        ) ??
+        DateTime.now(),
+    doctorId: (m['doctorId'] ?? m['doctor_id']) as String? ?? '',
     synced: (m['synced'] as num?)?.toInt() == 1,
+    serverOrigin: m['serverOrigin'] as String? ?? '',
   );
 }
 

@@ -31,10 +31,40 @@ class MonitoringCapabilityNotice extends StatelessWidget {
         locationMessage(location, ar),
       if (app.lastSmsOutcome != null) smsMessage(app.lastSmsOutcome!, ar),
     ];
-    return InfoNote(
-      text: messages.join('\n\n'),
-      icon: Icons.info_outline,
-      view: RiskView.caution,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InfoNote(
+          text: missingStream
+              ? (ar
+                    ? 'لا تصل بيانات حديثة من الجهاز. تحقق من مصدر المراقبة.'
+                    : 'No fresh device data. Check the monitoring source.')
+              : (ar
+                    ? 'المراقبة تعتمد على توفر الخادم. النموذج المحلي غير مفعّل.'
+                    : 'Monitoring depends on server availability. The local model is not enabled.'),
+          view: RiskView.caution,
+        ),
+        if (location != null && location != LocationStatus.available)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: InfoNote(text: locationMessage(location, ar)),
+          ),
+        if (app.lastSmsOutcome != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: InfoNote(text: smsMessage(app.lastSmsOutcome!, ar)),
+          ),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: Text(ar ? 'حدود المراقبة' : 'Monitoring limitations'),
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(messages.first),
+            ),
+          ],
+        ),
+      ],
     );
   }
 

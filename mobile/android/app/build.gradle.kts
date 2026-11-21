@@ -48,7 +48,10 @@ android {
             val keyPasswordVal = keystoreProperties.getProperty("keyPassword")
             val storePasswordVal = keystoreProperties.getProperty("storePassword")
             val storeFileVal = keystoreProperties.getProperty("storeFile")
-            val kFile = if (storeFileVal != null) file(storeFileVal) else null
+            val kFile = if (storeFileVal != null) {
+                val f = file(storeFileVal)
+                if (f.exists()) f else rootProject.file("app/$storeFileVal")
+            } else null
 
             if (kFile != null && kFile.exists()) {
                 keyAlias = keyAliasVal

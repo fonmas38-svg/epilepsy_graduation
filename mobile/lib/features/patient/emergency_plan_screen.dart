@@ -46,73 +46,83 @@ class EmergencyPlanScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: ListView(
-        padding: Insets.pageBottomSafe,
-        children: [
-          InfoNote(
-            text: l.emergencyOfflineNote,
-            icon: Icons.offline_bolt_outlined,
-          ),
-          Gap.vMd,
-          EmergencyButton(
-            label: l.needHelp,
-            busy: app.sosInProgress,
-            onPressed: () => app.triggerSos(),
-          ),
-          Gap.vMd,
-          SectionCard(
-            title: l.contactsSection,
-            subtitle: l.contactsHint,
-            icon: Icons.contact_phone_outlined,
-            trailing: IconButton(
-              tooltip: l.addContact,
-              onPressed: care.patientId == null
-                  ? null
-                  : () => _editContact(context, app, null),
-              icon: const Icon(Icons.add_circle_outline),
+      body: ResponsiveContent(
+        maxWidth: 1000,
+        child: ListView(
+          padding: Insets.pageBottomSafe,
+          children: [
+            InfoNote(
+              text: l.emergencyOfflineNote,
+              icon: Icons.offline_bolt_outlined,
             ),
-            child: contacts.isEmpty
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      InfoNote(
-                        text: l.noContactsWarning,
-                        icon: Icons.warning_amber_rounded,
-                        view: RiskView.caution,
-                      ),
-                      Gap.vSm,
-                      EmptyState(
-                        title: l.noContactsYet,
-                        icon: Icons.contact_phone_outlined,
-                        compact: true,
-                        actionLabel: l.addContact,
-                        action: care.patientId == null
-                            ? null
-                            : () => _editContact(context, app, null),
-                      ),
-                    ],
-                  )
-                : Column(
-                    children: [
-                      for (var i = 0; i < contacts.length; i++)
-                        _ContactTile(
-                          contact: contacts[i],
-                          rank: i + 1,
-                          canMoveUp: i > 0,
-                          canMoveDown: i < contacts.length - 1,
-                          onMove: (delta) => _move(app, i, delta),
-                          onEdit: () =>
-                              _editContact(context, app, contacts[i]),
-                          onDelete: () => _delete(context, app, contacts[i]),
+            Gap.vMd,
+            EmergencyButton(
+              label: l.needHelp,
+              busy: app.sosInProgress,
+              onPressed: () => app.triggerSos(),
+            ),
+            Gap.vMd,
+            SectionCard(
+              title: l.contactsSection,
+              subtitle: l.contactsHint,
+              icon: Icons.contact_phone_outlined,
+              trailing: IconButton(
+                tooltip: l.addContact,
+                onPressed: care.patientId == null
+                    ? null
+                    : () => _editContact(context, app, null),
+                icon: const Icon(Icons.add_circle_outline),
+              ),
+              child: contacts.isEmpty
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        InfoNote(
+                          text: l.noContactsWarning,
+                          icon: Icons.warning_amber_rounded,
+                          view: RiskView.caution,
                         ),
-                    ],
-                  ),
-          ),
-          Gap.vMd,
-          _MedicalCardSection(card: card),
-          Gap.vMd,
-          const FirstAidView(),
-        ],
+                        Gap.vSm,
+                        EmptyState(
+                          title: l.noContactsYet,
+                          icon: Icons.contact_phone_outlined,
+                          compact: true,
+                          actionLabel: l.addContact,
+                          action: care.patientId == null
+                              ? null
+                              : () => _editContact(context, app, null),
+                        ),
+                      ],
+                    )
+                  : Column(
+                      children: [
+                        for (var i = 0; i < contacts.length; i++)
+                          _ContactTile(
+                            contact: contacts[i],
+                            rank: i + 1,
+                            canMoveUp: i > 0,
+                            canMoveDown: i < contacts.length - 1,
+                            onMove: (delta) => _move(app, i, delta),
+                            onEdit: () =>
+                                _editContact(context, app, contacts[i]),
+                            onDelete: () => _delete(context, app, contacts[i]),
+                          ),
+                      ],
+                    ),
+            ),
+            Gap.vMd,
+            if (care.hasCardConflict) ...[
+              _CardConflictBanner(
+                onResolve: (keepLocal) =>
+                    care.resolveCardConflict(keepLocal: keepLocal),
+              ),
+              Gap.vMd,
+            ],
+            _MedicalCardSection(card: card),
+            Gap.vMd,
+            const FirstAidView(),
+          ],
+        ),
       ),
     );
   }
@@ -563,9 +573,8 @@ class _MedicalCardSection extends StatelessWidget {
     final draft = await showModalBottomSheet<MedicalCard>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _MedicalCardSheet(
-        card: existing ?? MedicalCard(patientId: pid),
-      ),
+      builder: (_) =>
+          _MedicalCardSheet(card: existing ?? MedicalCard(patientId: pid)),
     );
     if (draft == null || !context.mounted) return;
     try {
@@ -696,10 +705,7 @@ class _MedicalCardSheetState extends State<_MedicalCardSheet> {
     controller: controller,
     keyboardType: keyboard,
     maxLines: lines,
-    decoration: InputDecoration(
-      labelText: label,
-      prefixIcon: Icon(icon),
-    ),
+    decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon)),
   );
 }
 
@@ -827,6 +833,68 @@ class MedicalLockScreen extends StatelessWidget {
           Gap.vMd,
           const FirstAidView(),
         ],
+      ),
+    );
+  }
+}
+
+class _CardConflictBanner extends StatelessWidget {
+  const _CardConflictBanner({required this.onResolve});
+
+  final Future<void> Function(bool keepLocal) onResolve;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final l = AppLocalizations.of(context);
+
+    return Card(
+      color: theme.colorScheme.errorContainer.withValues(alpha: 0.7),
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: theme.colorScheme.error),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.warning_amber_rounded,
+                  color: theme.colorScheme.error,
+                ),
+                Gap.hSm,
+                Expanded(
+                  child: Text(
+                    l.cardConflictWarning,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: theme.colorScheme.onErrorContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Gap.vSm,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                OutlinedButton(
+                  onPressed: () => onResolve(false),
+                  child: Text(l.acceptServerVersion),
+                ),
+                Gap.hSm,
+                FilledButton.tonal(
+                  onPressed: () => onResolve(true),
+                  child: Text(l.keepLocalVersion),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

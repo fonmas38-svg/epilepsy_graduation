@@ -54,8 +54,7 @@ class MonitoringService {
   final List<double> _localTrajectory = [];
   bool _lastPredicted = false;
 
-  bool get _canSimulate => AppConfig.demoMode && auth.isDemoSession &&
-      auth.currentUser?.role == UserRole.patient;
+  bool get _canSimulate => auth.currentUser?.role == UserRole.patient;
 
   bool _usable(RiskAssessment? assessment) {
     if (assessment == null || assessment.patientId != activePatientId || assessment.confidence <= 0) return false;

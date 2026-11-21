@@ -28,7 +28,23 @@ class SectionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
+    final isDark = theme.brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? theme.colorScheme.surfaceContainerLow : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark ? theme.colorScheme.outlineVariant : const Color(0xFFE4EDF7),
+          width: 1.2,
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x06000000),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
       child: Padding(
         padding: padding,
         child: Column(
@@ -37,7 +53,18 @@ class SectionCard extends StatelessWidget {
             Row(
               children: [
                 if (icon != null) ...[
-                  Icon(icon, size: 20, color: theme.colorScheme.primary),
+                  Container(
+                    width: 38,
+                    height: 38,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? theme.colorScheme.surfaceContainerHighest
+                          : const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, size: 20, color: const Color(0xFF0066FF)),
+                  ),
                   Gap.hSm,
                 ],
                 Expanded(
@@ -46,17 +73,24 @@ class SectionCard extends StatelessWidget {
                     children: [
                       Text(
                         title,
-                        style: theme.textTheme.titleMedium?.copyWith(
+                        style: TextStyle(
+                          fontSize: 16,
                           fontWeight: FontWeight.w700,
+                          color: isDark ? theme.colorScheme.onSurface : const Color(0xFF0D253C),
                         ),
                       ),
-                      if (subtitle != null)
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 2),
                         Text(
                           subtitle!,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: isDark
+                                ? theme.colorScheme.onSurfaceVariant
+                                : const Color(0xFF64748B),
                           ),
                         ),
+                      ],
                     ],
                   ),
                 ),
@@ -92,8 +126,9 @@ class LabeledValue extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final stack =
+        MediaQuery.sizeOf(context).width < 600 ||
         MediaQuery.textScalerOf(context).scale(14) / 14 >
-        A11y.stackAboveTextScale;
+            A11y.stackAboveTextScale;
 
     final labelWidget = Row(
       mainAxisSize: MainAxisSize.min,
@@ -102,10 +137,12 @@ class LabeledValue extends StatelessWidget {
           Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
           Gap.hXs,
         ],
-        Text(
-          label,
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+        Flexible(
+          child: Text(
+            label,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       ],
@@ -128,7 +165,7 @@ class LabeledValue extends StatelessWidget {
           : Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                labelWidget,
+                Flexible(child: labelWidget),
                 Gap.hSm,
                 Expanded(
                   child: Align(
@@ -163,11 +200,11 @@ class InfoNote extends StatelessWidget {
     final tone = AppColors.of(context, view);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(Gap.md),
+      padding: const EdgeInsets.symmetric(horizontal: Gap.lg, vertical: Gap.md),
       decoration: BoxDecoration(
         color: tone.container,
-        borderRadius: Radii.rSm,
-        border: Border.all(color: tone.border),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: tone.border, width: 1.2),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -298,7 +335,9 @@ class EmergencyButton extends StatelessWidget {
               foregroundColor: tone.onSolid,
               disabledBackgroundColor: tone.solid.withValues(alpha: 0.6),
               disabledForegroundColor: tone.onSolid,
-              shape: const RoundedRectangleBorder(borderRadius: Radii.rMd),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
               textStyle: const TextStyle(
                 fontSize: 19,
                 fontWeight: FontWeight.w800,
@@ -340,7 +379,11 @@ abstract final class AppSnack {
         backgroundColor: tone.solid,
         content: Row(
           children: [
-            Icon(icon ?? AppColors.iconFor(view), color: tone.onSolid, size: 20),
+            Icon(
+              icon ?? AppColors.iconFor(view),
+              color: tone.onSolid,
+              size: 20,
+            ),
             Gap.hSm,
             Expanded(
               child: Text(message, style: TextStyle(color: tone.onSolid)),
@@ -353,8 +396,12 @@ abstract final class AppSnack {
     );
   }
 
-  static void success(BuildContext context, String message) =>
-      show(context, message, view: RiskView.safe, icon: Icons.check_circle_outline);
+  static void success(BuildContext context, String message) => show(
+    context,
+    message,
+    view: RiskView.safe,
+    icon: Icons.check_circle_outline,
+  );
 
   static void info(BuildContext context, String message) =>
       show(context, message, view: RiskView.unknown, icon: Icons.info_outline);
@@ -390,4 +437,3 @@ class ResponsiveContent extends StatelessWidget {
     );
   }
 }
-

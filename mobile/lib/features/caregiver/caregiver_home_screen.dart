@@ -1,6 +1,7 @@
+import '../../core/ui/workspace_scaffold.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../../widgets/patient_location_card.dart';
 
 import '../../core/enums.dart';
 import '../../core/errors/failure.dart';
@@ -15,8 +16,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/care_models.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
-import '../../widgets/app_drawer.dart';
-import '../patient/consents_screen.dart' show consentLevelDesc, consentLevelLabel;
+import '../patient/consents_screen.dart' show consentLevelLabel;
 import '../shared/alerts_list.dart';
 
 /// §4.1 — the family member's list of the people they are following.
@@ -68,18 +68,22 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
       for (final p in app.auth.accessiblePatients()) {
         final assessments = await app.db.assessmentsFor(p.patientId, limit: 1);
         final alerts = await app.db.alertsFor(p.patientId, limit: 20);
-        rows.add(_Row(
-          profile: p,
-          latest: assessments.isEmpty ? null : assessments.first,
-          alerts: alerts,
-        ));
+        rows.add(
+          _Row(
+            profile: p,
+            latest: assessments.isEmpty ? null : assessments.first,
+            alerts: alerts,
+          ),
+        );
       }
       // The one that needs attention first: unacknowledged alerts, then recency.
       rows.sort((a, b) {
         final byUnacked = b.unacked.compareTo(a.unacked);
         if (byUnacked != 0) return byUnacked;
         final at = a.observedAt, bt = b.observedAt;
-        if (at == null && bt == null) return a.profile.name.compareTo(b.profile.name);
+        if (at == null && bt == null) {
+          return a.profile.name.compareTo(b.profile.name);
+        }
         if (at == null) return 1;
         if (bt == null) return -1;
         return bt.compareTo(at);
@@ -132,10 +136,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   void _respond(AlertItem alert) => Navigator.pushNamed(
     context,
     Routes.familyRespond,
-    arguments: PatientRouteArgs(
-      patientId: alert.patientId,
-      alertId: alert.id,
-    ),
+    arguments: PatientRouteArgs(patientId: alert.patientId, alertId: alert.id),
   );
 
   @override
@@ -144,124 +145,81 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     final app = context.watch<AppState>();
 
     return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) return;
-        final shouldExit = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: Text(l.exitConfirmTitle),
-            content: Text(l.exitConfirmMessage),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: Text(l.keepInBackground),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: Text(l.exitApp),
-              ),
-            ],
-          ),
-        );
-        if (shouldExit == true && context.mounted) {
-          await app.signOut();
-          if (context.mounted) {
-            Navigator.pushNamedAndRemoveUntil(context, Routes.login, (r) => false);
-          }
-        }
-      },
-      child: Scaffold(
-      drawer: const AppDrawer(),
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'منظومة مراقبة الصرع الذكية',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.2,
-                  ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              'مرحباً ${app.auth.currentUser?.name ?? 'المرافق'} (المرافق السريري)',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
+      canPop: true,
+      child: WorkspaceScaffold(
+        appBar: AppBar(
+          title: Text(l.isArabic ? 'مرضاي' : 'My patients'),
+          actions: [
+            IconButton(
+              tooltip: l.refresh,
+              onPressed: _loading || _busy ? null : _refresh,
+              icon: const Icon(Icons.refresh_rounded),
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: l.refresh,
-            onPressed: _loading || _busy ? null : _refresh,
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-        ],
-      ),
-      body: AsyncView<List<_Row>>(
-        loading: _loading,
-        failure: _failure,
-        value: _rows,
-        isEmpty: (v) => v.isEmpty,
-        onRetry: _load,
-        emptyTitle: l.noLinkedPatients,
-        emptyBody: l.noLinkedPatientsBody,
-        emptyIcon: Icons.people_outline,
-        builder: (context, rows) => RefreshIndicator(
-          onRefresh: _refresh,
-          child: ResponsiveContent(
-            maxWidth: 850,
-            child: ListView(
-              padding: Insets.pageBottomSafe,
-              children: [
-                OfflineBanner(
-                  visible: !app.apiOnline,
-                  lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
-                  pendingCount: app.care.pendingCount,
-                ),
-                const _CaregiverLocationTrackerCard(),
-                Gap.vMd,
-                SectionCard(
-                  title: l.linkedPatients,
-                  icon: Icons.people_outline,
-                  trailing: Text(
-                    '${rows.length}',
-                    style: Theme.of(context).textTheme.titleMedium,
+        body: AsyncView<List<_Row>>(
+          loading: _loading,
+          failure: _failure,
+          value: _rows,
+          isEmpty: (v) => v.isEmpty,
+          onRetry: _load,
+          emptyTitle: l.noLinkedPatients,
+          emptyBody: l.noLinkedPatientsBody,
+          emptyIcon: Icons.people_outline,
+          builder: (context, rows) => RefreshIndicator(
+            onRefresh: _refresh,
+            child: ResponsiveContent(
+              maxWidth: 850,
+              child: ListView(
+                padding: Insets.pageBottomSafe,
+                children: [
+                  OfflineBanner(
+                    visible: !app.apiOnline,
+                    lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
+                    pendingCount: app.care.pendingCount,
                   ),
-                  child: Column(
-                    children: [
-                      for (final r in rows)
-                        _PatientRowTile(
-                          row: r,
-                          enabled: !_busy,
-                          onOpen: () => _open(r),
-                          onRespond: r.newestUnacked == null
-                              ? null
-                              : () => _respond(r.newestUnacked!),
-                        ),
-                    ],
+                  const _CaregiverLocationTrackerCard(),
+                  Gap.vMd,
+                  SectionCard(
+                    title: l.linkedPatients,
+                    icon: Icons.people_outline,
+                    trailing: Text(
+                      '${rows.length}',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    child: Column(
+                      children: [
+                        for (final r in rows)
+                          _PatientRowTile(
+                            row: r,
+                            enabled: !_busy,
+                            onOpen: () => _open(r),
+                            onRespond: r.newestUnacked == null
+                                ? null
+                                : () => _respond(r.newestUnacked!),
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-                Gap.vMd,
-                _RecentSection(rows: rows, onRespond: _respond),
-              ],
+                  Gap.vMd,
+                  _RecentSection(rows: rows, onRespond: _respond),
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 }
 
 /// One followed patient plus the little that is needed to rank and describe them.
 class _Row {
-  const _Row({required this.profile, required this.latest, required this.alerts});
+  const _Row({
+    required this.profile,
+    required this.latest,
+    required this.alerts,
+  });
 
   final PatientProfile profile;
   final RiskAssessment? latest;
@@ -385,13 +343,13 @@ class _PatientRowTile extends StatelessWidget {
                 tooltip: 'التقارير وتصدير Excel',
                 onPressed: enabled
                     ? () => Navigator.pushNamed(
-                          context,
-                          Routes.reports,
-                          arguments: PatientRouteArgs(
-                            patientId: row.profile.patientId,
-                            patientName: row.profile.name,
-                          ),
-                        )
+                        context,
+                        Routes.reports,
+                        arguments: PatientRouteArgs(
+                          patientId: row.profile.patientId,
+                          patientName: row.profile.name,
+                        ),
+                      )
                     : null,
                 icon: const Icon(Icons.table_chart_outlined),
               ),
@@ -399,13 +357,13 @@ class _PatientRowTile extends StatelessWidget {
                 tooltip: 'الرسائل والتوجيهات',
                 onPressed: enabled
                     ? () => Navigator.pushNamed(
-                          context,
-                          Routes.messages,
-                          arguments: PatientRouteArgs(
-                            patientId: row.profile.patientId,
-                            patientName: row.profile.name,
-                          ),
-                        )
+                        context,
+                        Routes.messages,
+                        arguments: PatientRouteArgs(
+                          patientId: row.profile.patientId,
+                          patientName: row.profile.name,
+                        ),
+                      )
                     : null,
                 icon: const Icon(Icons.chat_bubble_outline),
               ),
@@ -535,7 +493,9 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
       // one debug build away from being visible.
       final level = app.care.levelFor(app.auth.currentUser?.uid ?? '');
       final full = level.index >= ConsentLevel.full.index;
-      final seizures = full ? await app.db.seizureLogsFor(pid, limit: 20) : const <SeizureLog>[];
+      final seizures = full
+          ? await app.db.seizureLogsFor(pid, limit: 20)
+          : const <SeizureLog>[];
       final meds = full
           ? await app.medication.forPatient(pid, activeOnly: true)
           : const <Medication>[];
@@ -560,7 +520,10 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
     try {
       await app.acknowledgeAlert(id);
       if (!mounted) return;
-      AppSnack.success(context, app.apiOnline ? l.acknowledged : l.savedLocallyWillSync);
+      AppSnack.success(
+        context,
+        app.apiOnline ? l.acknowledged : l.savedLocallyWillSync,
+      );
     } catch (_) {
       if (!mounted) return;
       AppSnack.error(context, l.errUnknown);
@@ -578,7 +541,9 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(row.profile.name.isEmpty ? l.patientLabel : row.profile.name),
+        title: Text(
+          row.profile.name.isEmpty ? l.patientLabel : row.profile.name,
+        ),
         actions: [
           IconButton(
             tooltip: l.refresh,
@@ -605,14 +570,20 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
                   pendingCount: app.care.pendingCount,
                 ),
                 SectionCard(
-                  title: l.consentLevelLabel,
+                  title: l.isArabic
+                      ? 'مستوى العرض المحلي'
+                      : 'Local display level',
                   icon: Icons.verified_user_outlined,
                   trailing: RiskBadge(
                     view: RiskView.unknown,
                     labelOverride: consentLevelLabel(level, l),
                     dense: true,
                   ),
-                  child: InfoNote(text: consentLevelDesc(level, l)),
+                  child: InfoNote(
+                    text: l.isArabic
+                        ? 'هذا تفضيل عرض محلي، وليس دليلًا على صلاحيات مفروضة في الخادم. يعتمد الوصول الفعلي على علاقتك بالمريض وسياسات الخادم.'
+                        : 'This is a local display preference, not evidence of server-enforced permissions. Actual access depends on the care relationship and server policies.',
+                  ),
                 ),
                 if (canSeeStatus) ...[
                   Gap.vMd,
@@ -664,7 +635,9 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
                               for (final s in _seizures.take(10))
                                 LabeledValue(
                                   label: TimeAgo.stamp(s.occurredAt),
-                                  value: s.notes.isEmpty ? l.noteLabel : s.notes,
+                                  value: s.notes.isEmpty
+                                      ? l.noteLabel
+                                      : s.notes,
                                   icon: Icons.bolt_outlined,
                                 ),
                             ],
@@ -744,116 +717,16 @@ class _DeviceRow extends StatelessWidget {
 
 class _CaregiverLocationTrackerCard extends StatelessWidget {
   const _CaregiverLocationTrackerCard();
-
-  Future<void> _openMap(String url) async {
-    final uri = Uri.tryParse(url);
-    if (uri != null && await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final app = context.watch<AppState>();
-    final loc = app.messages.lastSharedLocation;
-
-    return Container(
-      padding: Insets.card,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: Radii.rMd,
-        border: Border.all(color: Colors.teal.withValues(alpha: 0.4)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(Gap.sm),
-                decoration: BoxDecoration(
-                  color: Colors.teal.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.location_on, color: Colors.teal, size: 20),
-              ),
-              Gap.hSm,
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'آخر موقع شاركه المريض',
-                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      loc != null
-                          ? 'وقت المشاركة: ${loc['updatedAt'] ?? 'غير معروف'}. ليس تتبعًا حيًا.${loc['accuracy'] == null ? '' : ' دقة تقريبية: ${loc['accuracy']} متر.'}'
-                          : 'لم يقم المريض بمشاركة موقعه بعد',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (loc != null) ...[
-            Gap.vSm,
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(Gap.sm),
-              decoration: BoxDecoration(
-                color: Colors.teal.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(Radii.sm),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.pin_drop, size: 16, color: Colors.teal),
-                  Gap.hXs,
-                  Expanded(
-                    child: Text(
-                      'الإحداثيات: ${(loc['latitude'] as num).toStringAsFixed(4)}, ${(loc['longitude'] as num).toStringAsFixed(4)}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.teal.shade800,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Gap.vSm,
-            SizedBox(
-              width: double.infinity,
-              height: A11y.minTouchTarget,
-              child: FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.teal,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: () {
-                  final url = loc['mapsUrl'] as String? ??
-                      'https://maps.google.com/?q=${loc['latitude']},${loc['longitude']}';
-                  _openMap(url);
-                },
-                icon: const Icon(Icons.directions, size: 18),
-                label: const Text('الاتجاهات والملاحة عبر Google Maps'),
-              ),
-            ),
-          ],
-        ],
-      ),
+    final pid = app.messages.patientId;
+    final profile = pid == null ? null : app.auth.patientById(pid);
+    if (profile == null) return const SizedBox.shrink();
+    return PatientLocationCard(
+      key: ValueKey(pid),
+      patientId: pid!,
+      patientName: profile.name,
     );
   }
 }

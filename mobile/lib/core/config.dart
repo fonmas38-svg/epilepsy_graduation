@@ -28,7 +28,7 @@ class AppConfig {
   /// Demo mode must be explicitly enabled and never targets the live API by default.
   static const demoMode = bool.fromEnvironment('DEMO_MODE', defaultValue: false);
 
-  static const simulationInterval = Duration(minutes: 5);
+  static const simulationInterval = Duration(seconds: 4);
 
   static const devicePollInterval = Duration(seconds: 3);
   static const localRetention = Duration(hours: 24);

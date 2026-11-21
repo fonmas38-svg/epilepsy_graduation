@@ -22,14 +22,28 @@ class AuthService {
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
-    // Do not restore session automatically on cold app start: require login on each startup.
-    currentUser = null;
-    isDemoSession = false;
-    _patients.clear();
-    // Legacy preferences mixed real and demo profiles. Real profiles now live
-    // only in the authenticated session, not in an unencrypted shared cache.
-    await prefs.remove(_patientsKey);
-    await prefs.remove(_userKey);
+    // Lifetime persistent login: session wiping removed to preserve real sessions across app restarts.
+    // Restore demo user and patient profile if present in preferences.
+    final userJson = prefs.getString(_userKey);
+    if (userJson != null) {
+      try {
+        final map = jsonDecode(userJson) as Map<String, dynamic>;
+        currentUser = AppUser.fromMap(map);
+        isDemoSession = true;
+      } catch (_) {}
+    }
+    final patientsJson = prefs.getString(_patientsKey);
+    if (patientsJson != null) {
+      try {
+        final map = jsonDecode(patientsJson) as Map<String, dynamic>;
+        _patients.clear();
+        for (final entry in map.entries) {
+          _patients[entry.key] = PatientProfile.fromMap(
+            entry.value as Map<String, dynamic>,
+          );
+        }
+      } catch (_) {}
+    }
   }
 
   void _seedDemoPatients() {
@@ -157,6 +171,15 @@ class AuthService {
         .whereType<PatientProfile>()
         .toList();
     return mapped;
+  }
+
+  bool canAccessPatient(String patientId) {
+    final user = currentUser;
+    if (user == null || user.role == UserRole.admin) return false;
+    if (user.role == UserRole.patient) return user.uid == patientId;
+    return accessiblePatients().any(
+      (profile) => profile.patientId == patientId,
+    );
   }
 
   PatientProfile? patientById(String id) => _patients[id];

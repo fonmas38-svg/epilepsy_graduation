@@ -1,0 +1,30 @@
+# UI, role flows and accessibility
+
+All visual styling, color tokens, hero cards, and typography must adhere strictly to the project's [Modern Health-Tech Design System](design-system.md).
+
+Read ../vendor/ui-ux-pro-max/GUIDE.md for additional generic UI intelligence. Its scripts and data are bundled: invoke vendor/ui-ux-pro-max/scripts/search.py by absolute path inside this skill. For whole-product direction query --design-system, inspect fit before persisting; for targeted defects query the domain and Flutter stack. RTL style/product searches need --rtl. Reject marketing landing layouts and low-contrast effects when unsuitable for monitoring; retain the user's approved visual direction. Do not assume Latin font advice covers Arabic.
+
+Flutter modules: ../vendor/flutter-build-responsive-layout/GUIDE.md for window constraints; ../vendor/flutter-fix-layout-issues/GUIDE.md for overflow; ../vendor/flutter-apply-architecture-best-practices/GUIDE.md for boundaries; ../vendor/flutter-add-widget-test/GUIDE.md for meaningful interaction tests. Adapt suggested APIs to the installed SDK; do not install a package already available or migrate architecture for a cosmetic edit.
+
+Use a clear primary action per task, concise labels and progressive disclosure of optional data. Keep error messages by fields, preserve drafts and distinguish saving locally, awaiting sync, accepted by server, delivered and read. Hide passwords and never render validation payloads with submitted values. Announce errors using Flutter semantics, check focus order/keyboard, text scaling, light/dark contrast and reduced motion. Use window space rather than guessed device classes; support RTL, narrow phone, short window and wide desktop.
+
+Patient: monitoring/source/status freshness, alerts, medication, manual reports, timeline/reports, messages, location and emergency contacts, caregivers/consents and account settings. Clearly label simulation and unavailable hardware capabilities.
+- Keep `WorkspaceScaffold` as the single outer `Scaffold` (do not nest an inner `Scaffold` inside `_DashboardTab`, which breaks `Scaffold.maybeOf(context)?.openDrawer()`).
+- Display an explicit calibrating/no-readings state when `latestPrediction == null` instead of fabricating probabilities (`0.88`/`0.45`/`0.12`).
+- Use responsive `Wrap`/`LayoutBuilder` for quick-action tiles so `<360dp` screens and large text scales do not overflow.
+- Medication view: display today's schedule (12-hour `ص`/`م` + meal/period context: `before_meal`, `with_meal`, `after_meal`, `independent`; `morning`, `noon`, `evening`, `bedtime`), personal adherence %, and "سجل الجرعة" (Take Dose). Hide add/edit/delete medication controls from patients.
+
+Doctor: authorized patient list/create, contextual patient file, prescriptions, clinical outcomes, messages/reports, missed predictions when evidence exists, and authorized credential resets. Do not infer diagnosis or model sensitivity from risk labels.
+- Replace $4N$ sequential SQLite query loops on Doctor Home with a single aggregated query/summary endpoint; use a 2-pane master-detail layout on desktop (`width >= 900`).
+- Patient creation (`AddPatientDialog`): require `age`, `gender`, `phone`, `emergency_contact` (optional `email`), provide auto-generated editable `pat_` username, send `idempotency_key`, and check `Navigator.canPop(context)` before popping.
+- **Session Equality Rule (Black Screen Guard)**: Never compare immutable `AppUser` instances with `identical(owner, _sessionOwner)` (31 `AppUser` comparison sites across `mobile/lib/`, out of 33 total `identical()` calls—preserve the legitimate `ModalRoute`/`Future` identity checks in `app_router.dart:453` and `api_client.dart:266`). Compare semantic `(uid, role, serverOrigin)` so updating `linkedPatientIds` does not reset the `Navigator` stack mid-dialog.
+- Medication management: doctors prescribe, modify dosages/schedules (with meal/period context), and review compliance charts, but **cannot** click "سجل الجرعة".
+- Format doctor names idempotently via `DoctorTitleFormatter` ("د." / "الدكتور" in Arabic, "Dr." in English) across home greetings, patient files, account/biometric screens, chat bubbles, and prescriptions—stripping any existing prefix to prevent "د. د.".
+- Event Review (`AdjudicationScreen`): render 10s pre/post-ictal 4-channel EEG waveforms, synchronized HR/accelerometer telemetry, AI confidence, and structured seizure/artifact classification.
+- Patient file fallback: wrap secondary `clinicalNotesFor` fetches in `try-catch` and fall back to SQLCipher on 404/offline so missing notes never crash `PatientFileScreen`.
+
+Caregiver: authorized patient selection, last-known status/location with time (12-hour AM/PM), actionable alerts/acknowledgment, read-only medication adherence with remind action, Care Home (domestic care circle) family/triage messages (`family_patient`, `care_team_triage`, `doctor_caregiver`), and authorized reports. Never show private patient/doctor (`doctor_patient`) messages. Use `IndexedStack` for tabs instead of unbounded `Navigator.pushNamed` stacking.
+
+Administrator: accounts, enable/disable/reset, patient/doctor and caregiver links, device enrollment/secret rotation, audit and operational status. Unify desktop navigation under `NavigationRail` (remove conflicting nested `DefaultTabController`). Require mandatory doctor clinical fields (`license_number`, `specialization`, `hospital_affiliation`, `national_id`, `phone`, optional `email`), auto-generated editable `dr_`/`cg_` usernames, and MOH verification (`POST /admin/doctors/verify-moh`, matching unprefixed `/admin/*` routers; Master Plan writes `/api/v1/admin/doctors/verify-moh`) with explicit confirmation or cancel/test-override prompt. Do not present device enrollment as a login-session manager. Avoid duplicate creation forms and password dialogs that accept arbitrary text as verification.
+
+Apply pages incrementally: inspect -> specify states/actions -> implement one coherent flow -> verify -> update ledger. Keep empty, offline, loading, forbidden, stale and failure states distinct.

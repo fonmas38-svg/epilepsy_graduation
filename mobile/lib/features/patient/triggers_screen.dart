@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
-import '../../core/theme/risk_view.dart';
 import '../../core/ui/common.dart';
 import '../../core/ui/states.dart';
 import '../../core/utils/time_ago.dart';
@@ -58,76 +56,87 @@ class TriggersScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: Text(l.triggersTitle)),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: null,
+        backgroundColor: const Color(0xFF0066FF),
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        elevation: 2,
         onPressed: care.patientId == null
             ? null
             : () => _openSheet(context, app),
-        icon: const Icon(Icons.add),
-        label: Text(l.addTrigger),
+        icon: const Icon(Icons.add_rounded),
+        label: Text(
+          l.addTrigger,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
       ),
-      body: ListView(
-        padding: Insets.pageBottomSafe,
-        children: [
-          OfflineBanner(
-            visible: !app.apiOnline,
-            lastUpdateLabel: care.lastSyncedAt == null
-                ? null
-                : TimeAgo.since(care.lastSyncedAt, l),
-            pendingCount: care.pendingCount,
-          ),
-          SectionCard(
-            title: l.correlationTitle,
-            icon: Icons.insights_outlined,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                InfoNote(text: l.correlationDisclaimer),
-                Gap.vSm,
-                if (co.isEmpty)
-                  EmptyState(
-                    title: l.emptyTitle,
-                    body: l.emptyBody,
-                    icon: Icons.query_stats_outlined,
-                    compact: true,
-                  )
-                else
-                  for (final entry in _sorted(co))
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: Gap.xs),
-                      child: LabeledValue(
-                        label: triggerKindLabel(entry.key, l),
-                        value: l.coOccurrence(entry.value),
-                        icon: triggerKindIcon(entry.key),
-                      ),
-                    ),
-              ],
+      body: ResponsiveContent(
+        maxWidth: 1000,
+        child: ListView(
+          padding: Insets.pageBottomSafe,
+          children: [
+            OfflineBanner(
+              visible: !app.apiOnline,
+              lastUpdateLabel: care.lastSyncedAt == null
+                  ? null
+                  : TimeAgo.since(care.lastSyncedAt, l),
+              pendingCount: care.pendingCount,
             ),
-          ),
-          Gap.vMd,
-          SectionCard(
-            title: l.triggerHistory,
-            icon: Icons.edit_note_outlined,
-            child: triggers.isEmpty
-                ? EmptyState(
-                    title: l.emptyTitle,
-                    body: l.emptyBody,
-                    icon: Icons.event_note_outlined,
-                    compact: true,
-                    actionLabel: l.addTrigger,
-                    action: care.patientId == null
-                        ? null
-                        : () => _openSheet(context, app),
-                  )
-                : Column(
-                    children: [
-                      for (final t in triggers)
-                        _TriggerRow(
-                          entry: t,
-                          onDelete: () => _delete(context, app, t),
+            SectionCard(
+              title: l.correlationTitle,
+              icon: Icons.insights_outlined,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  InfoNote(text: l.correlationDisclaimer),
+                  Gap.vSm,
+                  if (co.isEmpty)
+                    EmptyState(
+                      title: l.emptyTitle,
+                      body: l.emptyBody,
+                      icon: Icons.query_stats_outlined,
+                      compact: true,
+                    )
+                  else
+                    for (final entry in _sorted(co))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: Gap.xs),
+                        child: LabeledValue(
+                          label: triggerKindLabel(entry.key, l),
+                          value: l.coOccurrence(entry.value),
+                          icon: triggerKindIcon(entry.key),
                         ),
-                    ],
-                  ),
-          ),
-        ],
+                      ),
+                ],
+              ),
+            ),
+            Gap.vMd,
+            SectionCard(
+              title: l.triggerHistory,
+              icon: Icons.edit_note_outlined,
+              child: triggers.isEmpty
+                  ? EmptyState(
+                      title: l.emptyTitle,
+                      body: l.emptyBody,
+                      icon: Icons.event_note_outlined,
+                      compact: true,
+                      actionLabel: l.addTrigger,
+                      action: care.patientId == null
+                          ? null
+                          : () => _openSheet(context, app),
+                    )
+                  : Column(
+                      children: [
+                        for (final t in triggers)
+                          _TriggerRow(
+                            entry: t,
+                            onDelete: () => _delete(context, app, t),
+                          ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -196,7 +205,11 @@ class TriggersScreen extends StatelessWidget {
 }
 
 class _Draft {
-  const _Draft({required this.kind, required this.intensity, required this.note});
+  const _Draft({
+    required this.kind,
+    required this.intensity,
+    required this.note,
+  });
   final TriggerKind kind;
   final int intensity;
   final String note;
@@ -310,29 +323,84 @@ class _TriggerRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    final colors = AppColors.of(context, RiskView.unknown);
+    final isDark = theme.brightness == Brightness.dark;
     final subtitle = [
       '${l.triggerIntensity} ${entry.intensity}/5',
       TimeAgo.stamp(entry.occurredAt),
       if (!entry.synced) l.pendingSync,
     ].join(' · ');
 
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(triggerKindIcon(entry.kind), color: colors.foreground),
-      title: Text(triggerKindLabel(entry.kind, l)),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(subtitle, style: theme.textTheme.bodySmall),
-          if (entry.note.isNotEmpty)
-            Text(entry.note, style: theme.textTheme.bodySmall),
-        ],
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDark ? theme.colorScheme.surfaceContainerHighest : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? theme.colorScheme.outlineVariant : const Color(0xFFE4EDF7),
+          width: 1,
+        ),
       ),
-      trailing: IconButton(
-        tooltip: l.delete,
-        onPressed: onDelete,
-        icon: const Icon(Icons.delete_outline),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF3C7),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              triggerKindIcon(entry.kind),
+              color: const Color(0xFFD97706),
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  triggerKindLabel(entry.kind, l),
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? theme.colorScheme.onSurface : const Color(0xFF0D253C),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
+                if (entry.note.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    entry.note,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? theme.colorScheme.onSurfaceVariant : const Color(0xFF334155),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: l.delete,
+            onPressed: onDelete,
+            icon: const Icon(
+              Icons.delete_outline_rounded,
+              color: Color(0xFF94A3B8),
+              size: 20,
+            ),
+          ),
+        ],
       ),
     );
   }

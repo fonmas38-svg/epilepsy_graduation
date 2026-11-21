@@ -60,14 +60,19 @@ abstract final class AppTheme {
   static ThemeData dark() => _build(Brightness.dark);
 
   static ThemeData _build(Brightness brightness) {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: AppColors.seed,
-      brightness: brightness,
-      // Bind the error role to our danger colour so Material's own error
-      // surfaces (TextField validation, etc.) match the risk palette instead of
-      // introducing a second, competing red.
-      error: AppColors.resolve(RiskView.danger, brightness).solid,
-    );
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: AppColors.seed,
+          brightness: brightness,
+          // Bind the error role to our danger colour so Material's own error
+          // surfaces (TextField validation, etc.) match the risk palette instead of
+          // introducing a second, competing red.
+          error: AppColors.resolve(RiskView.danger, brightness).solid,
+        ).copyWith(
+          primary: brightness == Brightness.dark
+              ? const Color(0xFF91C0FF)
+              : AppColors.seed,
+        );
     final dark = brightness == Brightness.dark;
 
     final base = ThemeData(
@@ -85,7 +90,9 @@ abstract final class AppTheme {
     );
 
     return base.copyWith(
-      scaffoldBackgroundColor: scheme.surface,
+      scaffoldBackgroundColor: dark
+          ? const Color(0xFF101A2B)
+          : const Color(0xFFF6F9FD),
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
           TargetPlatform.android: _FadePageTransitions(),
@@ -99,23 +106,35 @@ abstract final class AppTheme {
       appBarTheme: AppBarTheme(
         centerTitle: false,
         elevation: 0,
-        scrolledUnderElevation: 1,
-        backgroundColor: scheme.surface,
-        foregroundColor: scheme.onSurface,
+        scrolledUnderElevation: 0,
+        backgroundColor: dark ? scheme.surface : Colors.white,
+        foregroundColor: dark ? scheme.onSurface : const Color(0xFF0D253C),
         titleTextStyle: base.textTheme.titleLarge?.copyWith(
-          color: scheme.onSurface,
-          fontWeight: FontWeight.w700,
+          color: dark ? scheme.onSurface : const Color(0xFF0D253C),
+          fontWeight: FontWeight.w800,
+          fontSize: 19,
         ),
       ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: dark ? scheme.surface : Colors.white,
+        indicatorColor: scheme.primaryContainer,
+      ),
+      navigationRailTheme: NavigationRailThemeData(
+        backgroundColor: dark ? scheme.surface : Colors.white,
+        indicatorColor: scheme.primaryContainer,
+      ),
       cardTheme: CardThemeData(
-        elevation: dark ? 0 : 1,
+        elevation: 0,
         margin: EdgeInsets.zero,
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(
-          borderRadius: Radii.rMd,
-          side: BorderSide(color: scheme.outlineVariant),
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(
+            color: dark ? scheme.outlineVariant : const Color(0xFFE4EDF7),
+            width: 1.2,
+          ),
         ),
-        color: scheme.surfaceContainerLow,
+        color: dark ? scheme.surfaceContainerLow : Colors.white,
       ),
       listTileTheme: const ListTileThemeData(
         minVerticalPadding: Gap.md,
@@ -124,21 +143,26 @@ abstract final class AppTheme {
       dividerTheme: DividerThemeData(
         space: 1,
         thickness: 1,
-        color: scheme.outlineVariant,
+        color: dark ? scheme.outlineVariant : const Color(0xFFE4EDF7),
       ),
       // Every button meets the 48 dp floor from §7 without each call site
       // remembering to ask.
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           minimumSize: const Size(64, A11y.minTouchTarget),
-          shape: const RoundedRectangleBorder(borderRadius: Radii.rSm),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+          backgroundColor: const Color(0xFF0066FF),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(64, A11y.minTouchTarget),
-          shape: const RoundedRectangleBorder(borderRadius: Radii.rSm),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          side: BorderSide(
+            color: dark ? scheme.outlineVariant : const Color(0xFFE4EDF7),
+            width: 1.2,
+          ),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
@@ -148,26 +172,36 @@ abstract final class AppTheme {
       ),
       iconButtonTheme: IconButtonThemeData(
         style: IconButton.styleFrom(
-          minimumSize: const Size(
-            A11y.minTouchTarget,
-            A11y.minTouchTarget,
-          ),
+          minimumSize: const Size(A11y.minTouchTarget, A11y.minTouchTarget),
+        ),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: dark ? scheme.surface : Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: scheme.surfaceContainerHighest,
-        border: const OutlineInputBorder(
-          borderRadius: Radii.rSm,
-          borderSide: BorderSide.none,
+        fillColor: dark ? scheme.surfaceContainerHighest : Colors.white,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(
+            color: dark ? scheme.outlineVariant : const Color(0xFFE4EDF7),
+            width: 1.2,
+          ),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: Radii.rSm,
-          borderSide: BorderSide(color: scheme.outlineVariant),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(
+            color: dark ? scheme.outlineVariant : const Color(0xFFE4EDF7),
+            width: 1.2,
+          ),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: Radii.rSm,
-          borderSide: BorderSide(color: scheme.primary, width: 2),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: Color(0xFF0066FF), width: 1.5),
         ),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: Gap.md,

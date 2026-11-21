@@ -265,34 +265,41 @@ class _MedicationScreenState extends State<MedicationScreen> {
         widget.patientId != app.auth.currentUser?.uid;
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF6F9FD),
       drawer: const AppDrawer(),
       appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               l.medsTitle,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+              style: const TextStyle(
+                color: Color(0xFF0D253C),
+                fontWeight: FontWeight.w800,
+                fontSize: 18,
+              ),
             ),
             if (isOtherPatient && profile != null)
               Text(
                 'المريض: ${profile.name}',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.w600,
-                    ),
+                style: const TextStyle(
+                  color: Color(0xFF1976D2),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                ),
               ),
           ],
         ),
         leading: canPop
-            ? const BackButton()
+            ? const BackButton(color: Color(0xFF0D253C))
             : Builder(
                 builder: (ctx) => IconButton(
                   tooltip: 'القائمة الجانبية',
-                  icon: const Icon(Icons.menu),
+                  icon: const Icon(Icons.menu_rounded, color: Color(0xFF0D253C)),
                   onPressed: () => Scaffold.of(ctx).openDrawer(),
                 ),
               ),
@@ -300,19 +307,24 @@ class _MedicationScreenState extends State<MedicationScreen> {
           IconButton(
             tooltip: l.addMedication,
             onPressed: _busy ? null : () => _addOrEdit(),
-            icon: const Icon(Icons.add_circle_outline),
+            icon: const Icon(Icons.add_circle_outline, color: Color(0xFF0066FF)),
           ),
           IconButton(
             tooltip: l.refresh,
             onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh_rounded),
+            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF6B7A99)),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: null,
+        elevation: 4,
+        backgroundColor: const Color(0xFF0066FF),
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         onPressed: _busy ? null : () => _addOrEdit(),
         icon: const Icon(Icons.add),
-        label: Text(l.addMedication),
+        label: Text(l.addMedication, style: const TextStyle(fontWeight: FontWeight.bold)),
       ),
       body: AsyncView<_MedData>(
         loading: _loading,
@@ -601,69 +613,118 @@ class _DoseTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
-    final theme = Theme.of(context);
-    final view = entry.taken
-        ? RiskView.safe
-        : overdue
-        ? RiskView.caution
-        : RiskView.unknown;
-    final tone = AppColors.of(context, view);
+    final bool taken = entry.taken;
     final med = entry.medication;
     final dosage = med.dosage.isEmpty ? '' : ' · ${med.dosage}';
 
+    final Color cardBg = taken
+        ? const Color(0xFFF1F8F4)
+        : (overdue ? const Color(0xFFFFF7ED) : Colors.white);
+    final Color borderColor = taken
+        ? const Color(0xFFC8E6C9)
+        : (overdue ? const Color(0xFFFFD8A8) : const Color(0xFFE4EDF7));
+    final Color iconColor = taken
+        ? const Color(0xFF2E7D32)
+        : (overdue ? const Color(0xFFE65100) : const Color(0xFF0066FF));
+
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Gap.xs),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Container(
-        padding: Insets.tile,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: tone.container,
-          border: Border.all(color: tone.border),
-          borderRadius: Radii.rMd,
+          color: cardBg,
+          border: Border.all(color: borderColor, width: 1.2),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF0D253C).withValues(alpha: 0.03),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
         ),
         child: Row(
           children: [
-            Icon(
-              entry.taken ? Icons.check_circle_outline : Icons.schedule_outlined,
-              color: tone.foreground,
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                taken
+                    ? Icons.check_circle_rounded
+                    : (overdue ? Icons.warning_amber_rounded : Icons.medication_rounded),
+                color: iconColor,
+                size: 24,
+              ),
             ),
-            Gap.hSm,
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     '${med.name}$dosage',
-                    style: theme.textTheme.bodyLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: tone.foreground,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                      color: Color(0xFF0D253C),
                     ),
                   ),
+                  const SizedBox(height: 3),
                   Text(
-                    entry.taken
+                    taken
                         ? '${l.takenAt} ${TimeAgo.clock(entry.log?.takenAt ?? DateTime.now())}'
                         : '${l.dueAt} ${entry.time}',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: tone.foreground,
+                    style: TextStyle(
+                      color: taken ? const Color(0xFF2E7D32) : const Color(0xFF6B7A99),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ],
               ),
             ),
-            Gap.hSm,
-            if (entry.taken)
-              Text(
-                l.doseTaken,
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: tone.foreground,
-                  fontWeight: FontWeight.w700,
+            const SizedBox(width: 10),
+            if (taken)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE8F5E9),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  l.doseTaken,
+                  style: const TextStyle(
+                    color: Color(0xFF2E7D32),
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                  ),
                 ),
               )
             else
               SizedBox(
-                height: A11y.minTouchTarget,
-                child: FilledButton(
+                height: 38,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF0066FF),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                  ),
                   onPressed: enabled ? onTaken : null,
-                  child: Text(l.takeDose),
+                  icon: const Icon(Icons.check, size: 16),
+                  label: Text(
+                    l.takeDose,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                    ),
+                  ),
                 ),
               ),
           ],

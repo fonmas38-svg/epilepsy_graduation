@@ -46,7 +46,8 @@ class AuthError(HTTPException):
         super().__init__(status_code=code, detail=detail)
 
 
-def create_token(subject: str, role: Role, extra: dict | None = None) -> str:
+def create_token(subject: str, role: Role, extra: dict | None = None, *,
+                 session_context: dict | None = None, expected_session_version: int | None = None) -> str:
     """Issue a signed JWT. `subject` is e.g. device_id or user_id."""
     if jwt is None:
         raise RuntimeError("PyJWT not installed. pip install pyjwt")
@@ -57,16 +58,42 @@ def create_token(subject: str, role: Role, extra: dict | None = None) -> str:
         "iat": now,
         "exp": now + JWT_EXPIRE_MINUTES * 60,
     }
-    if role in ("patient", "caregiver", "doctor", "admin"):
-        # The account version makes password resets and administrative disable
-        # operations invalidate already issued tokens.
-        from app import users_store
-
-        user = users_store.get_user(subject)
-        if user:
-            payload["session_version"] = int(user.get("sessionVersion", 0))
     if extra:
-        payload.update(extra)
+        # Callers may add device bindings/profile hints, never replace identity
+        # or revocation claims with user-controlled values.
+        payload.update({key: value for key, value in extra.items()
+                        if key not in {"sub", "role", "iat", "exp", "sid", "session_version"}})
+    if role in ("patient", "caregiver", "doctor", "admin"):
+        from app import account_sessions_store
+
+        session_lifetime = int(getattr(settings, "session_lifetime_seconds", 30 * 86400))
+        session_expiry = now + session_lifetime
+        try:
+            session = account_sessions_store.create(subject, role, session_expiry,
+                expected_version=expected_session_version, **(session_context or {}))
+        except ValueError as exc:
+            raise AuthError(str(exc)) from exc
+        payload["session_version"] = session["session_version"]
+        payload["sid"] = session["id"]
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def issue_access_token(subject: str, role: Role, sid: str, session_version: int, extra: dict | None = None) -> str:
+    """Issue a new access token for an active session without inserting a new session row."""
+    if jwt is None:
+        raise RuntimeError("PyJWT not installed. pip install pyjwt")
+    now = int(time.time())
+    payload = {
+        "sub": subject,
+        "role": role,
+        "iat": now,
+        "exp": now + JWT_EXPIRE_MINUTES * 60,
+        "sid": sid,
+        "session_version": session_version,
+    }
+    if extra:
+        payload.update({key: value for key, value in extra.items()
+                        if key not in {"sub", "role", "iat", "exp", "sid", "session_version"}})
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 
@@ -77,6 +104,16 @@ def decode_token(token: str) -> dict:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except jwt.ExpiredSignatureError:
         raise AuthError("Token expired")
+    except jwt.InvalidTokenError:
+        raise AuthError("Invalid token")
+
+
+def decode_token_for_refresh(token: str) -> dict:
+    """Decode a JWT verifying signature, allowing expired access tokens for session refresh."""
+    if jwt is None:
+        raise RuntimeError("PyJWT not installed. pip install pyjwt")
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG], options={"verify_exp": False})
     except jwt.InvalidTokenError:
         raise AuthError("Invalid token")
 
@@ -101,13 +138,19 @@ def get_current_principal(authorization: str | None = Header(default=None)) -> d
     principal = decode_token(token)
     role = principal.get("role")
     if role in ("patient", "caregiver", "doctor", "admin"):
-        from app import users_store
+        from app import account_sessions_store, users_store
 
         user = users_store.get_user(str(principal.get("sub", "")))
         if not user or user.get("disabled"):
             raise AuthError("Account is inactive")
         if int(principal.get("session_version", 0)) != int(user.get("sessionVersion", 0)):
             raise AuthError("Session has been revoked")
+        session_id = principal.get("sid")
+        # Explicit migration policy: unregistered legacy human JWTs require a
+        # new login. Device JWTs keep their separate credential-version policy.
+        if (user.get("role") != role or not isinstance(session_id, str) or not session_id
+                or not account_sessions_store.is_active(session_id, user["id"], int(user["sessionVersion"]), touch=True)):
+            raise AuthError("Session is inactive; sign in again")
     elif role == "device" and (settings.is_production or "credential_version" in principal):
         from app import device_store
 

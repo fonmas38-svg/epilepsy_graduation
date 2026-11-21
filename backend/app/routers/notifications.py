@@ -1,5 +1,5 @@
 """Authenticated mobile push-token registration endpoints."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app import push_tokens_store, users_store
@@ -20,7 +20,10 @@ def register_device_token(
     principal: dict = Depends(require_account),
 ):
     user_id = str(principal["sub"])
-    push_tokens_store.register(user_id, body.token, body.platform.lower())
+    try:
+        push_tokens_store.register(user_id, body.token, body.platform.lower(), session_id=principal["sid"])
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     users_store.log(user_id, principal.get("role"), "register_push_token", user_id,
                     {"platform": body.platform.lower()})
     return {"status": "registered", "registered_devices": push_tokens_store.count_for_user(user_id)}
@@ -32,7 +35,7 @@ def unregister_device_token(
     principal: dict = Depends(require_account),
 ):
     user_id = str(principal["sub"])
-    removed = push_tokens_store.unregister(user_id, body.token)
+    removed = push_tokens_store.unregister(user_id, body.token, session_id=principal["sid"])
     if removed:
         users_store.log(user_id, principal.get("role"), "unregister_push_token", user_id,
                         {"platform": body.platform.lower()})

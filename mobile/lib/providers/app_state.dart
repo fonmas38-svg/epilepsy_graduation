@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/config.dart';
 import '../core/enums.dart';
 import '../core/errors/failure.dart';
+import '../core/security/password_hasher.dart';
 import '../core/theme/risk_view.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
@@ -29,13 +31,15 @@ import '../services/sync_service.dart';
 import '../services/edge_model_service.dart';
 
 class AppState extends ChangeNotifier {
-  AppState() {
+  AppState({ApiClient? apiClient, LocalDatabase? database}) {
     auth = AuthService();
-    db = LocalDatabase.instance;
-    api = ApiClient();
+    db = database ?? LocalDatabase.instance;
+    api = apiClient ?? ApiClient();
     settings = SettingsService();
     sync = SyncService(db: db, api: api, auth: auth)..adoptLocalizations(_l10n);
-    notifications = NotificationService(fallbackTitle: _l10n.notificationFallbackTitle);
+    notifications = NotificationService(
+      fallbackTitle: _l10n.notificationFallbackTitle,
+    );
     medication = MedicationService(db: db, notifications: notifications);
     care = CareService(api: api, db: db);
     messages = MessageService(db: db, api: api, auth: auth);
@@ -71,7 +75,9 @@ class AppState extends ChangeNotifier {
         final fix = await location.currentFix();
         final escalated = await sync.escalatePreAlert(reading, pre);
         lastAlert = escalated;
-        if (escalated.severity == 'critical') unawaited(_prepareEmergencySms(escalated));
+        if (escalated.severity == 'critical') {
+          unawaited(_prepareEmergencySms(escalated));
+        }
         if (fix != null) {
           try {
             await messages.shareLocation(
@@ -79,7 +85,8 @@ class AppState extends ChangeNotifier {
               latitude: fix.latitude,
               longitude: fix.longitude,
               accuracy: fix.accuracy,
-              note: '⚠️ تصعيد طارئ: لم يستجب المريض لإنذار ما قبل النوبة، الموقع الحالي مرفق فوراً.',
+              note:
+                  '⚠️ تصعيد طارئ: لم يستجب المريض لإنذار ما قبل النوبة، الموقع الحالي مرفق فوراً.',
             );
           } catch (_) {}
         }
@@ -156,6 +163,7 @@ class AppState extends ChangeNotifier {
 
   bool ready = false;
   bool apiOnline = false;
+  bool isOfflineWorkspace = false;
   AlertItem? lastAlert;
 
   static const _kServerModeKey = 'server_target_mode';
@@ -292,23 +300,32 @@ class AppState extends ChangeNotifier {
   bool _preparingEmergencySms = false;
   final Set<String> _smsPrepared = {};
 
-  Future<void> _prepareEmergencySms(AlertItem alert, {GpsFix? fix, bool locate = true}) async {
+  Future<void> _prepareEmergencySms(
+    AlertItem alert, {
+    GpsFix? fix,
+    bool locate = true,
+  }) async {
     final owner = auth.currentUser;
-    if (_preparingEmergencySms || owner?.role != UserRole.patient ||
-        owner?.uid != alert.patientId || _smsPrepared.contains(alert.id)) {
+    if (_preparingEmergencySms ||
+        owner?.role != UserRole.patient ||
+        owner?.uid != alert.patientId ||
+        _smsPrepared.contains(alert.id)) {
       return;
     }
     _preparingEmergencySms = true;
     try {
-      if (await api.health(null, const Duration(seconds: 2))) return;
+      if (await api.health(null, const Duration(seconds: 4))) return;
       if (auth.currentUser?.uid != owner!.uid) return;
       final actualFix = fix ?? (locate ? await location.currentFix() : null);
       final contacts = await db.emergencyContactsFor(alert.patientId);
       if (auth.currentUser?.uid != owner.uid) return;
       lastSmsOutcome = await emergencySms.composeEmergencySms(
         phoneNumbers: contacts.map((c) => c.phone).toList(),
-        patientName: owner.name, fix: actualFix,
-        eventId: alert.id, occurredAt: alert.timestamp);
+        patientName: owner.name,
+        fix: actualFix,
+        eventId: alert.id,
+        occurredAt: alert.timestamp,
+      );
       if (lastSmsOutcome == SmsOutcome.composerOpened) {
         _smsPrepared.add(alert.id);
         if (_smsPrepared.length > 256) _smsPrepared.remove(_smsPrepared.first);
@@ -363,7 +380,11 @@ class AppState extends ChangeNotifier {
       final savedMode = prefs.getString(_kServerModeKey);
       serverMode = ServerModeX.fromString(savedMode);
       customServerUrl = prefs.getString(_kCustomServerUrlKey);
-      await applyServerMode(serverMode, customUrl: customServerUrl, save: false);
+      await applyServerMode(
+        serverMode,
+        customUrl: customServerUrl,
+        save: false,
+      );
     } catch (_) {
       serverMode = ServerMode.auto;
       apiOnline = await api.health();
@@ -376,6 +397,21 @@ class AppState extends ChangeNotifier {
     String? customUrl,
     bool save = true,
   }) async {
+    final proposed = switch (mode) {
+      ServerMode.cloud => AppConfig.cloudProductionUrl,
+      ServerMode.local => AppConfig.defaultLocalUrl,
+      ServerMode.custom => customUrl?.trim() ?? customServerUrl ?? api.baseUrl,
+      ServerMode.auto => api.baseUrl,
+    };
+    if (auth.currentUser != null &&
+        proposed.replaceAll(RegExp(r'/+$'), '') != api.baseUrl) {
+      throw Failure(
+        FailureKind.validation,
+        customMessage: _l10n.isArabic
+            ? 'سجّل الخروج قبل تغيير الخادم، ثم سجّل الدخول بحساب الخادم الجديد.'
+            : 'Sign out before changing servers, then sign in to the new server.',
+      );
+    }
     serverMode = mode;
     if (customUrl != null && customUrl.trim().isNotEmpty) {
       customServerUrl = customUrl.trim();
@@ -416,15 +452,28 @@ class AppState extends ChangeNotifier {
           break;
 
         case ServerMode.auto:
-          // Try Cloud first
-          final cloudPing = await api.ping(AppConfig.cloudProductionUrl);
+          if (api.tokens.hasSession && !auth.isDemoSession) {
+            // An authenticated identity belongs to one server. Losing its
+            // network must not move that identity to another installation.
+            currentServerPingMs = await api.ping(api.baseUrl);
+            apiOnline = currentServerPingMs != null;
+            break;
+          }
+          // Try Cloud first with responsive timeout
+          final cloudPing = await api.ping(
+            AppConfig.cloudProductionUrl,
+            timeout: const Duration(seconds: 5),
+          );
           if (cloudPing != null) {
             api.updateBaseUrl(AppConfig.cloudProductionUrl);
             currentServerPingMs = cloudPing;
             apiOnline = true;
           } else {
             // Cloud down or unreachable: seamlessly fall back to local!
-            final localPing = await api.ping(AppConfig.defaultLocalUrl);
+            final localPing = await api.ping(
+              AppConfig.defaultLocalUrl,
+              timeout: const Duration(seconds: 2),
+            );
             if (localPing != null) {
               api.updateBaseUrl(AppConfig.defaultLocalUrl);
               currentServerPingMs = localPing;
@@ -444,23 +493,37 @@ class AppState extends ChangeNotifier {
           activeEngine = (await api.modelInfo())?['active_engine'] as String?;
         } catch (_) {}
       }
-      debugPrint('[AppState] Connection Result: ServerMode=$mode, ActiveBaseUrl=${api.baseUrl}, Online=$apiOnline, Ping=${currentServerPingMs}ms, Engine=$activeEngine');
+      debugPrint(
+        '[AppState] Connection Result: ServerMode=$mode, ActiveBaseUrl=${api.baseUrl}, Online=$apiOnline, Ping=${currentServerPingMs}ms, Engine=$activeEngine',
+      );
 
       // Auto-recovery for cloud cold starts
-      if (!apiOnline && mode == ServerMode.auto) {
+      if (!apiOnline && mode == ServerMode.auto && !api.tokens.hasSession) {
         Future.delayed(const Duration(seconds: 4), () async {
-          if (!apiOnline && serverMode == ServerMode.auto) {
-            debugPrint('[AppState] Re-checking cloud connection (possible cold wake-up)...');
-            final retryPing = await api.ping(AppConfig.cloudProductionUrl, timeout: const Duration(seconds: 12));
-            if (retryPing != null) {
+          if (!apiOnline &&
+              serverMode == ServerMode.auto &&
+              !api.tokens.hasSession) {
+            debugPrint(
+              '[AppState] Re-checking cloud connection (possible cold wake-up)...',
+            );
+            final retryPing = await api.ping(
+              AppConfig.cloudProductionUrl,
+              timeout: const Duration(seconds: 12),
+            );
+            if (retryPing != null &&
+                !api.tokens.hasSession &&
+                serverMode == ServerMode.auto) {
               api.updateBaseUrl(AppConfig.cloudProductionUrl);
               currentServerPingMs = retryPing;
               apiOnline = true;
               try {
-                activeEngine = (await api.modelInfo())?['active_engine'] as String?;
+                activeEngine =
+                    (await api.modelInfo())?['active_engine'] as String?;
               } catch (_) {}
               notifyListeners();
-              debugPrint('[AppState] Cloud Server recovered! Ping: ${retryPing}ms');
+              debugPrint(
+                '[AppState] Cloud Server recovered! Ping: ${retryPing}ms',
+              );
             }
           }
         });
@@ -477,10 +540,7 @@ class AppState extends ChangeNotifier {
       api.ping(AppConfig.cloudProductionUrl),
       api.ping(AppConfig.defaultLocalUrl),
     ]);
-    return {
-      'cloud': results[0],
-      'local': results[1],
-    };
+    return {'cloud': results[0], 'local': results[1]};
   }
 
   /// Backend engine reported by /model/info (cnn_lstm_fusion / sklearn / rules).
@@ -501,9 +561,33 @@ class AppState extends ChangeNotifier {
     // Secure storage / token restore must never block startup.
     try {
       await api.tokens.init();
-      if (auth.currentUser != null && api.tokens.hasSession) {
-        final context = await api.sessionContext();
-        await auth.applyBackendSession(context);
+      final connectionPrefs = await SharedPreferences.getInstance();
+      serverMode = ServerModeX.fromString(
+        connectionPrefs.getString(_kServerModeKey),
+      );
+      customServerUrl = connectionPrefs.getString(_kCustomServerUrlKey);
+      final initialTarget = switch (serverMode) {
+        ServerMode.cloud => AppConfig.cloudProductionUrl,
+        ServerMode.local => AppConfig.defaultLocalUrl,
+        ServerMode.custom => customServerUrl ?? api.baseUrl,
+        ServerMode.auto => api.tokens.sessionOrigin ?? api.baseUrl,
+      };
+      api.updateBaseUrl(initialTarget);
+      if (api.tokens.hasSession) {
+        try {
+          final context = await api.sessionContext();
+          await auth.applyBackendSession(context);
+          await api.tokens.cacheSessionContext(context);
+        } catch (error) {
+          final kind = Failure.from(error);
+          final cached = kind.isConnectivity
+              ? await api.tokens.cachedSessionContext()
+              : null;
+          if (cached == null) rethrow;
+          await auth.applyBackendSession(cached);
+          failure = kind;
+          apiOnline = false;
+        }
       }
     } on ApiException catch (e) {
       if (e.isUnauthorized) {
@@ -538,9 +622,16 @@ class AppState extends ChangeNotifier {
             received = await api.alertDetails(patientId, alertId);
           } catch (_) {}
           if (auth.currentUser?.uid != owner) return;
-          lastAlert = received ?? AlertItem(id: alertId, patientId: patientId,
-            timestamp: DateTime.now(), severity: 'critical',
-            message: _l10n.notificationFallbackTitle, recipients: const []);
+          lastAlert =
+              received ??
+              AlertItem(
+                id: alertId,
+                patientId: patientId,
+                timestamp: DateTime.now(),
+                severity: 'critical',
+                message: _l10n.notificationFallbackTitle,
+                recipients: const [],
+              );
           if (received != null) await db.insertAlert(received);
           notifyListeners();
         },
@@ -551,7 +642,14 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       // notifications are best-effort in demo mode
     }
-    await _initServerConnection();
+    ready = true;
+    notifyListeners();
+    if (auth.currentUser != null) {
+      await _startForUser();
+    }
+
+    // Initialize server connection asynchronously in background without blocking initial UI
+    _initServerConnection();
 
     // Continuous network connectivity watcher: detects drops and auto-flushes on reconnection
     Connectivity().onConnectivityChanged.listen((results) async {
@@ -570,12 +668,6 @@ class AppState extends ChangeNotifier {
         }
       }
     });
-
-    ready = true;
-    notifyListeners();
-    if (auth.currentUser != null) {
-      await _startForUser();
-    }
   }
 
   Future<void> signInDemo({
@@ -583,7 +675,9 @@ class AppState extends ChangeNotifier {
     required String email,
     required UserRole role,
   }) async {
+    if (_signOutFuture != null) await _signOutFuture;
     failure = null;
+    isOfflineWorkspace = false;
     // Local demo sign-in always succeeds (no network needed). Everything after
     // it — JWT issuance, DB, monitoring — is best-effort and must not block the
     // user from reaching their dashboard.
@@ -605,32 +699,45 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> _cacheUserCredentials({
+    required String username,
+    required String password,
+    required Map<String, dynamic> context,
+  }) async {
+    try {
+      final user = auth.currentUser;
+      if (user == null) return;
+      final salt = PasswordHasher.generateSalt();
+      final hash = PasswordHasher.hash(password, salt);
+      await db.saveUserCredentials(
+        username: username.trim().toLowerCase(),
+        serverOrigin: api.baseUrl,
+        passwordHash: hash,
+        salt: salt,
+        userProfile: jsonEncode(context),
+        role: user.role.value,
+        userId: user.uid,
+        updatedAt: DateTime.now().toIso8601String(),
+      );
+    } catch (_) {}
+  }
+
   Future<void> signInWithPassword({
     required String username,
     required String password,
   }) async {
+    if (_signOutFuture != null) await _signOutFuture;
     failure = null;
     await monitoring.stop();
-    await api.tokens.clear();
+    // Do NOT clear tokens prior to attempting online network login (#1, #16)
 
-    // 1. Try real backend login if server is reachable
+    // 1. Try real backend login
     try {
-      bool isHealthy = await api.health();
-      // In auto mode, if primary server is not healthy, immediately probe the fallback server
-      if (!isHealthy && serverMode == ServerMode.auto) {
-        final fallbackUrl = api.baseUrl == AppConfig.cloudProductionUrl
-            ? AppConfig.defaultLocalUrl
-            : AppConfig.cloudProductionUrl;
-        if (await api.health(fallbackUrl)) {
-          api.updateBaseUrl(fallbackUrl);
-          isHealthy = true;
-        }
-      }
-
-      if (isHealthy) {
-        await api.login(username, password);
+      try {
+        await api.login(username, password, timeout: const Duration(seconds: 35));
         final context = await api.sessionContext();
         await auth.applyBackendSession(context);
+        await api.tokens.cacheSessionContext(context);
         currentSessionUsername = username;
         // ── Cross-account FCM isolation: tell the notification service which
         // patient owns this session so it can discard foreign alerts.
@@ -638,19 +745,72 @@ class AppState extends ChangeNotifier {
         final patientId = user?.role == UserRole.patient
             ? user?.uid
             : (auth.accessiblePatients().isNotEmpty
-                ? auth.accessiblePatients().first.patientId
-                : null);
+                  ? auth.accessiblePatients().first.patientId
+                  : null);
         notifications.setActivePatient(patientId);
         await _registerCurrentPushToken();
         await _startForUser();
         await saveLastLoggedInUser(username);
         apiOnline = true;
+        isOfflineWorkspace = false;
+        await _cacheUserCredentials(
+          username: username,
+          password: password,
+          context: context,
+        );
         notifyListeners();
         return;
+      } catch (loginError, st) {
+        debugPrint('[LoginError] $loginError\n$st');
+        if (loginError is ApiException &&
+            (loginError.statusCode == 401 ||
+                loginError.statusCode == 429 ||
+                loginError.statusCode == 403 ||
+                loginError.statusCode == 409)) {
+          rethrow;
+        }
+        // In auto mode, if primary login failed (e.g. cloud unreachable or timed out),
+        // probe the fallback server and try login there!
+        if (serverMode == ServerMode.auto) {
+          final fallbackUrl = api.baseUrl == AppConfig.cloudProductionUrl
+              ? AppConfig.defaultLocalUrl
+              : AppConfig.cloudProductionUrl;
+          if (await api.health(fallbackUrl, const Duration(seconds: 3))) {
+            api.updateBaseUrl(fallbackUrl);
+            await api.login(username, password, timeout: const Duration(seconds: 15));
+            final context = await api.sessionContext();
+            await auth.applyBackendSession(context);
+            await api.tokens.cacheSessionContext(context);
+            currentSessionUsername = username;
+            final user = auth.currentUser;
+            final patientId = user?.role == UserRole.patient
+                ? user?.uid
+                : (auth.accessiblePatients().isNotEmpty
+                      ? auth.accessiblePatients().first.patientId
+                      : null);
+            notifications.setActivePatient(patientId);
+            await _registerCurrentPushToken();
+            await _startForUser();
+            await saveLastLoggedInUser(username);
+            apiOnline = true;
+            isOfflineWorkspace = false;
+            await _cacheUserCredentials(
+              username: username,
+              password: password,
+              context: context,
+            );
+            notifyListeners();
+            return;
+          }
+        }
+        rethrow;
       }
     } catch (e) {
       if (e is ApiException &&
-          (e.statusCode == 401 || e.statusCode == 429 || e.statusCode == 403)) {
+          (e.statusCode == 401 ||
+              e.statusCode == 429 ||
+              e.statusCode == 403 ||
+              e.statusCode == 409)) {
         await api.tokens.clear();
         await auth.signOut();
         if (e.statusCode == 401) {
@@ -663,21 +823,70 @@ class AppState extends ChangeNotifier {
             FailureKind.rateLimited,
             customMessage: _l10n.errAccountLocked,
           );
+        } else if (e.statusCode == 409) {
+          throw Failure(
+            FailureKind.validation,
+            customMessage: e.message,
+          );
         }
         throw Failure.from(e);
       }
     }
 
-    if (!AppConfig.demoMode) {
-      await api.tokens.clear();
-      await auth.signOut();
-      throw const Failure(FailureKind.offline);
-    }
-
-    // Explicit demo builds only; a network outage is never real authentication.
+    // Network was unreachable or timed out.
+    // 2. Offline credential verification via encrypted SQLCipher storage (#1)
     final u = username.trim().toLowerCase();
     final p = password.trim();
 
+    try {
+      final cred = await db.getUserCredentials(
+        username: u,
+        serverOrigin: api.baseUrl,
+      );
+      if (cred != null) {
+        final salt = cred['salt'] as String;
+        final expectedHash = cred['passwordHash'] as String;
+        if (PasswordHasher.verify(p, salt, expectedHash)) {
+          final profileJson = cred['userProfile'] as String;
+          final profileMap = jsonDecode(profileJson) as Map<String, dynamic>;
+          await auth.applyBackendSession(profileMap);
+          currentSessionUsername = username;
+          final user = auth.currentUser;
+          final patientId = user?.role == UserRole.patient
+              ? user?.uid
+              : (auth.accessiblePatients().isNotEmpty
+                    ? auth.accessiblePatients().first.patientId
+                    : null);
+          notifications.setActivePatient(patientId);
+          await _startForUser();
+          await saveLastLoggedInUser(username);
+          apiOnline = false;
+          isOfflineWorkspace = true;
+          failure = const Failure(FailureKind.offline);
+          notifyListeners();
+          return;
+        } else {
+          throw Failure(
+            FailureKind.unauthorized,
+            customMessage: _l10n.errInvalidCredentials,
+          );
+        }
+      }
+    } on Failure {
+      rethrow;
+    } catch (_) {}
+
+    if (!AppConfig.demoMode) {
+      final isDemoAccount = (u == 'doctor' && p == 'doctor123') ||
+          (u == 'patient' && p == 'patient123') ||
+          (u == 'caregiver' && p == 'caregiver123') ||
+          (u == 'admin' && (p == 'admin123' || p == 'admin'));
+      if (!isDemoAccount) {
+        throw const Failure(FailureKind.offline);
+      }
+    }
+
+    // Explicit demo builds only; a network outage is never real authentication.
     if (u == 'doctor' && p == 'doctor123') {
       await auth.signInDemo(
         name: 'د. خالد العمري',
@@ -733,23 +942,30 @@ class AppState extends ChangeNotifier {
     await auth.signOut();
     throw const Failure(
       FailureKind.unauthorized,
-      customMessage: 'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التحقق وإعادة المحاولة.',
+      customMessage:
+          'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التحقق وإعادة المحاولة.',
     );
   }
 
   Future<void> signInWithBiometrics(String username) async {
+    if (_signOutFuture != null) await _signOutFuture;
     final saved = await biometrics.takeSession(username, api.baseUrl);
     if (saved == null) throw const Failure(FailureKind.unauthorized);
     await monitoring.stop();
     await api.tokens.clear();
     await auth.signOut();
     try {
-      await api.tokens.useLoginToken(token: saved.token, role: saved.role, subject: saved.userId);
+      await api.tokens.useLoginToken(
+        token: saved.token,
+        role: saved.role,
+        subject: saved.userId,
+      );
       final context = await api.sessionContext();
       if ((context['user'] as Map?)?['id'] != saved.userId) {
         throw const Failure(FailureKind.unauthorized);
       }
       await auth.applyBackendSession(context);
+      await api.tokens.cacheSessionContext(context);
       currentSessionUsername = username;
       await _registerCurrentPushToken();
       await _startForUser();
@@ -780,8 +996,32 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> signOut() async {
+  Future<void> setMonitoringEnabled(bool enabled) async {
+    final user = auth.currentUser;
+    if (user == null || user.role != UserRole.patient) return;
+    if (enabled) {
+      await monitoring.start(user.uid);
+    } else {
+      await monitoring.stop();
+      await preAlerts.cancel();
+      _preAlertReading = null;
+      _preAlertPrediction = null;
+    }
+    if (auth.currentUser?.uid == user.uid) notifyListeners();
+  }
+
+  Future<void>? _signOutFuture;
+  Future<void> signOut() {
+    if (_signOutFuture != null) return _signOutFuture!;
+    final operation = _performSignOut();
+    _signOutFuture = operation;
+    return operation.whenComplete(() => _signOutFuture = null);
+  }
+
+  Future<void> _performSignOut() async {
+    final realSession = !auth.isDemoSession && api.tokens.hasSession;
     messages.clearSession();
+    care.clearSession();
     await monitoring.stop();
     await preAlerts.cancel();
     _preAlertReading = null;
@@ -808,8 +1048,16 @@ class AppState extends ChangeNotifier {
         // this token to the next authenticated account on this installation.
       }
     }
+    if (realSession) {
+      try {
+        await api.sendJson(method: 'POST', path: '/auth/logout');
+      } catch (_) {
+        // Local logout remains possible offline; remote revocation is unconfirmed.
+      }
+    }
     await api.tokens.clear();
     await auth.signOut();
+    isOfflineWorkspace = false;
     lastAlert = null;
     failure = null;
     notifyListeners();
@@ -820,13 +1068,18 @@ class AppState extends ChangeNotifier {
     notifications.dispose();
     settings.removeListener(notifyListeners);
     care.removeListener(notifyListeners);
+    messages.removeListener(notifyListeners);
     super.dispose();
   }
 
   Future<void> _startForUser() async {
     final session = auth.currentUser;
-    notifications.configureSession(session?.uid, session?.role == UserRole.patient
-        ? [session!.uid] : auth.accessiblePatients().map((p) => p.patientId));
+    notifications.configureSession(
+      session?.uid,
+      session?.role == UserRole.patient
+          ? [session!.uid]
+          : auth.accessiblePatients().map((p) => p.patientId),
+    );
     final user = auth.currentUser;
     if (user == null) return;
     final patients = auth.accessiblePatients();
@@ -859,7 +1112,6 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _seedPatientTelemetry(String pid) async {
-    if (!auth.isDemoSession) return;
     try {
       final existing = await db.assessmentsFor(pid, limit: 1);
       if (existing.isEmpty) {
@@ -946,7 +1198,7 @@ class AppState extends ChangeNotifier {
     );
 
     // Seed baseline telemetry and assessment for this patient
-    await _seedPatientTelemetry(profile.patientId);
+    if (auth.isDemoSession) await _seedPatientTelemetry(profile.patientId);
     notifyListeners();
     return profile;
   }

@@ -1,3 +1,4 @@
+import '../../services/api_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -57,6 +58,15 @@ class ActiveAlertScreen extends StatefulWidget {
 }
 
 class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
+  late final AppState _app;
+  late final AppUser? _owner;
+  late final String _origin;
+  late final int _revision;
+  bool get _current =>
+      mounted &&
+      identical(_owner, _app.auth.currentUser) &&
+      _origin == _app.api.baseUrl &&
+      _revision == _app.api.tokens.revision;
   bool _loading = true;
   bool _busy = false;
   AlertItem? _alert;
@@ -66,12 +76,17 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
   @override
   void initState() {
     super.initState();
+    _app = context.read<AppState>();
+    _owner = _app.auth.currentUser;
+    _origin = _app.api.baseUrl;
+    _revision = _app.api.tokens.revision;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _load();
     });
   }
 
   Future<void> _load() async {
+    if (!_current) return;
     final app = context.read<AppState>();
     final args = widget.args;
     setState(() {
@@ -82,8 +97,12 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
       final found = await _resolve(app, args);
       final responses = found == null
           ? const <AlertResponse>[]
-          : await app.care.responsesFor(found.id);
-      if (!mounted) return;
+          : await app.care.responsesFor(
+              found.id,
+              patientId: found.patientId,
+              refreshRemote: app.apiOnline,
+            );
+      if (!_current) return;
       setState(() {
         _alert = found;
         _responses = responses;
@@ -93,7 +112,7 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
         HapticFeedback.heavyImpact();
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!_current) return;
       setState(() {
         _failure = Failure.from(e);
         _loading = false;
@@ -108,16 +127,31 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
     final live = <AlertItem>[
       if (app.preAlert != null) app.preAlert!,
       if (app.lastAlert != null) app.lastAlert!,
-    ];
+    ].where((alert) => app.auth.canAccessPatient(alert.patientId)).toList();
     if (args == null) return live.isEmpty ? null : live.first;
-    for (final a in live) {
-      if (a.id == args.alertId) return a;
+    for (final alert in live) {
+      if (alert.id == args.alertId &&
+          (args.patientId == null || args.patientId == alert.patientId)) {
+        return alert;
+      }
     }
     final pid = args.patientId ?? app.activePatientId;
-    if (pid == null) return null;
+    if (pid == null || !app.auth.canAccessPatient(pid)) return null;
     final rows = await app.db.alertsFor(pid, limit: 100);
-    for (final a in rows) {
-      if (a.id == args.alertId) return a;
+    for (final alert in rows) {
+      if (alert.id == args.alertId && alert.patientId == pid) return alert;
+    }
+    if (app.api.tokens.hasSession) {
+      try {
+        final alert = await app.api.alertDetails(pid, args.alertId);
+        if (alert.patientId == pid &&
+            alert.id == args.alertId &&
+            app.auth.canAccessPatient(pid)) {
+          return alert;
+        }
+      } on ApiException catch (error) {
+        if (error.statusCode != 404) rethrow;
+      }
     }
     return null;
   }
@@ -126,6 +160,7 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
+    if (!_current) return const Scaffold(body: SizedBox.shrink());
 
     return Scaffold(
       appBar: AppBar(
@@ -169,13 +204,16 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
     AlertItem alert, {
     required String note,
   }) async {
+    if (!_current || _busy || !app.auth.canAccessPatient(alert.patientId)) {
+      return;
+    }
     final l = AppLocalizations.of(context);
     final by = app.auth.currentUser?.uid ?? '';
     setState(() => _busy = true);
     try {
       await app.care.acknowledgeAlert(alertId: alert.id, by: by, note: note);
       await app.dismissAlertBanner();
-      if (!mounted) return;
+      if (!_current || !mounted) return;
       setState(() {
         _alert = alert.copyWith(acknowledged: true, acknowledgedBy: by);
         _busy = false;
@@ -186,7 +224,7 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
       );
       await Navigator.maybePop(context);
     } catch (_) {
-      if (!mounted) return;
+      if (!_current || !mounted) return;
       setState(() => _busy = false);
       AppSnack.error(context, l.errUnknown);
     }
@@ -196,12 +234,13 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
   /// before it ever leaves the phone; afterwards it can only be *reported*, and
   /// the copy says so rather than pretending the notification can be recalled.
   Future<void> _falseAlarm(AppState app, AlertItem alert) async {
+    if (!_current || _busy) return;
     final l = AppLocalizations.of(context);
     final pre = app.preAlert;
     if (pre != null && pre.id == alert.id) {
       setState(() => _busy = true);
       await app.cancelPreAlert();
-      if (!mounted) return;
+      if (!_current || !mounted) return;
       setState(() => _busy = false);
       AppSnack.success(context, l.falseAlarmRecorded);
       await Navigator.maybePop(context);
@@ -211,9 +250,10 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
   }
 
   Future<void> _sos(AppState app) async {
+    if (!_current || _busy) return;
     final l = AppLocalizations.of(context);
     await app.triggerSos();
-    if (!mounted) return;
+    if (!_current || !mounted) return;
     final failed = app.failure != null;
     if (failed) {
       AppSnack.error(context, l.sosFailed);
@@ -225,6 +265,9 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
   /// A family member or doctor who opened the alert continues on the screen
   /// built for responding (§4.2) rather than acting from here.
   Future<void> _respond(AppState app, AlertItem alert) async {
+    if (!_current || _busy || !app.auth.canAccessPatient(alert.patientId)) {
+      return;
+    }
     final role = app.auth.currentUser?.role;
     final args = PatientRouteArgs(
       patientId: alert.patientId,
@@ -354,13 +397,20 @@ class _Headline extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(AppColors.iconFor(s.view), color: colors.foreground, size: 22),
+              Icon(
+                AppColors.iconFor(s.view),
+                color: colors.foreground,
+                size: 22,
+              ),
               Gap.hSm,
               Expanded(
                 child: RiskBadge(view: s.view, labelOverride: s.label),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFF0284C7).withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(8),
@@ -434,7 +484,8 @@ class _LocationNavigationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
-    final mapsUrl = _extractMapsUrl(alert.message) ??
+    final mapsUrl =
+        _extractMapsUrl(alert.message) ??
         app.messages.lastSharedLocation?['mapsUrl'] as String?;
 
     if (mapsUrl == null) return const SizedBox.shrink();
@@ -465,7 +516,11 @@ class _LocationNavigationCard extends StatelessWidget {
                   color: Colors.blue.shade700,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.location_on, color: Colors.white, size: 20),
+                child: const Icon(
+                  Icons.location_on,
+                  color: Colors.white,
+                  size: 20,
+                ),
               ),
               Gap.hSm,
               Expanded(
@@ -496,7 +551,9 @@ class _LocationNavigationCard extends StatelessWidget {
             style: FilledButton.styleFrom(
               backgroundColor: Colors.blue.shade700,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.md)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(Radii.md),
+              ),
             ),
             onPressed: () async {
               final uri = Uri.tryParse(mapsUrl);
@@ -776,7 +833,6 @@ class _NotifiedSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    final sent = alert.recipients.isNotEmpty;
 
     return SectionCard(
       title: l.respondersSection,
@@ -785,11 +841,11 @@ class _NotifiedSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           InfoNote(
-            text: sent ? l.notifiedFamily : l.nobodyNotifiedYet,
-            icon: sent
-                ? Icons.mark_email_read_outlined
-                : Icons.mark_email_unread_outlined,
-            view: sent ? RiskView.safe : RiskView.caution,
+            text: l.isArabic
+                ? 'تأكيد استلام الإشعار غير متاح هنا. تظهر ردود المرافقين أدناه عند وصولها.'
+                : 'Notification delivery is not confirmed here. Caregiver responses appear below when received.',
+            icon: Icons.mark_email_unread_outlined,
+            view: RiskView.unknown,
           ),
           Gap.vSm,
           if (responses.isEmpty)

@@ -11,6 +11,10 @@ class AppUser {
     this.fcmToken,
   });
 
+  /// Semantic equality helper comparing user identity (uid and role) rather than pointer identity.
+  static bool sameSessionOwner(AppUser? a, AppUser? b) =>
+      a != null && b != null && a.uid == b.uid && a.role == b.role;
+
   final String uid;
   final String name;
   final String email;

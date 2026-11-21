@@ -4,53 +4,56 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 
-from app import users_store
-from app.database import connection, push_tokens, transaction, upsert, users
+from app import account_sessions_store, users_store
+from app.database import account_sessions, connection, push_tokens, transaction, upsert, users
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def register(user_id: str, token: str, platform: str = "unknown") -> None:
+def register(user_id: str, token: str, platform: str = "unknown", *, session_id: str) -> None:
     """Upsert a token and transfer it exclusively to the current account.
 
-    Cross-account isolation guarantee: a physical device token belongs to
-    exactly one user_id at a time.  When account A logs out and account B logs
-    in on the same handset, the FCM token is the same; we must move it from A
-    to B so that B's alerts are delivered and A's are not.  The upsert already
-    does this via on_conflict_do_update, but we make the intent explicit by
-    first removing any *other* user's association with this token inside the
-    same transaction.
+    One registration token belongs to exactly one login session at a time.
+    A delayed registration from a previously issued session cannot reclaim
+    the token after a later-issued session registered it. Device labels are
+    descriptions, not attested physical hardware identities.
     """
     now = _now()
     with transaction() as conn:
-        # Step 1: remove association of this token from every OTHER user so the
-        # physical device cannot receive alerts for a previous session's patient.
-        conn.execute(
-            delete(push_tokens).where(
-                push_tokens.c.token == token,
-                push_tokens.c.user_id != user_id,
-            )
-        )
-        # Step 2: upsert for the current user (insert or update timestamp).
-        conn.execute(upsert(push_tokens, {
+        active = conn.execute(select(account_sessions.c.id, account_sessions.c.created_at)
+            .join(users, users.c.id == account_sessions.c.user_id).where(
+                account_sessions.c.id == session_id, account_sessions.c.user_id == user_id,
+                *account_sessions_store.active_conditions(),
+            ).with_for_update()).first()
+        if active is None:
+            raise ValueError("Session is inactive; sign in again")
+        previous_issued_at = select(account_sessions.c.created_at).where(
+            account_sessions.c.id == push_tokens.c.session_id,
+        ).correlate(push_tokens).scalar_subquery()
+        result = conn.execute(upsert(push_tokens, {
             "id": str(uuid4()), "user_id": user_id, "token": token,
-            "platform": platform, "created_at": now, "updated_at": now,
+            "platform": platform, "session_id": session_id, "created_at": now, "updated_at": now,
         }).on_conflict_do_update(
             index_elements=["token"],
-            set_={"user_id": user_id, "platform": platform, "updated_at": now},
+            set_={"user_id": user_id, "platform": platform, "session_id": session_id, "updated_at": now},
+            where=or_(push_tokens.c.session_id.is_(None), push_tokens.c.session_id == session_id,
+                      previous_issued_at <= active.created_at),
         ))
+        if not result.rowcount:
+            raise ValueError("A newer session owns this notification route")
 
 
 
-def unregister(user_id: str, token: str) -> bool:
+def unregister(user_id: str, token: str, *, session_id: str) -> bool:
     with transaction() as conn:
         result = conn.execute(delete(push_tokens).where(
             push_tokens.c.user_id == user_id,
             push_tokens.c.token == token,
+            push_tokens.c.session_id == session_id,
         ))
         return bool(result.rowcount)
 
@@ -65,9 +68,12 @@ def remove_tokens(tokens: list[str]) -> int:
 
 def count_for_user(user_id: str) -> int:
     with connection() as conn:
-        return int(conn.scalar(select(func.count()).select_from(push_tokens).where(
-            push_tokens.c.user_id == user_id
-        )) or 0)
+        return int(conn.scalar(select(func.count()).select_from(push_tokens)
+            .join(account_sessions, account_sessions.c.id == push_tokens.c.session_id)
+            .join(users, users.c.id == account_sessions.c.user_id).where(
+                push_tokens.c.user_id == user_id, push_tokens.c.user_id == users.c.id,
+                *account_sessions_store.active_conditions(),
+            )) or 0)
 
 
 def _recipient_user_ids(patient_id: str, recipients: list[str]) -> set[str]:
@@ -104,7 +110,9 @@ def tokens_for_alert(patient_id: str, recipients: list[str]) -> list[str]:
     with connection() as conn:
         rows = conn.execute(
             select(push_tokens.c.token)
-            .join(users, users.c.id == push_tokens.c.user_id)
-            .where(push_tokens.c.user_id.in_(user_ids), users.c.disabled.is_(False))
+            .join(account_sessions, account_sessions.c.id == push_tokens.c.session_id)
+            .join(users, users.c.id == account_sessions.c.user_id)
+            .where(push_tokens.c.user_id.in_(user_ids), push_tokens.c.user_id == users.c.id,
+                   *account_sessions_store.active_conditions())
         ).scalars()
         return list(dict.fromkeys(rows))

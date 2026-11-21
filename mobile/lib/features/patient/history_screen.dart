@@ -1,3 +1,4 @@
+import '../../core/enums.dart';
 import 'package:flutter/material.dart';
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
@@ -89,8 +90,10 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
 
   Future<_HistoryData> _load() async {
     final app = _app;
-    final pid = app.activePatientId;
-    if (pid == null) throw const Failure(FailureKind.notFound);
+    final pid = app.auth.currentUser?.uid;
+    if (pid == null || !app.auth.canAccessPatient(pid)) {
+      throw const Failure(FailureKind.notFound);
+    }
     final db = app.db;
     return _HistoryData(
       profile: app.auth.patientById(pid),
@@ -117,8 +120,10 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
     try {
       final doc = await _reports.toPdf(
         patient: profile,
-        assessments: d.assessments,
-        alerts: d.alerts,
+        assessments: d.assessments
+            .where((row) => _inMonth(row.timestamp))
+            .toList(),
+        alerts: d.alerts.where((row) => _inMonth(row.timestamp)).toList(),
       );
       await Printing.layoutPdf(onLayout: (_) => doc.save());
       if (mounted) AppSnack.success(context, l.reportReady);
@@ -137,8 +142,10 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
     try {
       final csv = _reports.toCsv(
         patient: profile,
-        assessments: d.assessments,
-        alerts: d.alerts,
+        assessments: d.assessments
+            .where((row) => _inMonth(row.timestamp))
+            .toList(),
+        alerts: d.alerts.where((row) => _inMonth(row.timestamp)).toList(),
       );
       // No file picker is wired, and a share sheet cannot be relied on offline.
       // The clipboard always works, so the export never silently does nothing.
@@ -156,37 +163,18 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
 
   // --- derived numbers ------------------------------------------------------
 
-  bool _inMonth(DateTime t) => t.year == _month.year && t.month == _month.month;
+  bool _inMonth(DateTime t) =>
+      t.toLocal().year == _month.year && t.toLocal().month == _month.month;
 
   int _seizuresThisMonth(_HistoryData d) =>
       d.seizures.where((s) => _inMonth(s.occurredAt)).length;
 
-  /// Mean lead time over every forecast that carried one, in minutes.
-  double? _avgLeadTime(_HistoryData d) {
-    final values = d.events
-        .map((e) => e.leadTimeMin)
-        .whereType<double>()
-        .where((v) => v > 0)
-        .toList();
-    if (values.isEmpty) return null;
-    return values.reduce((a, b) => a + b) / values.length;
-  }
-
-  /// Share of raised forecasts the patient cancelled as a false alarm.
-  ///
-  /// Reported over the app's own pre-alerts only — it is a usage statistic, not
-  /// the model's evaluated false-alarm rate, which lives in §5.5.
-  double? _falseAlarmRate(_HistoryData d) {
-    final total = d.events.length;
-    if (total == 0) return null;
-    final fa = d.events.where((e) => e.outcome == 'cancelled_false_alarm').length;
-    return fa / total;
-  }
-
   // --- day classification ---------------------------------------------------
 
   bool _sameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
+      a.toLocal().year == b.toLocal().year &&
+      a.toLocal().month == b.toLocal().month &&
+      a.toLocal().day == b.toLocal().day;
 
   /// Worst thing that happened on [day] — and «unknown» when the day holds no
   /// data at all. A day the device was off must not be painted green (§11.1).
@@ -199,9 +187,15 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
       return RiskView.danger;
     }
     if (dayAlerts.isNotEmpty) return RiskView.caution;
-    if (d.assessments.any((a) => _sameDay(a.timestamp, day))) {
-      return RiskView.safe;
-    }
+    final valid = d.assessments.where(
+      (a) =>
+          _sameDay(a.timestamp, day) &&
+          a.confidence > 0 &&
+          a.features['assessment_valid'] != false,
+    );
+    if (valid.any((a) => a.label == RiskLabel.highRisk)) return RiskView.danger;
+    if (valid.any((a) => a.label == RiskLabel.watch)) return RiskView.caution;
+    if (valid.isNotEmpty) return RiskView.safe;
     return RiskView.unknown;
   }
 
@@ -256,28 +250,42 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     return Scaffold(
+      backgroundColor: const Color(0xFFF6F9FD),
       appBar: AppBar(
-        title: Text(l.historyTitle),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        title: Text(
+          l.historyTitle,
+          style: const TextStyle(
+            color: Color(0xFF0D253C),
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
         actions: [
           IconButton(
             tooltip: l.refresh,
             onPressed: _reload,
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF6B7A99)),
           ),
         ],
       ),
-      body: FutureBuilder<_HistoryData>(
-        future: _future,
-        builder: (context, snap) => AsyncView<_HistoryData>(
-          loading: snap.connectionState == ConnectionState.waiting,
-          failure: snap.hasError ? Failure.from(snap.error!) : null,
-          value: snap.data,
-          isEmpty: (d) => d.isEmpty,
-          emptyTitle: l.noHistoryYet,
-          emptyBody: l.emptyBody,
-          emptyIcon: Icons.history_outlined,
-          onRetry: _reload,
-          builder: _content,
+      body: ResponsiveContent(
+        maxWidth: 1000,
+        child: FutureBuilder<_HistoryData>(
+          future: _future,
+          builder: (context, snap) => AsyncView<_HistoryData>(
+            loading: snap.connectionState == ConnectionState.waiting,
+            failure: snap.hasError ? Failure.from(snap.error!) : null,
+            value: snap.data,
+            isEmpty: (d) => d.isEmpty,
+            emptyTitle: l.noHistoryYet,
+            emptyBody: l.emptyBody,
+            emptyIcon: Icons.history_outlined,
+            onRetry: _reload,
+            builder: _content,
+          ),
         ),
       ),
     );
@@ -285,13 +293,21 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
 
   Widget _content(BuildContext context, _HistoryData d) {
     final l = AppLocalizations.of(context);
-    final avg = _avgLeadTime(d);
-    final fa = _falseAlarmRate(d);
+    final events = d.events.where((e) => _inMonth(e.firedAt)).toList();
+    final cancelled = events
+        .where((e) => e.outcome == 'cancelled_false_alarm')
+        .length;
     final timeline = _timeline(d, l);
 
     return ListView(
       padding: Insets.pageBottomSafe,
       children: [
+        InfoNote(
+          text: l.isArabic
+              ? 'السجل محلي وقد يكون غير مكتمل. لون اليوم يلخص السجلات المحفوظة ولا يثبت استمرار المراقبة طوال اليوم. البلاغات ليست تشخيصًا مؤكدًا.'
+              : 'Local records may be incomplete. Day colors summarize saved records, not full-day monitoring. Reports are not confirmed diagnoses.',
+        ),
+        Gap.vMd,
         SectionCard(
           title: l.statsTitle,
           icon: Icons.insights_outlined,
@@ -305,21 +321,23 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
               Gap.vSm,
               LabeledValue(
                 label: l.totalAlerts,
-                value: '${d.alerts.length}',
+                value: '${d.alerts.where((a) => _inMonth(a.timestamp)).length}',
                 icon: Icons.notifications_none_outlined,
               ),
               Gap.vSm,
               LabeledValue(
-                label: l.avgLeadTime,
-                value: avg == null
-                    ? l.notSet
-                    : l.minutes(avg.toStringAsFixed(1)),
+                label: l.isArabic
+                    ? 'أحداث النموذج في الشهر'
+                    : 'Model events this month',
+                value: '${events.length}',
                 icon: Icons.timer_outlined,
               ),
               Gap.vSm,
               LabeledValue(
-                label: l.falseAlarmRate,
-                value: fa == null ? l.notSet : '${(fa * 100).round()}%',
+                label: l.isArabic
+                    ? 'تنبيهات ألغاها المستخدم'
+                    : 'Alerts cancelled by the user',
+                value: '$cancelled',
                 icon: Icons.report_off_outlined,
               ),
             ],
@@ -343,9 +361,7 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
                   compact: true,
                 )
               : Column(
-                  children: [
-                    for (final e in timeline) _TimelineRow(event: e),
-                  ],
+                  children: [for (final e in timeline) _TimelineRow(event: e)],
                 ),
         ),
         Gap.vMd,
@@ -427,7 +443,8 @@ class _Calendar extends StatelessWidget {
     // to column 0 and Saturday to column 6.
     final leading = first.weekday % 7;
     final today = DateTime.now();
-    final isCurrentMonth = month.year == today.year && month.month == today.month;
+    final isCurrentMonth =
+        month.year == today.year && month.month == today.month;
 
     return SectionCard(
       title: l.monthlyCalendar,
@@ -581,42 +598,71 @@ class _TimelineRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final colors = AppColors.of(context, event.view);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Gap.xs),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(event.icon, size: 18, color: colors.foreground),
-          Gap.hSm,
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  event.title,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                if (event.subtitle != null)
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF0D253C).withValues(alpha: 0.03),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: colors.container,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(event.icon, size: 20, color: colors.foreground),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    event.subtitle!,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                    event.title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      color: Color(0xFF0D253C),
                     ),
                   ),
-                Text(
-                  TimeAgo.stamp(event.at),
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                  if (event.subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      event.subtitle!,
+                      style: const TextStyle(
+                        color: Color(0xFF6B7A99),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 2),
+                  Text(
+                    TimeAgo.stamp(event.at),
+                    style: const TextStyle(
+                      color: Color(0xFF9E9E9E),
+                      fontSize: 11,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

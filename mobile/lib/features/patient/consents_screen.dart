@@ -1,12 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
-import '../../core/theme/app_colors.dart';
-import '../../core/theme/app_spacing.dart';
-import '../../core/theme/risk_view.dart';
+import '../../core/router/route_names.dart';
 import '../../core/ui/common.dart';
-import '../../core/ui/states.dart';
-import '../../core/utils/time_ago.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/care_models.dart';
 import '../../providers/app_state.dart';
@@ -30,409 +25,198 @@ String consentLevelDesc(ConsentLevel level, AppLocalizations l) =>
       ConsentLevel.guardian => l.consentGuardianDesc,
     };
 
-/// §4.3 — the patient decides who sees what.
-///
-/// Three properties the plan makes non-negotiable, and how they are met here:
-///
-/// * **The patient decides.** Levels are set from this screen only. A family
-///   member has no UI anywhere that raises their own level.
-/// * **Revocation needs no justification.** The revoke action asks for
-///   confirmation and nothing else — no reason field, no "tell us why".
-/// * **Access is transparent.** The log at the bottom is not a summary: it is
-///   every recorded read, including the patient's own exports.
-///
-/// New links are created by the administrator (`/admin/caregiver-links`), so
-/// this screen grants and revokes levels on people who are already linked rather
-/// than inventing caregiver accounts.
 class ConsentsScreen extends StatelessWidget {
   const ConsentsScreen({super.key});
-
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
-    final care = app.care;
-    final pid = app.activePatientId;
-    final profile = pid == null ? null : app.auth.patientById(pid);
-
-    final active = care.consents;
-    final granted = {for (final c in active) c.caregiverId};
-    // Linked family members the patient has not decided about yet. They hold no
-    // access until the patient picks a level — `levelFor` defaults to the least
-    // permissive tier, and the backend enforces the same default.
-    final undecided = (profile?.caregivers ?? const <String>[])
-        .where((id) => !granted.contains(id))
-        .toList();
-
+    final ar = AppLocalizations.of(context).isArabic;
     return Scaffold(
-      appBar: AppBar(title: Text(l.consentsTitle)),
-      body: ListView(
-        padding: Insets.pageBottomSafe,
-        children: [
-          OfflineBanner(
-            visible: !app.apiOnline,
-            lastUpdateLabel: care.lastSyncedAt == null
-                ? null
-                : TimeAgo.since(care.lastSyncedAt, l),
-            pendingCount: care.pendingCount,
+      backgroundColor: const Color(0xFFF6F9FD),
+      appBar: AppBar(
+        title: Text(
+          ar ? 'المشاركة والصلاحيات' : 'Sharing and permissions',
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF0D253C),
+            fontSize: 19,
           ),
-          InfoNote(text: l.consentsIntro, icon: Icons.verified_user_outlined),
-          Gap.vMd,
-          SectionCard(
-            title: l.consentsTitle,
-            icon: Icons.group_outlined,
-            child: active.isEmpty && undecided.isEmpty
-                ? EmptyState(
-                    title: l.noConsentsYet,
-                    body: l.noLinkedPatientsBody,
-                    icon: Icons.group_outlined,
-                    compact: true,
-                  )
-                : Column(
+        ),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Color(0xFF0D253C)),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(color: const Color(0xFFE4EDF7), height: 1),
+        ),
+      ),
+      body: ResponsiveContent(
+        maxWidth: 860,
+        child: ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x06000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      for (final c in active)
-                        _ConsentTile(
-                          consent: c,
-                          onChangeLevel: (level) =>
-                              _setLevel(context, app, c, level),
-                          onToggleLocation: (v) =>
-                              _setLocation(context, app, c, v),
-                          onRevoke: () => _revoke(context, app, c),
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEFF6FF),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                      for (final id in undecided)
-                        _UndecidedTile(
-                          caregiverId: id,
-                          onGrant: (level) =>
-                              _grant(context, app, id, id, level),
+                        child: const Icon(
+                          Icons.people_outline_rounded,
+                          color: Color(0xFF0066FF),
+                          size: 22,
                         ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          ar
+                              ? 'التحكم في وصول المرافقين'
+                              : 'Manage caregiver access',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF0D253C),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
-          ),
-          Gap.vMd,
-          _AccessLogSection(entries: care.accessLog),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _grant(
-    BuildContext context,
-    AppState app,
-    String caregiverId,
-    String caregiverName,
-    ConsentLevel level,
-  ) async {
-    final l = AppLocalizations.of(context);
-    final friendlyName = _friendlyActorOrCaregiverName(caregiverName, app);
-    try {
-      await app.care.setConsent(
-        caregiverId: caregiverId,
-        caregiverName: friendlyName,
-        level: level,
-      );
-      if (!context.mounted) return;
-      AppSnack.success(
-        context,
-        app.apiOnline ? l.consentSaved : l.savedLocallyWillSync,
-      );
-    } catch (_) {
-      if (context.mounted) AppSnack.error(context, l.errUnknown);
-    }
-  }
-
-  Future<void> _setLevel(
-    BuildContext context,
-    AppState app,
-    CaregiverConsent c,
-    ConsentLevel level,
-  ) => _apply(context, app, c, level: level, shareLocation: c.shareLocation);
-
-  Future<void> _setLocation(
-    BuildContext context,
-    AppState app,
-    CaregiverConsent c,
-    bool share,
-  ) => _apply(context, app, c, level: c.level, shareLocation: share);
-
-  Future<void> _apply(
-    BuildContext context,
-    AppState app,
-    CaregiverConsent c, {
-    required ConsentLevel level,
-    required bool shareLocation,
-  }) async {
-    final l = AppLocalizations.of(context);
-    try {
-      await app.care.setConsent(
-        id: c.id,
-        caregiverId: c.caregiverId,
-        caregiverName: c.caregiverName,
-        level: level,
-        shareLocation: shareLocation,
-      );
-      if (!context.mounted) return;
-      AppSnack.success(
-        context,
-        app.apiOnline ? l.consentSaved : l.savedLocallyWillSync,
-      );
-    } catch (_) {
-      if (context.mounted) AppSnack.error(context, l.errUnknown);
-    }
-  }
-
-  Future<void> _revoke(
-    BuildContext context,
-    AppState app,
-    CaregiverConsent c,
-  ) async {
-    final l = AppLocalizations.of(context);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(l.revoke),
-        // No reason field, by design: §4.3 says revocation needs no
-        // justification, and a text box asking for one is pressure.
-        content: Text('${c.caregiverName}\n\n${l.revokeConfirm}'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(l.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(l.revoke),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !context.mounted) return;
-    try {
-      await app.care.revokeConsent(c);
-      if (context.mounted) AppSnack.success(context, l.revoked);
-    } catch (_) {
-      if (context.mounted) AppSnack.error(context, l.errUnknown);
-    }
-  }
-}
-
-String _friendlyActorOrCaregiverName(String nameOrId, AppState app) {
-  final clean = nameOrId.trim();
-  if (clean.isEmpty) return 'أم أحمد (المرافق الأسري)';
-  
-  // UUID pattern check (e.g. 22caa7ae-66a3-4042-9695-52a751e22732 or cg-...)
-  final isUuidOrId = RegExp(r'^[0-9a-fA-F-]{20,}$').hasMatch(clean) || clean.startsWith('cg-') || clean.startsWith('pat-');
-  if (isUuidOrId) {
-    final contacts = app.care.contacts;
-    for (final c in contacts) {
-      if (c.name.isNotEmpty) return '${c.name} (${c.relation.isNotEmpty ? c.relation : 'مرافق'})';
-    }
-    return 'أم أحمد (المرافق الأسري)';
-  }
-  return clean;
-}
-
-class _ConsentTile extends StatelessWidget {
-  const _ConsentTile({
-    required this.consent,
-    required this.onChangeLevel,
-    required this.onToggleLocation,
-    required this.onRevoke,
-  });
-
-  final CaregiverConsent consent;
-  final void Function(ConsentLevel level) onChangeLevel;
-  final void Function(bool share) onToggleLocation;
-  final VoidCallback onRevoke;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final theme = Theme.of(context);
-    final app = context.watch<AppState>();
-
-    final displayName = _friendlyActorOrCaregiverName(
-      consent.caregiverName.isEmpty ? consent.caregiverId : consent.caregiverName,
-      app,
-    );
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Gap.xs),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.person_outline),
-              Gap.hSm,
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      displayName,
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    Text(
-                      [
-                        if (consent.grantedAt != null)
-                          TimeAgo.stamp(consent.grantedAt!),
-                        if (!consent.synced) l.pendingSync,
-                      ].join(' · '),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              TextButton.icon(
-                onPressed: onRevoke,
-                icon: const Icon(Icons.link_off_outlined),
-                label: Text(l.revoke),
-              ),
-            ],
-          ),
-          Gap.vXs,
-          _LevelPicker(current: consent.level, onChanged: onChangeLevel),
-          Gap.vXs,
-          Text(
-            consentLevelDesc(consent.level, l),
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          SwitchListTile(
-            value: consent.shareLocation,
-            contentPadding: EdgeInsets.zero,
-            onChanged: onToggleLocation,
-            title: Text(l.shareLocation),
-            secondary: const Icon(Icons.my_location_outlined),
-          ),
-          const Divider(height: Gap.lg),
-        ],
-      ),
-    );
-  }
-}
-
-/// A linked family member the patient has not granted anything to yet.
-class _UndecidedTile extends StatelessWidget {
-  const _UndecidedTile({required this.caregiverId, required this.onGrant});
-
-  final String caregiverId;
-  final void Function(ConsentLevel level) onGrant;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final app = context.watch<AppState>();
-    final colors = AppColors.of(context, RiskView.unknown);
-    final displayName = _friendlyActorOrCaregiverName(caregiverId, app);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Gap.xs),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.person_search_outlined, color: colors.foreground),
-              Gap.hSm,
-              Expanded(child: Text(displayName)),
-              Text(
-                l.notSet,
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: colors.foreground,
-                ),
-              ),
-            ],
-          ),
-          Gap.vXs,
-          _LevelPicker(current: null, onChanged: onGrant),
-          const Divider(height: Gap.lg),
-        ],
-      ),
-    );
-  }
-}
-
-/// The four tiers as chips. Chips rather than a dropdown so all four options —
-/// and therefore the full range of what can be shared — are visible without a
-/// tap (§2.4).
-class _LevelPicker extends StatelessWidget {
-  const _LevelPicker({required this.current, required this.onChanged});
-
-  final ConsentLevel? current;
-  final void Function(ConsentLevel level) onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    return Wrap(
-      spacing: Gap.xs,
-      runSpacing: Gap.xs,
-      children: [
-        for (final level in ConsentLevel.values)
-          ChoiceChip(
-            selected: current == level,
-            onSelected: (_) => onChanged(level),
-            label: Text(consentLevelLabel(level, l)),
-            avatar: Icon(_icon(level), size: 18),
-            tooltip: consentLevelDesc(level, l),
-          ),
-      ],
-    );
-  }
-
-  static IconData _icon(ConsentLevel level) => switch (level) {
-    ConsentLevel.alertsOnly => Icons.notifications_none_outlined,
-    ConsentLevel.basic => Icons.visibility_outlined,
-    ConsentLevel.full => Icons.history_outlined,
-    ConsentLevel.guardian => Icons.shield_outlined,
-  };
-}
-
-class _AccessLogSection extends StatelessWidget {
-  const _AccessLogSection({required this.entries});
-
-  final List<AccessLogEntry> entries;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final theme = Theme.of(context);
-    final app = context.watch<AppState>();
-
-    return SectionCard(
-      title: l.accessLog,
-      icon: Icons.fact_check_outlined,
-      child: entries.isEmpty
-          ? EmptyState(
-              title: l.accessLogEmpty,
-              icon: Icons.fact_check_outlined,
-              compact: true,
-            )
-          : Column(
-              children: [
-                for (final e in entries)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    leading: const Icon(Icons.visibility_outlined, size: 20),
-                    title: Text(
-                      e.actorName.isEmpty
-                          ? l.accessAction(e.action)
-                          : '${_friendlyActorOrCaregiverName(e.actorName, app)} — ${l.accessAction(e.action)}',
-                    ),
-                    subtitle: Text(
-                      TimeAgo.stamp(e.at),
-                      style: theme.textTheme.labelSmall,
+                  const SizedBox(height: 12),
+                  Text(
+                    ar
+                        ? 'يمكنك تفعيل وصول المرافق إلى بياناتك أو إيقافه من صفحة المرافقين. يطبق الخادم صلاحيات العلاقات الفعالة؛ القناة الخاصة بين المريض والطبيب لا تُعرض للمرافق.'
+                        : 'Enable or disable access from the caregivers page. The server enforces active care relationships; the private patient–doctor channel is not shared with caregivers.',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF64748B),
+                      height: 1.45,
                     ),
                   ),
-              ],
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    height: 50,
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF0066FF),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        elevation: 0,
+                      ),
+                      onPressed: () => Navigator.pushNamed(
+                        context,
+                        Routes.patientCaregivers,
+                      ),
+                      icon: const Icon(Icons.people_rounded, size: 20),
+                      label: Text(
+                        ar ? 'إدارة المرافقين' : 'Manage caregivers',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x06000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.shield_outlined,
+                          color: Color(0xFFD97706),
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          ar
+                              ? 'مستويات المشاركة التفصيلية'
+                              : 'Detailed sharing levels',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF0D253C),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    ar
+                        ? 'اختيار مستوى مثل «تنبيهات فقط» أو إخفاء الموقع عن مرافق محدد غير مدعوم في الخادم الحالي. أُوقفت أدوات الإعداد المحلية حتى لا توحي بحماية غير مطبقة.'
+                        : 'Levels such as alerts-only or hiding location from a specific caregiver are not supported by the current server. Local configuration controls are disabled to avoid implying unenforced protection.',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF64748B),
+                      height: 1.45,
+                    ),
+                  ),
+                  if (app.care.consents.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(
+                        ar
+                            ? 'تفضيلات المشاركة القديمة المحفوظة محليًا لا تثبت تطبيقها على الخادم.'
+                            : 'Previously stored local preferences do not prove server enforcement.',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF94A3B8),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

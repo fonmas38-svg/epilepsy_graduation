@@ -51,7 +51,7 @@ class SyncService {
     if (owner == null) throw StateError('No active session');
     AnalyzeResult result;
     try {
-      if (await isOnline && await api.health(null, const Duration(seconds: 2))) {
+      if (await isOnline && await api.health(null, const Duration(seconds: 7))) {
         result = await api.analyze(reading).timeout(const Duration(seconds: 5));
       } else {
         result = _offlineEdgeInference(reading);
@@ -298,7 +298,7 @@ class SyncService {
     _syncingPatients.add(patientId);
     try {
       if (!await isOnline || auth.currentUser?.uid != owner ||
-          !await api.health(null, const Duration(seconds: 2))) {
+          !await api.health(null, const Duration(seconds: 7))) {
         return;
       }
       await flushPendingAlerts();
@@ -350,10 +350,18 @@ class SyncService {
         return EdgeModelService.instance.infer(reading, horizonMin: horizonMin);
       } catch (_) {}
     }
-    return AnalyzeResult(label: RiskLabel.watch, confidence: 0,
-      features: {'assessment_valid': false, 'offline': true,
-        'model_executed': false, 'clinically_validated': false,
-        'engine': 'unavailable', 'capability_reason': 'local_neural_runtime_not_integrated'},
-      processingMs: 0);
+    return AnalyzeResult(
+      label: RiskLabel.watch,
+      confidence: 0,
+      features: {
+        'assessment_valid': false,
+        'offline': true,
+        'model_executed': false,
+        'clinically_validated': false,
+        'engine': 'unavailable',
+        'capability_reason': 'local_neural_runtime_not_integrated',
+      },
+      processingMs: 0,
+    );
   }
 }

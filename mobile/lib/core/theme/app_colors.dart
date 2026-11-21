@@ -42,7 +42,7 @@ class RiskColors {
 abstract final class AppColors {
   /// Brand seed, unchanged from the previous build so existing screens keep
   /// their identity while the rest of the theme is rebuilt around them.
-  static const seed = Color(0xFF145C6B);
+  static const seed = Color(0xFF0966D9);
 
   // ---------------------------------------------------------------- light mode
   static const _safeLight = RiskColors(

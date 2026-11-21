@@ -57,6 +57,7 @@ Future<void> main() async {
     }
   }
   final appState = AppState();
+  runApp(EpilepsyApp(appState: appState));
   // init() guards its own risky steps, but never let an unexpected failure keep
   // the UI from launching — the login screen must always be reachable.
   try {
@@ -65,7 +66,6 @@ Future<void> main() async {
     appState.failure = Failure.from(e);
     appState.ready = true;
   }
-  runApp(EpilepsyApp(appState: appState));
 }
 
 class EpilepsyApp extends StatelessWidget {
@@ -106,7 +106,8 @@ class EpilepsyApp extends StatelessWidget {
             home: const RootShell(),
             // Cap text scaling instead of letting it break the layout, and keep
             // honouring the user's larger sizes up to that cap (§7).
-            builder: (context, child) => _AppOverlay(router: router, child: child),
+            builder: (context, child) =>
+                _AppOverlay(router: router, child: child),
           );
         },
       ),
@@ -139,7 +140,8 @@ class _AppOverlay extends StatefulWidget {
 
 class _AppOverlayState extends State<_AppOverlay> {
   bool _restoreScheduled = false;
-  bool _hadSession = false;
+  Object? _sessionOwner;
+  String? _sessionOrigin;
   String? _autoOpenedAlertId;
 
   @override
@@ -162,40 +164,50 @@ class _AppOverlayState extends State<_AppOverlay> {
       child: Overlay(
         initialEntries: [
           OverlayEntry(
-            builder: (context) => Stack(
-              children: [
-                InactivityWatcher(
-                  child: widget.child ?? const SizedBox.shrink(),
-                ),
-                if (state.auth.currentUser?.role == UserRole.patient && state.preAlert != null)
-                  _TopBanner(
-                    view: RiskView.caution,
-                    icon: Icons.online_prediction,
-                    title: state.preAlert!.message,
-                    subtitle: 'تنفس بهدوء واسترخِ — اضغط إن كنت بخير لإلغاء التنبيه',
-                    action: FilledButton.tonal(
-                      onPressed: state.cancelPreAlert,
-                      child: Text('أنا بخير (${state.preAlertSecondsLeft})'),
-                    ),
-                  )
-                else if (state.auth.currentUser != null &&
-                    state.lastAlert != null &&
-                    !state.lastAlert!.acknowledged)
-                  _TopBanner(
-                    view: RiskView.danger,
-                    icon: AppColors.iconFor(RiskView.danger),
-                    title: state.lastAlert!.message,
-                    subtitle: '${l.activeAlertTitle} — ${state.lastAlert!.patientId}',
-                    onTap: () => AppRouter.openAlert(
-                      alertId: state.lastAlert!.id,
-                      patientId: state.lastAlert!.patientId,
-                    ),
-                    action: IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: state.dismissAlertBanner,
-                    ),
+            builder: (context) => Consumer<AppState>(
+              builder: (context, state, _) {
+                final l = AppLocalizations.of(context);
+                return InactivityWatcher(
+                  child: Stack(
+                    children: [
+                      widget.child ?? const SizedBox.shrink(),
+                      if (state.auth.currentUser?.role == UserRole.patient &&
+                          state.preAlert != null)
+                        _TopBanner(
+                          view: RiskView.caution,
+                          icon: Icons.online_prediction,
+                          title: state.preAlert!.message,
+                          subtitle:
+                              'تنفس بهدوء واسترخِ — اضغط إن كنت بخير لإلغاء التنبيه',
+                          action: FilledButton.tonal(
+                            onPressed: state.cancelPreAlert,
+                            child: Text(
+                              'أنا بخير (${state.preAlertSecondsLeft})',
+                            ),
+                          ),
+                        )
+                      else if (state.auth.currentUser != null &&
+                          state.lastAlert != null &&
+                          !state.lastAlert!.acknowledged)
+                        _TopBanner(
+                          view: RiskView.danger,
+                          icon: AppColors.iconFor(RiskView.danger),
+                          title: state.lastAlert!.message,
+                          subtitle:
+                              '${l.activeAlertTitle} — ${state.lastAlert!.patientId}',
+                          onTap: () => AppRouter.openAlert(
+                            alertId: state.lastAlert!.id,
+                            patientId: state.lastAlert!.patientId,
+                          ),
+                          action: IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: state.dismissAlertBanner,
+                          ),
+                        ),
+                    ],
                   ),
-              ],
+                );
+              },
             ),
           ),
         ],
@@ -205,18 +217,24 @@ class _AppOverlayState extends State<_AppOverlay> {
 
   /// Drop any pushed route when the session ends.
   void _syncSession(AppState state) {
-    final hasSession = state.auth.currentUser != null;
-    if (hasSession == _hadSession) return;
-    _hadSession = hasSession;
-    if (hasSession) return;
+    final owner = state.auth.currentUser;
+    final origin = state.api.baseUrl;
+    if (identical(owner, _sessionOwner) && origin == _sessionOrigin) return;
+    final previous = _sessionOwner;
+    _sessionOwner = owner;
+    _sessionOrigin = origin;
     _restoreScheduled = false;
     _autoOpenedAlertId = null;
+    if (previous == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final nav = AppRouter.navigatorKey.currentState;
-      if (nav != null) {
-        nav.pushNamedAndRemoveUntil(Routes.login, (r) => false);
+      if (!identical(state.auth.currentUser, owner) ||
+          state.api.baseUrl != origin) {
+        return;
       }
-      AppRouter.observer.clearSaved();
+      AppRouter.navigatorKey.currentState?.pushNamedAndRemoveUntil(
+        owner == null ? Routes.login : AppRouter.rootFor(owner.role),
+        (_) => false,
+      );
     });
   }
 
@@ -224,7 +242,9 @@ class _AppOverlayState extends State<_AppOverlay> {
     if (_restoreScheduled || !state.ready) return;
     if (state.auth.currentUser == null) return;
     _restoreScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) => widget.router.restore());
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => widget.router.restore(),
+    );
   }
 
   /// Open the full-screen alert view for a fresh critical alert.
@@ -240,7 +260,8 @@ class _AppOverlayState extends State<_AppOverlay> {
 
     // Only auto-open if the alert was generated very recently (within 2 minutes)
     // and is unacknowledged, preventing past alerts from popping up unexpectedly upon login.
-    final isFresh = DateTime.now().difference(alert.timestamp).inMinutes.abs() < 2;
+    final isFresh =
+        DateTime.now().difference(alert.timestamp).inMinutes.abs() < 2;
     if (!isFresh || alert.acknowledged) return;
 
     _autoOpenedAlertId = alert.id;
@@ -396,11 +417,14 @@ class _RootShellState extends State<RootShell> {
     final user = state.auth.currentUser;
     if (user == null) return const LoginScreen();
 
-    return switch (user.role) {
-      UserRole.patient => const PatientHomeScreen(),
-      UserRole.caregiver => const CaregiverHomeScreen(),
-      UserRole.doctor => const DoctorHomeScreen(),
-      UserRole.admin => const AdminHomeScreen(),
-    };
+    return KeyedSubtree(
+      key: ValueKey((user, state.api.baseUrl)),
+      child: switch (user.role) {
+        UserRole.patient => const PatientHomeScreen(),
+        UserRole.caregiver => const CaregiverHomeScreen(),
+        UserRole.doctor => const DoctorHomeScreen(),
+        UserRole.admin => const AdminHomeScreen(),
+      },
+    );
   }
 }

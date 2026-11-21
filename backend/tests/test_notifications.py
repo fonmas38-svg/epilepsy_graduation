@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app import notification_delivery, push_tokens_store
 from app.main import app
+from app.auth import create_token, decode_token
 from tests.conftest import TEST_ADMIN_PASSWORD, TEST_ADMIN_USERNAME
 
 
@@ -128,13 +129,16 @@ def test_recipient_resolution_uses_only_patient_care_graph(client):
     )
     assert linked.status_code == 201, linked.text
     push_tokens_store.register(
-        patient["id"], "patient-token-123456789012345", "android"
+        patient["id"], "patient-token-123456789012345", "android",
+        session_id=decode_token(create_token(patient["id"], "patient"))["sid"],
     )
     push_tokens_store.register(
-        caregiver["id"], "care-token-123456789012345678", "ios"
+        caregiver["id"], "care-token-123456789012345678", "ios",
+        session_id=decode_token(create_token(caregiver["id"], "caregiver"))["sid"],
     )
     push_tokens_store.register(
-        unrelated["id"], "unrelated-token-123456789012", "ios"
+        unrelated["id"], "unrelated-token-123456789012", "ios",
+        session_id=decode_token(create_token(unrelated["id"], "caregiver"))["sid"],
     )
 
     tokens = push_tokens_store.tokens_for_alert(
@@ -148,7 +152,8 @@ def test_recipient_resolution_uses_only_patient_care_graph(client):
 def test_fcm_adapter_removes_invalid_token_but_does_not_claim_delivery(client, monkeypatch):
     patient, _ = _create_patient(client)
     token = "invalid-fcm-token-123456789012345"
-    push_tokens_store.register(patient["id"], token, "android")
+    push_tokens_store.register(patient["id"], token, "android",
+        session_id=decode_token(create_token(patient["id"], "patient"))["sid"])
 
     class UnregisteredError(Exception):
         pass

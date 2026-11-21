@@ -44,12 +44,62 @@ class _PermissionsOnboardingScreenState
 
   Future<void> _requestLocation() async {
     try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (!mounted) return;
+        final ok = await _promptDialog(
+          title: 'خدمة تحديد الموقع (GPS) مغلقة',
+          body:
+              'خدمة الـ GPS مغلقة في هاتفك. يرجى تفعيل الموقع لتمكين النظام من تحديد مكانك وقت الطوارئ.',
+          actionText: 'تفعيل الـ GPS',
+        );
+        if (ok == true) {
+          await Geolocator.openLocationSettings();
+        }
+        return;
+      }
+
       final loc = await Geolocator.requestPermission();
       if (loc == LocationPermission.always ||
           loc == LocationPermission.whileInUse) {
         if (mounted) setState(() => _locationGranted = true);
+      } else if (loc == LocationPermission.deniedForever) {
+        if (!mounted) return;
+        final ok = await _promptDialog(
+          title: 'إذن الموقع معطل في إعدادات الهاتف',
+          body:
+              'تم رفض إذن الموقع للتطبيق سابقاً. يرجى فتح إعدادات التطبيق وتفعيل إذن «الموقع» لحمايتك.',
+          actionText: 'فتح الإعدادات',
+        );
+        if (ok == true) {
+          await Geolocator.openAppSettings();
+        }
       }
     } catch (_) {}
+  }
+
+  Future<bool?> _promptDialog({
+    required String title,
+    required String body,
+    required String actionText,
+  }) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title, textAlign: TextAlign.center),
+        content: Text(body),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(actionText),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _finish() async {

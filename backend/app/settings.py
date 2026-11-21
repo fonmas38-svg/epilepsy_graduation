@@ -27,6 +27,7 @@ class Settings:
     rate_limit_window_seconds: int
     timestamp_max_future_seconds: int
     timestamp_max_age_seconds: int
+    session_lifetime_seconds: int = 30 * 86400
 
     @property
     def is_production(self) -> bool:
@@ -82,6 +83,9 @@ def load_settings() -> Settings:
         timestamp_max_age_seconds=positive_int(
             "TIMESTAMP_MAX_AGE_SECONDS", 7 * 24 * 60 * 60
         ),
+        session_lifetime_seconds=positive_int(
+            "SESSION_LIFETIME_SECONDS", 30 * 86400, minimum=300
+        ),
     )
 
 
@@ -92,7 +96,13 @@ def validate_production_settings() -> None:
     """Fail fast when a production process is configured with demo secrets."""
     if not settings.is_production:
         return
+    from app.database import database_url, is_sqlite_url
+
     errors: list[str] = []
+    if is_sqlite_url(database_url()):
+        errors.append(
+            "DATABASE_URL must point to persistent PostgreSQL (e.g. Supabase) in production; ephemeral SQLite is forbidden when APP_ENV=production"
+        )
     if len(settings.jwt_secret) < 32 or settings.jwt_secret == "dev-only-change-me-in-production":
         errors.append("JWT_SECRET must be a random value of at least 32 characters")
     if settings.allow_legacy_token:

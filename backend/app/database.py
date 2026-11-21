@@ -14,6 +14,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from threading import RLock
 from typing import Iterator
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import (
     Boolean,
@@ -30,8 +31,10 @@ from sqlalchemy import (
     event,
     false,
     func,
+    text,
 )
 from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.pool import NullPool
 from sqlalchemy.sql.expression import Insert
 
 
@@ -48,6 +51,7 @@ users = Table(
     # are enforced portably by the unique index on `lower(username)` below, and
     # lookups must therefore compare on `lower(...)` as well.
     Column("username", String(128), nullable=False, unique=True),
+    Column("email", String(255)),
     Column("name", String(256), nullable=False),
     Column("role", String(32), nullable=False),
     Column("password_hash", Text, nullable=False),
@@ -86,6 +90,86 @@ assignments = Table(
 # Portable case-insensitive uniqueness: works on both SQLite and PostgreSQL,
 # unlike a NOCASE column collation.
 Index("ux_users_username_lower", func.lower(users.c.username), unique=True)
+Index(
+    "uq_users_email_active",
+    func.lower(users.c.email),
+    unique=True,
+    sqlite_where=text("email IS NOT NULL AND disabled = 0"),
+    postgresql_where=text("email IS NOT NULL AND disabled = FALSE"),
+)
+
+doctor_profiles = Table(
+    "doctor_profiles",
+    metadata,
+    Column("id", String(64), primary_key=True),
+    Column(
+        "user_id",
+        String(64),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("license_number", String(64), nullable=False, unique=True),
+    Column("specialization", String(120), nullable=False),
+    Column("hospital_affiliation", String(180), nullable=False),
+    Column("national_id", String(32), nullable=False, unique=True),
+    Column("phone", String(32), nullable=False),
+    Column("moh_verified", Boolean, nullable=False, default=False, server_default=false()),
+    Column("moh_status", String(32)),
+    Column("moh_checked_at", String(64)),
+    Column("moh_override_by", String(64)),
+    Column("created_at", String(64), nullable=False),
+    Column("updated_at", String(64), nullable=False),
+)
+
+moh_registry = Table(
+    "moh_registry",
+    metadata,
+    Column("license_number", String(64), primary_key=True),
+    Column("national_id", String(32), nullable=False),
+    Column("full_name_ar", String(180), nullable=False),
+    Column("full_name_en", String(180), nullable=False),
+    Column("specialization", String(120), nullable=False),
+    Column("hospital_affiliation", String(180)),
+    Column("status", String(32), nullable=False),
+    Column("expiration_date", String(32), nullable=False),
+    CheckConstraint(
+        "status IN ('active', 'suspended', 'expired')",
+        name="ck_moh_registry_status",
+    ),
+)
+Index("ix_moh_registry_national_id", moh_registry.c.national_id)
+
+idempotency_keys = Table(
+    "idempotency_keys",
+    metadata,
+    Column("key", String(128), primary_key=True),
+    Column("actor_id", String(64), nullable=False),
+    Column("endpoint", String(128), nullable=False),
+    Column("response_status", Integer, nullable=False),
+    Column("response_json", Text, nullable=False),
+    Column("created_at", String(64), nullable=False),
+)
+Index("ix_idempotency_keys_created_at", idempotency_keys.c.created_at)
+
+# Each human login is independently revocable. Tokens contain only the random
+# session ID; the raw JWT is never persisted in this registry.
+account_sessions = Table(
+    "account_sessions", metadata,
+    Column("id", String(64), primary_key=True),
+    Column("user_id", String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("session_version", Integer, nullable=False),
+    Column("device_name", String(120), nullable=False),
+    Column("platform", String(32), nullable=False),
+    Column("device_id", String(128)),
+    Column("is_hardware_bound", Boolean, nullable=False, default=False, server_default=false()),
+    Column("created_at", String(64), nullable=False),
+    Column("last_seen_at", String(64), nullable=False),
+    Column("expires_at", String(64), nullable=False),
+    Column("revoked_at", String(64)),
+)
+Index("ix_account_sessions_user_id", account_sessions.c.user_id)
+Index("ix_account_sessions_device_id", account_sessions.c.user_id, account_sessions.c.device_id)
 
 Index("ix_assignments_doctor_id", assignments.c.doctor_id)
 
@@ -154,6 +238,17 @@ patients = Table(
     Column("last_updated", String(64)),
     Column("updated_at", String(64), nullable=False),
     Column("profile_json", Text, nullable=False, default="{}"),
+)
+
+care_records = Table(
+    "care_records", metadata,
+    Column("patient_id", String(64), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("kind", String(32), primary_key=True),
+    Column("record_id", String(64), primary_key=True),
+    Column("payload_json", Text, nullable=False),
+    Column("actor_id", String(64), nullable=False),
+    Column("updated_at", String(64), nullable=False),
+    Column("deleted", Boolean, nullable=False),
 )
 
 readings = Table(
@@ -254,6 +349,7 @@ outcomes = Table(
     Column("recorded_at", String(64), nullable=False),
     Column("notes", Text),
     Column("payload_json", Text, nullable=False, default="{}"),
+    Column("version", Integer, nullable=False, default=1, server_default="1"),
     CheckConstraint(
         "outcome IN ('seizure', 'no_seizure', 'false_alarm', 'unknown')",
         name="ck_outcomes_outcome",
@@ -261,6 +357,14 @@ outcomes = Table(
 )
 Index("ix_outcomes_patient_sequence", outcomes.c.patient_id, outcomes.c.sequence)
 Index("ix_outcomes_assessment_id", outcomes.c.assessment_id)
+Index(
+    "uq_outcomes_patient_alert",
+    outcomes.c.patient_id,
+    outcomes.c.alert_id,
+    unique=True,
+    sqlite_where=text("alert_id IS NOT NULL"),
+    postgresql_where=text("alert_id IS NOT NULL"),
+)
 
 # Transactional outbox: a notification intent is written in the SAME
 # transaction as its alert, so an alert can never exist without a delivery
@@ -299,10 +403,52 @@ prescriptions = Table(
     Column("schedule", String(200), nullable=False),
     Column("notes", Text),
     Column("active", Boolean, nullable=False, default=True),
+    Column("period_context", String(32)),
+    Column("meal_context", String(32)),
+    Column("meal_type", String(32)),
+    Column("times_json", Text),
     Column("created_at", String(64), nullable=False),
     Column("updated_at", String(64), nullable=False),
 )
 Index("ix_prescriptions_patient", prescriptions.c.patient_id)
+
+medication_logs = Table(
+    "medication_logs",
+    metadata,
+    Column("id", String(64), primary_key=True),
+    Column(
+        "prescription_id",
+        String(64),
+        ForeignKey("prescriptions.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "patient_id",
+        String(64),
+        ForeignKey("patients.patient_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("scheduled_time", String(64), nullable=False),
+    Column("taken_at", String(64)),
+    Column("status", String(16), nullable=False),
+    Column("recorded_by", String(64), nullable=False),
+    Column("created_at", String(64), nullable=False),
+    CheckConstraint(
+        "status IN ('taken', 'missed', 'skipped')",
+        name="ck_medication_logs_status",
+    ),
+)
+Index(
+    "ux_medication_logs_rx_slot",
+    medication_logs.c.prescription_id,
+    medication_logs.c.scheduled_time,
+    unique=True,
+)
+Index(
+    "ix_medication_logs_patient",
+    medication_logs.c.patient_id,
+    medication_logs.c.scheduled_time,
+)
 
 # Persist bounded signal buffers and replay protection with the derived events.
 # PostgreSQL locks one stream row; SQLite serializes writes in the local profile.
@@ -336,10 +482,12 @@ push_tokens = Table(
     ),
     Column("token", Text, nullable=False, unique=True),
     Column("platform", String(32), nullable=False, default="unknown"),
+    Column("session_id", String(64), ForeignKey("account_sessions.id", ondelete="CASCADE")),
     Column("created_at", String(64), nullable=False),
     Column("updated_at", String(64), nullable=False),
 )
 Index("ix_push_tokens_user_id", push_tokens.c.user_id)
+Index("ix_push_tokens_session_id", push_tokens.c.session_id)
 
 store_imports = Table(
     "store_imports",
@@ -369,16 +517,24 @@ messages = Table(
     Column("sender_name", String(256), nullable=False),
     Column("sender_role", String(32), nullable=False),
     Column("channel_type", String(32), nullable=False),
+    Column("peer_user_id", String(64), ForeignKey("users.id", ondelete="SET NULL")),
     Column("content", Text, nullable=False),
     Column("created_at", String(64), nullable=False),
+    Column("delivered_at", String(64)),
     Column("read_at", String(64)),
     CheckConstraint(
-        "channel_type IN ('doctor_patient', 'family_patient')",
+        "channel_type IN ('doctor_patient', 'family_patient', 'patient_caregiver', 'doctor_caregiver', 'care_team_triage')",
         name="ck_messages_channel_type",
     ),
 )
 Index("ix_messages_patient_channel", messages.c.patient_id, messages.c.channel_type)
 Index("ix_messages_created_at", messages.c.created_at)
+Index(
+    "ix_messages_peer_user_id",
+    messages.c.patient_id,
+    messages.c.channel_type,
+    messages.c.peer_user_id,
+)
 
 
 _engines: dict[str, Engine] = {}
@@ -409,13 +565,42 @@ def normalize_database_url(url: str) -> str:
 
     Supabase and similar dashboards show `postgres://` / `postgresql://`, which
     SQLAlchemy maps to the psycopg2 driver. This project installs psycopg 3, so
-    the driver is pinned explicitly instead of failing at connect time.
+    the driver is pinned explicitly instead of failing at connect time. For
+    Supabase hosts, `sslmode=require` is added automatically when omitted.
     """
-    if url.startswith("postgres://"):
-        return "postgresql+psycopg://" + url[len("postgres://"):]
-    if url.startswith("postgresql://"):
-        return "postgresql+psycopg://" + url[len("postgresql://"):]
-    return url
+    normalized = url
+    if normalized.startswith("postgres://"):
+        normalized = "postgresql+psycopg://" + normalized[len("postgres://"):]
+    elif normalized.startswith("postgresql://"):
+        normalized = "postgresql+psycopg://" + normalized[len("postgresql://"):]
+
+    parsed = urlsplit(normalized)
+    host = (parsed.hostname or "").lower()
+    if host.endswith(".supabase.com") or host.endswith(".supabase.co"):
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        if "sslmode" not in query:
+            pairs = parse_qsl(parsed.query, keep_blank_values=True)
+            pairs.append(("sslmode", "require"))
+            normalized = urlunsplit(
+                (parsed.scheme, parsed.netloc, parsed.path, urlencode(pairs), parsed.fragment)
+            )
+    return normalized
+
+
+def is_supabase_transaction_pooler_url(url: str) -> bool:
+    """Detect Supabase Transaction Pooler (Supavisor/PgBouncer port 6543)."""
+    if is_sqlite_url(url):
+        return False
+    override = (os.getenv("DB_USE_NULL_POOL") or "").strip().lower()
+    if override in {"1", "true", "yes"}:
+        return True
+    if override in {"0", "false", "no"}:
+        return False
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.port == 6543:
+        return True
+    return host.endswith(".pooler.supabase.com") and parsed.port != 5432
 
 
 def database_url(path: Path | None = None) -> str:
@@ -457,15 +642,23 @@ def _create_engine() -> Engine:
         )
         event.listen(engine, "connect", _configure_sqlite)
         return engine
-    # PostgreSQL: a modest pool with recycling suits a single API process and
-    # stays well inside the connection limits of hosted plans and poolers.
+    # Supavisor Transaction Mode (port 6543) handles pooling externally and
+    # disallows server-side prepared statements across pooled transactions.
+    if is_supabase_transaction_pooler_url(url):
+        return create_engine(
+            url,
+            future=True,
+            poolclass=NullPool,
+            connect_args={"prepare_threshold": None},
+        )
+    # Direct PostgreSQL / Session mode: keep a bounded SQLAlchemy pool.
     return create_engine(
         url,
         future=True,
         pool_pre_ping=True,
         pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
         max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "5")),
-        pool_recycle=int(os.getenv("DB_POOL_RECYCLE_SECONDS", "1800")),
+        pool_recycle=int(os.getenv("DB_POOL_RECYCLE_SECONDS", "300")),
     )
 
 

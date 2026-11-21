@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -30,13 +31,12 @@ String seizureTypeLabel(SeizureType t, AppLocalizations l) => switch (t) {
 };
 
 /// Where a responder is, in words.
-String responseStatusLabel(ResponseStatus s, AppLocalizations l) =>
-    switch (s) {
-      ResponseStatus.seen => l.seenBy,
-      ResponseStatus.acknowledged => l.respondedBy,
-      ResponseStatus.onWay => l.onWay,
-      ResponseStatus.arrived => l.arrived,
-    };
+String responseStatusLabel(ResponseStatus s, AppLocalizations l) => switch (s) {
+  ResponseStatus.seen => l.seenBy,
+  ResponseStatus.acknowledged => l.respondedBy,
+  ResponseStatus.onWay => l.onWay,
+  ResponseStatus.arrived => l.arrived,
+};
 
 /// A duration in the largest unit that stays exact — «٩٠ ثانية» reads worse than
 /// «دقيقة و٣٠ ثانية», and «١ دقيقة» is wrong for 90 s.
@@ -93,6 +93,18 @@ class AlertResponseScreen extends StatefulWidget {
 }
 
 class _AlertResponseScreenState extends State<AlertResponseScreen> {
+  late final AppState _app;
+  late final AppUser? _owner;
+  late final String _origin;
+  late final int _revision;
+  Timer? _responseTimer;
+  bool _refreshingResponses = false;
+  bool get _current =>
+      mounted &&
+      identical(_owner, _app.auth.currentUser) &&
+      _owner?.role == UserRole.caregiver &&
+      _origin == _app.api.baseUrl &&
+      _revision == _app.api.tokens.revision;
   bool _loading = true;
   bool _busy = false;
   String? _patientId;
@@ -103,12 +115,47 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
   @override
   void initState() {
     super.initState();
+    _app = context.read<AppState>();
+    _owner = _app.auth.currentUser;
+    _origin = _app.api.baseUrl;
+    _revision = _app.api.tokens.revision;
+    _responseTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (_current && _app.apiOnline && _alert != null) {
+        unawaited(_refreshResponses(_alert!));
+      }
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _load();
     });
   }
 
+  @override
+  void dispose() {
+    _responseTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshResponses(AlertItem alert) async {
+    if (!_current ||
+        _refreshingResponses ||
+        !_app.auth.canAccessPatient(alert.patientId)) {
+      return;
+    }
+    _refreshingResponses = true;
+    try {
+      final rows = await _app.care.responsesFor(
+        alert.id,
+        patientId: alert.patientId,
+        refreshRemote: true,
+      );
+      if (_current && _alert?.id == alert.id) setState(() => _responses = rows);
+    } finally {
+      _refreshingResponses = false;
+    }
+  }
+
   Future<void> _load() async {
+    if (!_current) return;
     final app = context.read<AppState>();
     setState(() {
       _loading = true;
@@ -116,7 +163,7 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
     });
     final pid = widget.args?.patientId ?? app.activePatientId;
     _patientId = pid;
-    if (pid == null) {
+    if (pid == null || !app.auth.canAccessPatient(pid)) {
       setState(() => _loading = false);
       return;
     }
@@ -132,15 +179,18 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
       final responses = alert == null
           ? const <AlertResponse>[]
           : await app.care.responsesFor(alert.id);
-      if (!mounted) return;
+      if (!_current) return;
       setState(() {
         _alert = alert;
         _responses = responses;
         _loading = false;
       });
       await _markSeen(app, alert);
+      if (_current && app.apiOnline && alert != null) {
+        unawaited(_refreshResponses(alert));
+      }
     } catch (e) {
-      if (!mounted) return;
+      if (!_current) return;
       setState(() {
         _failure = Failure.from(e);
         _loading = false;
@@ -158,13 +208,13 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
     ];
     if (wanted != null) {
       for (final a in live) {
-        if (a.id == wanted) return a;
+        if (a.id == wanted && a.patientId == pid) return a;
       }
     }
     final rows = await app.db.alertsFor(pid, limit: 100);
     if (wanted != null) {
       for (final a in rows) {
-        if (a.id == wanted) return a;
+        if (a.id == wanted && a.patientId == pid) return a;
       }
       // Asked for a specific alert and it is nowhere: say so instead of quietly
       // showing a different one, which would send help about the wrong event.
@@ -179,7 +229,7 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
   /// Written once per responder: a retry or a rebuild must not add a second
   /// «رأى التنبيه» row, or the patient's list of who is coming becomes noise.
   Future<void> _markSeen(AppState app, AlertItem? alert) async {
-    if (alert == null) return;
+    if (alert == null || !_current) return;
     final me = app.auth.currentUser;
     if (me == null || me.role != UserRole.caregiver) return;
     if (_responses.any((r) => r.responderId == me.uid)) return;
@@ -191,9 +241,10 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
         responderId: me.uid,
         responderName: me.name,
       );
+      if (!_current) return;
       await app.care.recordAccess('alert_response', actorName: me.name);
       final rows = await app.care.responsesFor(alert.id);
-      if (mounted) setState(() => _responses = rows);
+      if (_current) setState(() => _responses = rows);
     } catch (_) {
       // Seen-tracking is a courtesy, not a duty. It must never be the reason a
       // responder is looking at an error page instead of first-aid steps.
@@ -201,6 +252,9 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
   }
 
   Future<void> _respond(AlertItem alert, ResponseStatus status) async {
+    if (!_current || _busy || !_app.auth.canAccessPatient(alert.patientId)) {
+      return;
+    }
     final l = AppLocalizations.of(context);
     final app = context.read<AppState>();
     final me = app.auth.currentUser;
@@ -214,16 +268,13 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
         responderName: me?.name ?? '',
       );
       final rows = await app.care.responsesFor(alert.id);
-      if (!mounted) return;
+      if (!_current || !mounted) return;
       setState(() => _responses = rows);
-      AppSnack.success(
-        context,
-        status == ResponseStatus.onWay ? l.onMyWayRecorded : l.saved,
-      );
+      AppSnack.success(context, l.savedLocallyWillSync);
     } catch (_) {
-      if (mounted) AppSnack.error(context, l.errUnknown);
+      if (_current && mounted) AppSnack.error(context, l.errUnknown);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (_current) setState(() => _busy = false);
     }
   }
 
@@ -260,6 +311,9 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
   }
 
   Future<void> _document(AlertItem alert) async {
+    if (!_current || _busy || !_app.auth.canAccessPatient(alert.patientId)) {
+      return;
+    }
     final l = AppLocalizations.of(context);
     final app = context.read<AppState>();
     final result = await showModalBottomSheet<_SeizureDraft>(
@@ -267,19 +321,21 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
       isScrollControlled: true,
       builder: (_) => const _DocumentSheet(),
     );
-    if (result == null || !mounted) return;
+    if (result == null || !_current) return;
     try {
       await app.care.logSeizure(
         occurredAt: alert.timestamp,
         durationSeconds: result.durationSeconds,
         type: result.type,
         notes: result.notes,
-        reportedBy: app.auth.currentUser?.uid ?? '',
+        reportedBy: _owner?.uid ?? '',
         alertId: alert.id,
       );
-      if (mounted) AppSnack.success(context, l.seizureLogged);
+      if (_current && mounted) {
+        AppSnack.success(context, l.savedLocallyWillSync);
+      }
     } catch (_) {
-      if (mounted) AppSnack.error(context, l.errUnknown);
+      if (_current && mounted) AppSnack.error(context, l.errUnknown);
     }
   }
 
@@ -287,10 +343,20 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
+    if (!_current) return const Scaffold(body: SizedBox.shrink());
     final pid = _patientId;
 
     return Scaffold(
-      appBar: AppBar(title: Text(l.respondTitle)),
+      appBar: AppBar(
+        title: Text(l.respondTitle),
+        actions: [
+          IconButton(
+            tooltip: l.retry,
+            onPressed: _busy || _loading ? null : _load,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
       body: pid == null
           ? EmptyState(
               title: l.noPatientSelected,
@@ -409,9 +475,7 @@ class _Body extends StatelessWidget {
     final care = app.care;
     final me = app.auth.currentUser;
     final myUid = me?.uid ?? '';
-    final level = me == null
-        ? ConsentLevel.alertsOnly
-        : care.levelFor(me.uid);
+    final level = me == null ? ConsentLevel.alertsOnly : care.levelFor(me.uid);
     final profile = app.auth.patientById(patientId);
     final coords = _Coords.parse(alert.message);
     final myConsent = _consentFor(care, myUid);
@@ -1034,8 +1098,7 @@ class _DocumentSheetState extends State<_DocumentSheet> {
                 for (final p in _presets)
                   ChoiceChip(
                     selected: seconds == p,
-                    onSelected: (_) =>
-                        setState(() => _seconds.text = '$p'),
+                    onSelected: (_) => setState(() => _seconds.text = '$p'),
                     label: Text(seizureDurationLabel(p, l)),
                   ),
               ],

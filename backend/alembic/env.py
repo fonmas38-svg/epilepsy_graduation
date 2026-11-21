@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app.database import configured_database_url, database_url, metadata
+from app.database import (
+    configured_database_url,
+    database_url,
+    is_supabase_transaction_pooler_url,
+    metadata,
+    normalize_database_url,
+)
 
 config = context.config
 if config.config_file_name is not None:
@@ -13,16 +20,14 @@ if config.config_file_name is not None:
     # startup, and the default (True) would silence the app's own JSON logging.
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-if configured_database_url() and not config.attributes.get("explicit_url"):
-    # `alembic upgrade head` run by hand must target the same database as the
-    # API. Without this the hardcoded sqlite URL in alembic.ini would silently
-    # migrate a local file while production PostgreSQL stays on an old revision.
-    #
-    # `explicit_url` is set by callers that already chose a database on purpose
-    # (the app's own migration step, and the migration tests that must stay on a
-    # throwaway SQLite file even when the suite runs against PostgreSQL — those
-    # tests downgrade to base, i.e. drop every table).
-    config.set_main_option("sqlalchemy.url", database_url())
+if not config.attributes.get("explicit_url"):
+    # Prefer direct DDL URL when supplied (`ALEMBIC_DATABASE_URL`, e.g. Supabase
+    # direct port 5432); otherwise fall back to `DATABASE_URL`.
+    alembic_url = (os.getenv("ALEMBIC_DATABASE_URL") or "").strip()
+    if alembic_url:
+        config.set_main_option("sqlalchemy.url", normalize_database_url(alembic_url))
+    elif configured_database_url():
+        config.set_main_option("sqlalchemy.url", database_url())
 
 
 
@@ -42,10 +47,17 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    resolved_url = config.get_main_option("sqlalchemy.url") or ""
+    extra_kwargs = (
+        {"connect_args": {"prepare_threshold": None}}
+        if is_supabase_transaction_pooler_url(resolved_url)
+        else {}
+    )
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        **extra_kwargs,
     )
     with connectable.connect() as connection:
         context.configure(

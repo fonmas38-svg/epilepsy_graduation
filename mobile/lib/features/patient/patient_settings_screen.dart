@@ -1,3 +1,6 @@
+import '../../core/router/route_names.dart';
+import '../../core/ui/session_actions.dart';
+import '../shared/change_password_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +15,7 @@ import '../../providers/app_state.dart';
 import '../../services/biometric_service.dart';
 import '../../services/report_service.dart';
 import '../../services/settings_service.dart';
+import '../../widgets/care_sync_status_card.dart';
 
 /// §3.6 — the patient's own settings.
 ///
@@ -38,122 +42,131 @@ class PatientSettingsScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: Text(l.settingsTitle)),
-      body: ListView(
-        padding: Insets.pageBottomSafe,
-        children: [
-          if (isPatient) ...[
-            _SensitivitySection(settings: s),
+      body: ResponsiveContent(
+        maxWidth: 860,
+        child: ListView(
+          padding: Insets.pageBottomSafe,
+          children: [
+            const CareSyncStatusCard(),
             Gap.vMd,
-            _HorizonSection(app: app),
+            _AppearanceSection(settings: s),
             Gap.vMd,
-            _QuietHoursSection(settings: s),
+            if (isPatient) ...[
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () =>
+                      Navigator.pushNamed(context, Routes.patientCaregivers),
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: const Color(0xFFE4EDF7),
+                        width: 1.2,
+                      ),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x06000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.people_outline_rounded,
+                            color: Color(0xFF0066FF),
+                            size: 22,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                l.isArabic ? 'المرافقون' : 'Caregivers',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF0D253C),
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                l.isArabic
+                                    ? 'إضافة مرافق وإدارة وصوله إلى بياناتك'
+                                    : 'Add caregivers and manage access to your data',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: Color(0xFF64748B),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          l.isArabic
+                              ? Icons.chevron_left_rounded
+                              : Icons.chevron_right_rounded,
+                          color: const Color(0xFF94A3B8),
+                          size: 22,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Gap.vMd,
+              _NotifySection(settings: s),
+              Gap.vMd,
+              _QuietHoursSection(settings: s),
+              Gap.vMd,
+            ],
+            const _PrivacySection(),
             Gap.vMd,
-            _NotifySection(settings: s),
+            if (isPatient)
+              Card(
+                child: ExpansionTile(
+                  title: Text(
+                    l.isArabic
+                        ? 'إعدادات المراقبة المتقدمة'
+                        : 'Advanced monitoring settings',
+                  ),
+                  leading: const Icon(Icons.tune),
+                  childrenPadding: const EdgeInsets.all(12),
+                  children: [
+                    InfoNote(
+                      text: l.isArabic
+                          ? 'تغيير حساسية النموذج لكل مريض غير متاح حاليًا. لا توجد نسب كشف أو إنذارات خاطئة موثقة لهذه الخيارات.'
+                          : 'Per-patient model sensitivity is not configurable yet. Validated detection and false-alarm rates are unavailable.',
+                    ),
+                    Gap.vMd,
+                    _HorizonSection(app: app),
+                  ],
+                ),
+              ),
             Gap.vMd,
-            _FamilyCaregiversSection(app: app),
-            Gap.vMd,
+            const _AboutSection(),
           ],
-          _AppearanceSection(settings: s),
-          Gap.vMd,
-          // Security & Biometrics for ALL roles
-          const _PrivacySection(),
-          Gap.vMd,
-          // About section for ALL roles
-          const _AboutSection(),
-        ],
+        ),
       ),
     );
   }
 }
 
 // --- sensitivity ------------------------------------------------------------
-
-class _SensitivitySection extends StatelessWidget {
-  const _SensitivitySection({required this.settings});
-
-  final SettingsService settings;
-
-  static String _title(AlertSensitivity v, AppLocalizations l) => switch (v) {
-    AlertSensitivity.low => l.sensitivityLow,
-    AlertSensitivity.medium => l.sensitivityMedium,
-    AlertSensitivity.high => l.sensitivityHigh,
-  };
-
-  static String _desc(AlertSensitivity v, AppLocalizations l) => switch (v) {
-    AlertSensitivity.low => l.sensitivityLowDesc,
-    AlertSensitivity.medium => l.sensitivityMediumDesc,
-    AlertSensitivity.high => l.sensitivityHighDesc,
-  };
-
-  Future<void> _pick(
-    BuildContext context,
-    AlertSensitivity? picked,
-  ) async {
-    if (picked == null) return;
-    final l = AppLocalizations.of(context);
-    await settings.setSensitivity(picked);
-    if (context.mounted) AppSnack.success(context, l.sensitivitySaved);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final theme = Theme.of(context);
-    final current = settings.sensitivity;
-
-    return SectionCard(
-      title: l.sensitivitySection,
-      subtitle: l.sensitivityTradeoff,
-      icon: Icons.tune_outlined,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          RadioGroup<AlertSensitivity>(
-            groupValue: current,
-            onChanged: (picked) => _pick(context, picked),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final v in AlertSensitivity.values)
-                  RadioListTile<AlertSensitivity>(
-                    value: v,
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(_title(v, l)),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_desc(v, l), style: theme.textTheme.bodySmall),
-                        Gap.vXxs,
-                        Text(
-                          '${l.colSensitivity} ${(v.detection * 100).round()}%'
-                          ' · ${l.colFalseAlarmsPerHour} '
-                          '${v.falseAlarmsPerHour.toStringAsFixed(2)}',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          Gap.vSm,
-          // Stated as hours-between rather than per-hour: «0.45 في الساعة» does
-          // not tell a patient what their day will look like.
-          InfoNote(
-            text: l.opImpact(
-              current.hoursBetweenFalseAlarms.isFinite
-                  ? current.hoursBetweenFalseAlarms.toStringAsFixed(1)
-                  : '—',
-            ),
-            icon: Icons.balance_outlined,
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 // --- horizon ----------------------------------------------------------------
 
@@ -193,9 +206,8 @@ class _HorizonSectionState extends State<_HorizonSection> {
             value: value,
             min: AppConfig.minHorizonMin,
             max: AppConfig.maxHorizonMin,
-            divisions:
-                ((AppConfig.maxHorizonMin - AppConfig.minHorizonMin) / 5)
-                    .round(),
+            divisions: ((AppConfig.maxHorizonMin - AppConfig.minHorizonMin) / 5)
+                .round(),
             label: '${value.round()}',
             onChanged: (v) => setState(() => _dragging = v),
             // Persisted on release, not on every drag frame: writing a
@@ -351,565 +363,6 @@ class _NotifySection extends StatelessWidget {
   }
 }
 
-// --- family caregivers ------------------------------------------------------
-
-class _FamilyCaregiversSection extends StatefulWidget {
-  const _FamilyCaregiversSection({required this.app});
-
-  final AppState app;
-
-  @override
-  State<_FamilyCaregiversSection> createState() => _FamilyCaregiversSectionState();
-}
-
-class _FamilyCaregiversSectionState extends State<_FamilyCaregiversSection> {
-  bool _loading = true;
-  bool _busy = false;
-  List<Map<String, dynamic>> _caregivers = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() => _loading = true);
-    try {
-      final list = await widget.app.api.patientGetCaregivers();
-      if (mounted) {
-        setState(() {
-          _caregivers = list;
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
-    }
-  }
-
-  Future<void> _showAddDialog() async {
-    final nameCtrl = TextEditingController();
-    final usernameCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final relationCtrl = TextEditingController();
-    final passwordCtrl = TextEditingController();
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.person_add_alt_1_outlined),
-            Gap.hSm,
-            Text('إضافة فرد أسرة جديد'),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'الاسم الكامل *',
-                  hintText: 'مثال: سارة أحمد',
-                  prefixIcon: Icon(Icons.badge_outlined),
-                ),
-              ),
-              Gap.vSm,
-              TextField(
-                controller: usernameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'اسم المستخدم (لتسجيل الدخول) *',
-                  hintText: 'مثال: sarah_care',
-                  prefixIcon: Icon(Icons.alternate_email),
-                ),
-              ),
-              Gap.vSm,
-              TextField(
-                controller: phoneCtrl,
-                keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(
-                  labelText: 'رقم الهاتف',
-                  hintText: '+966500000000',
-                  prefixIcon: Icon(Icons.phone_outlined),
-                ),
-              ),
-              Gap.vSm,
-              TextField(
-                controller: relationCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'صلة القرابة',
-                  hintText: 'مثال: أم / أب / أخ / زوجة',
-                  prefixIcon: Icon(Icons.family_restroom_outlined),
-                ),
-              ),
-              Gap.vSm,
-              TextField(
-                controller: passwordCtrl,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'كلمة المرور (اختياري - 6 خانات على الأقل)',
-                  hintText: 'اتركه فارغاً للتوليد التلقائي',
-                  prefixIcon: Icon(Icons.lock_outline),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (nameCtrl.text.trim().isEmpty || usernameCtrl.text.trim().isEmpty) {
-                AppSnack.warn(context, 'يرجى إدخال الاسم واسم المستخدم');
-                return;
-              }
-              Navigator.pop(ctx, true);
-            },
-            child: const Text('إضافة'),
-          ),
-        ],
-      ),
-    );
-
-    if (ok != true || !mounted) return;
-
-    setState(() => _busy = true);
-    try {
-      final res = await widget.app.api.patientAddCaregiver(
-        name: nameCtrl.text.trim(),
-        username: usernameCtrl.text.trim(),
-        phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
-        relation: relationCtrl.text.trim().isEmpty ? null : relationCtrl.text.trim(),
-        password: passwordCtrl.text.trim().isEmpty ? null : passwordCtrl.text.trim(),
-      );
-      final genPass = res['generatedPassword'];
-      if (mounted) {
-        if (genPass != null) {
-          await showDialog<void>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('تم إنشاء الحساب بنجاح'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('اسم المستخدم: ${usernameCtrl.text.trim()}'),
-                  Gap.vXs,
-                  Text('كلمة المرور المُنشأة: $genPass',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                  Gap.vSm,
-                  const Text('احتفظ بكلمة المرور لتسليمها لفرد الأسرة.'),
-                ],
-              ),
-              actions: [
-                FilledButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('تم'),
-                ),
-              ],
-            ),
-          );
-        } else {
-          AppSnack.success(context, 'تمت إضافة فرد الأسرة بنجاح');
-        }
-        _load();
-      }
-    } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _showEditDialog(Map<String, dynamic> member) async {
-    final nameCtrl = TextEditingController(text: member['name']?.toString() ?? '');
-    final phoneCtrl = TextEditingController(text: member['phone']?.toString() ?? '');
-    final relationCtrl = TextEditingController(text: member['relation']?.toString() ?? '');
-    final memberId = member['id']?.toString() ?? '';
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.edit_outlined),
-            Gap.hSm,
-            Text('تعديل بيانات فرد الأسرة'),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'الاسم الكامل *',
-                  prefixIcon: Icon(Icons.badge_outlined),
-                ),
-              ),
-              Gap.vSm,
-              TextField(
-                controller: phoneCtrl,
-                keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(
-                  labelText: 'رقم الهاتف',
-                  prefixIcon: Icon(Icons.phone_outlined),
-                ),
-              ),
-              Gap.vSm,
-              TextField(
-                controller: relationCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'صلة القرابة',
-                  prefixIcon: Icon(Icons.family_restroom_outlined),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (nameCtrl.text.trim().isEmpty) {
-                AppSnack.warn(context, 'الاسم مطلوب');
-                return;
-              }
-              Navigator.pop(ctx, true);
-            },
-            child: const Text('حفظ التعديلات'),
-          ),
-        ],
-      ),
-    );
-
-    if (ok != true || !mounted) return;
-
-    setState(() => _busy = true);
-    try {
-      await widget.app.api.patientUpdateCaregiver(
-        caregiverId: memberId,
-        name: nameCtrl.text.trim(),
-        phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
-        relation: relationCtrl.text.trim().isEmpty ? null : relationCtrl.text.trim(),
-      );
-      if (mounted) {
-        AppSnack.success(context, 'تم تحديث بيانات فرد الأسرة بنجاح');
-        _load();
-      }
-    } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _toggleDisabled(Map<String, dynamic> member) async {
-    final memberId = member['id']?.toString() ?? '';
-    final isCurrentlyDisabled = member['disabled'] == true;
-    final name = member['name']?.toString() ?? 'فرد الأسرة';
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(isCurrentlyDisabled ? 'إعادة تفعيل الحساب' : 'تعطيل الحساب مؤقتاً'),
-        content: Text(
-          isCurrentlyDisabled
-              ? 'هل تريد إعادة تفعيل حساب «$name»؟ سيتمكن من تسجيل الدخول وتلقي إشعارات الطوارئ مجدداً.'
-              : 'هل تريد تعطيل حساب «$name»؟ لن يتلقى إشعارات الطوارئ ولن يتمكن من الدخول حتى تعيد تفعيله.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            style: isCurrentlyDisabled
-                ? null
-                : FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(isCurrentlyDisabled ? 'تفعيل' : 'تعطيل'),
-          ),
-        ],
-      ),
-    );
-
-    if (ok != true || !mounted) return;
-
-    setState(() => _busy = true);
-    try {
-      await widget.app.api.patientSetCaregiverDisabled(
-        memberId,
-        disabled: !isCurrentlyDisabled,
-      );
-      if (mounted) {
-        AppSnack.success(
-          context,
-          isCurrentlyDisabled ? 'تمت إعادة تفعيل الحساب' : 'تم تعطيل الحساب بنجاح',
-        );
-        _load();
-      }
-    } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return SectionCard(
-      title: 'أفراد الأسرة والمرافقين',
-      subtitle: 'إدارة أفراد العائلة الذين يتلقون إشعارات الطوارئ عند حدوث نوبة',
-      icon: Icons.family_restroom_outlined,
-      trailing: IconButton.filledTonal(
-        icon: const Icon(Icons.person_add_outlined),
-        tooltip: 'إضافة فرد أسرة جديد',
-        onPressed: _busy ? null : _showAddDialog,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (_loading)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.all(Gap.md),
-                child: CircularProgressIndicator(),
-              ),
-            )
-          else if (_caregivers.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(Gap.md),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-                ),
-              ),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.group_off_outlined,
-                    size: 40,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                  Gap.vSm,
-                  Text(
-                    'لا يوجد أفراد أسرة مسجلين حالياً',
-                    style: theme.textTheme.titleSmall,
-                  ),
-                  Gap.vXs,
-                  Text(
-                    'أضف أفراد عائلتك أو المرافقين ليتلقوا تنبيهات فورية وموقعك الجغرافي عند الاشتباه بحدوث نوبة.',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  Gap.vMd,
-                  FilledButton.icon(
-                    onPressed: _showAddDialog,
-                    icon: const Icon(Icons.person_add_outlined),
-                    label: const Text('إضافة فرد أسرة'),
-                  ),
-                ],
-              ),
-            )
-          else
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: _caregivers.length,
-              separatorBuilder: (_, _) => Gap.vSm,
-              itemBuilder: (context, idx) {
-                final cg = _caregivers[idx];
-                final name = cg['name']?.toString() ?? 'بدون اسم';
-                final username = cg['username']?.toString() ?? '';
-                final phone = cg['phone']?.toString();
-                final relation = cg['relation']?.toString();
-                final isDisabled = cg['disabled'] == true;
-
-                return Container(
-                  padding: const EdgeInsets.all(Gap.sm),
-                  decoration: BoxDecoration(
-                    color: isDisabled
-                        ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4)
-                        : theme.colorScheme.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: isDisabled
-                          ? theme.colorScheme.error.withValues(alpha: 0.3)
-                          : theme.colorScheme.outlineVariant,
-                    ),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          CircleAvatar(
-                            backgroundColor: isDisabled
-                                ? theme.colorScheme.errorContainer
-                                : theme.colorScheme.primaryContainer,
-                            foregroundColor: isDisabled
-                                ? theme.colorScheme.onErrorContainer
-                                : theme.colorScheme.onPrimaryContainer,
-                            child: Text(
-                              name.isNotEmpty ? name[0].toUpperCase() : '؟',
-                              style: const TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                          Gap.hSm,
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Text(
-                                      name,
-                                      style: theme.textTheme.titleSmall?.copyWith(
-                                        decoration: isDisabled ? TextDecoration.lineThrough : null,
-                                      ),
-                                    ),
-                                    if (relation != null && relation.isNotEmpty) ...[
-                                      Gap.hXs,
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: theme.colorScheme.secondaryContainer,
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Text(
-                                          relation,
-                                          style: theme.textTheme.labelSmall?.copyWith(
-                                            color: theme.colorScheme.onSecondaryContainer,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                                Gap.vXs,
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.alternate_email,
-                                      size: 14,
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                    const SizedBox(width: 2),
-                                    Text(
-                                      username,
-                                      style: theme.textTheme.bodySmall?.copyWith(
-                                        color: theme.colorScheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                    if (phone != null && phone.isNotEmpty) ...[
-                                      Gap.hSm,
-                                      Icon(
-                                        Icons.phone_outlined,
-                                        size: 14,
-                                        color: theme.colorScheme.onSurfaceVariant,
-                                      ),
-                                      const SizedBox(width: 2),
-                                      Text(
-                                        phone,
-                                        style: theme.textTheme.bodySmall?.copyWith(
-                                          color: theme.colorScheme.onSurfaceVariant,
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: isDisabled
-                                  ? theme.colorScheme.errorContainer
-                                  : const Color(0xFFE8F5E9),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  isDisabled ? Icons.block : Icons.check_circle_outline,
-                                  size: 13,
-                                  color: isDisabled
-                                      ? theme.colorScheme.error
-                                      : const Color(0xFF2E7D32),
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  isDisabled ? 'معطّل' : 'نشط',
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    color: isDisabled
-                                        ? theme.colorScheme.error
-                                        : const Color(0xFF2E7D32),
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      Gap.vSm,
-                      const Divider(height: 1),
-                      Gap.vXs,
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          TextButton.icon(
-                            onPressed: _busy ? null : () => _showEditDialog(cg),
-                            icon: const Icon(Icons.edit_outlined, size: 16),
-                            label: const Text('تعديل'),
-                          ),
-                          Gap.hSm,
-                          TextButton.icon(
-                            style: TextButton.styleFrom(
-                              foregroundColor: isDisabled
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.error,
-                            ),
-                            onPressed: _busy ? null : () => _toggleDisabled(cg),
-                            icon: Icon(
-                              isDisabled ? Icons.check_circle_outline : Icons.block_outlined,
-                              size: 16,
-                            ),
-                            label: Text(isDisabled ? 'إعادة تفعيل' : 'تعطيل الحساب'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-        ],
-      ),
-    );
-  }
-}
-
 // --- appearance -------------------------------------------------------------
 
 class _AppearanceSection extends StatelessWidget {
@@ -1020,12 +473,17 @@ class _ThemePreviewCard extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(Radii.md),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: Gap.md, horizontal: Gap.xs),
+        padding: const EdgeInsets.symmetric(
+          vertical: Gap.md,
+          horizontal: Gap.xs,
+        ),
         decoration: BoxDecoration(
           color: bgColor,
           borderRadius: BorderRadius.circular(Radii.md),
           border: Border.all(
-            color: isSelected ? accentColor : Colors.grey.withValues(alpha: 0.3),
+            color: isSelected
+                ? accentColor
+                : Colors.grey.withValues(alpha: 0.3),
             width: isSelected ? 2.5 : 1,
           ),
           boxShadow: isSelected
@@ -1083,7 +541,8 @@ class _PrivacySectionState extends State<_PrivacySection> {
   Future<void> _checkBiometrics() async {
     final app = context.read<AppState>();
     final user = app.auth.currentUser;
-    final u = app.currentSessionUsername ??
+    final u =
+        app.currentSessionUsername ??
         (user?.role == UserRole.patient
             ? 'patient'
             : (user?.email.split('@').first ?? 'user'));
@@ -1101,7 +560,8 @@ class _PrivacySectionState extends State<_PrivacySection> {
     final l = AppLocalizations.of(context);
     final app = context.read<AppState>();
     final user = app.auth.currentUser;
-    final u = app.currentSessionUsername ??
+    final u =
+        app.currentSessionUsername ??
         (user?.role == UserRole.patient
             ? 'patient'
             : (user?.email.split('@').first ?? 'user'));
@@ -1111,7 +571,9 @@ class _PrivacySectionState extends State<_PrivacySection> {
         localizedReason: l.biometricPromptReason,
       );
       if (!success) {
-        if (mounted) AppSnack.warn(context, 'لم يتم التحقق من البصمة عبر المستشعر');
+        if (mounted) {
+          AppSnack.warn(context, 'لم يتم التحقق من البصمة عبر المستشعر');
+        }
         return;
       }
       final token = await app.api.tokens.bearer();
@@ -1120,8 +582,11 @@ class _PrivacySectionState extends State<_PrivacySection> {
         return;
       }
       final enabled = await _biometrics.enableForUser(
-        username: u, userId: user.uid, token: token,
-        role: user.role.name, baseUrl: app.api.baseUrl,
+        username: u,
+        userId: user.uid,
+        token: token,
+        role: user.role.name,
+        baseUrl: app.api.baseUrl,
       );
       if (!enabled) {
         if (mounted) AppSnack.warn(context, l.signIn);
@@ -1134,62 +599,18 @@ class _PrivacySectionState extends State<_PrivacySection> {
       setState(() => _biometricsEnabled = enable);
       AppSnack.success(
         context,
-        enable ? 'تم تفعيل تسجيل الدخول بالبصمة لحساب «$u»' : 'تم تعطيل الدخول بالبصمة لحساب «$u»',
+        enable
+            ? 'تم تفعيل تسجيل الدخول بالبصمة لحساب «$u»'
+            : 'تم تعطيل الدخول بالبصمة لحساب «$u»',
       );
     }
   }
 
-  Future<void> _showChangePasswordDialog() async {
-    final l = AppLocalizations.of(context);
-    final curCtrl = TextEditingController();
-    final newCtrl = TextEditingController();
-    final confCtrl = TextEditingController();
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(l.changePassword),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: curCtrl,
-              obscureText: true,
-              decoration: InputDecoration(labelText: l.currentPassword),
-            ),
-            Gap.vSm,
-            TextField(
-              controller: newCtrl,
-              obscureText: true,
-              decoration: InputDecoration(labelText: l.newPassword),
-            ),
-            Gap.vSm,
-            TextField(
-              controller: confCtrl,
-              obscureText: true,
-              decoration: InputDecoration(labelText: l.confirmPassword),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(l.cancel),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (newCtrl.text.isEmpty || newCtrl.text != confCtrl.text) {
-                AppSnack.error(context, l.passwordMismatch);
-                return;
-              }
-              Navigator.pop(ctx);
-              AppSnack.success(context, l.passwordChangedSuccess);
-            },
-            child: Text(l.save),
-          ),
-        ],
-      ),
-    );
-  }
+  Future<void> _showChangePasswordDialog() => showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const ChangePasswordDialog(),
+  );
 
   Future<void> _export() async {
     final l = AppLocalizations.of(context);
@@ -1223,47 +644,15 @@ class _PrivacySectionState extends State<_PrivacySection> {
   }
 
   Future<void> _requestDeletion() async {
-    final l = AppLocalizations.of(context);
-    final app = context.read<AppState>();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(l.deleteAccount),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(l.deleteAccountConfirm),
-            Gap.vSm,
-            Text(l.deleteAccountNote, style: Theme.of(ctx).textTheme.bodySmall),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(l.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(l.confirm),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    try {
-      await app.care.requestAccountDeletion();
-      if (mounted) AppSnack.success(context, l.requestQueued);
-    } catch (_) {
-      if (mounted) AppSnack.error(context, l.errUnknown);
-    }
+    await Navigator.pushNamed(context, Routes.privacyRequests);
   }
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    final isPatient = context.read<AppState>().auth.currentUser?.role == UserRole.patient;
+    final isPatient =
+        context.read<AppState>().auth.currentUser?.role == UserRole.patient;
     return SectionCard(
       title: l.privacySection,
       icon: Icons.shield_outlined,
@@ -1288,6 +677,19 @@ class _PrivacySectionState extends State<_PrivacySection> {
               onPressed: _showChangePasswordDialog,
               icon: const Icon(Icons.password_outlined),
               label: Text(l.changePassword),
+            ),
+          ),
+          Gap.vSm,
+          SizedBox(
+            height: A11y.minTouchTarget,
+            child: OutlinedButton.icon(
+              onPressed: () => Navigator.pushNamed(context, Routes.devicePermissions),
+              icon: const Icon(Icons.security_outlined),
+              label: Text(
+                Localizations.localeOf(context).languageCode == 'ar'
+                    ? 'صلاحيات وأذونات النظام'
+                    : 'Device & System Permissions',
+              ),
             ),
           ),
           // Data export and account deletion are patient-only features
@@ -1362,14 +764,19 @@ class _AboutSection extends StatelessWidget {
               ),
             ),
             title: Text(l.appTitle),
-            subtitle: const Text('الإصدار 2.3.0 — المنظومة الذكية لمراقبة الصرع'),
+            subtitle: const Text(
+              'الإصدار 2.3.0 — المنظومة الذكية لمراقبة الصرع',
+            ),
           ),
           Gap.vSm,
           if (user != null) ...[
             Row(
               children: [
-                Icon(Icons.account_circle_outlined,
-                    size: 18, color: theme.colorScheme.onSurfaceVariant),
+                Icon(
+                  Icons.account_circle_outlined,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
                 Gap.hXs,
                 Expanded(
                   child: Text(
@@ -1386,7 +793,7 @@ class _AboutSection extends StatelessWidget {
           SizedBox(
             height: A11y.minTouchTarget,
             child: OutlinedButton.icon(
-              onPressed: app.signOut,
+              onPressed: () => confirmSignOut(context, app),
               icon: const Icon(Icons.logout),
               label: Text(l.logout),
             ),

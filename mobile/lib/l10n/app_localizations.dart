@@ -467,6 +467,9 @@ class AppLocalizations {
   String get lockScreenHint => _s('lockScreenHint');
   String get copyMedicalCard => _s('copyMedicalCard');
   String get editMedicalCard => _s('editMedicalCard');
+  String get cardConflictWarning => _s('cardConflictWarning');
+  String get keepLocalVersion => _s('keepLocalVersion');
+  String get acceptServerVersion => _s('acceptServerVersion');
 
   // settings
   String get sensitivitySaved => _s('sensitivitySaved');
@@ -643,7 +646,8 @@ class AppLocalizations {
 // ---------------------------------------------------------------------------
 const Map<String, String> _ar = {
   'appTitle': 'درع الأعصاب الذكي',
-  'appSubtitle': 'بوابة الوصول السريرية الموحدة — الذكاء الاصطناعي والتنبؤ المبكر',
+  'appSubtitle':
+      'بوابة الوصول السريرية الموحدة — الذكاء الاصطناعي والتنبؤ المبكر',
   'ok': 'حسناً',
   'cancel': 'إلغاء',
   'save': 'حفظ',
@@ -679,7 +683,8 @@ const Map<String, String> _ar = {
   'errTimeout': 'الخادم بطيء الاستجابة.',
   'errSessionExpired': 'انتهت الجلسة. سجّل الدخول مرة أخرى.',
   'errInvalidCredentials': 'اسم المستخدم أو كلمة المرور غير صحيحة.',
-  'errAccountLocked': 'تم قفل الحساب مؤقتاً لمدة 15 دقيقة لكثرة المحاولات الخاطئة لحماية أمانك.',
+  'errAccountLocked':
+      'تم قفل الحساب مؤقتاً لمدة 15 دقيقة لكثرة المحاولات الخاطئة لحماية أمانك.',
   'chatWithPatient': 'المحادثة المباشرة مع المريض',
   'chatWithFamily': 'المحادثة مع الأسرة والمرافق',
   'doctorInboxTitle': 'صندوق المحادثات السريرية',
@@ -705,7 +710,8 @@ const Map<String, String> _ar = {
   'pendingSync': 'بانتظار المزامنة',
 
   'riskSafeTitle': 'الوضع مستقر',
-  'riskSafeBody': 'لا توجد مؤشرات على اقتراب نوبة الآن.',
+  'riskSafeBody':
+      'لم يرصد التقييم الأخير مؤشرات مرتفعة. هذا لا يستبعد حدوث نوبة.',
   'riskCautionTitle': 'ارتفاع طفيف',
   'riskCautionBody': 'كن قريباً من مكان آمن ومن شخص تعرفه.',
   'riskDangerTitle': 'احتمال مرتفع',
@@ -737,7 +743,8 @@ const Map<String, String> _ar = {
   'needHelpConfirmBody':
       'سيتم إبلاغ أفراد أسرتك والطبيب فوراً، مع موقعك إن كان متاحاً.',
   'send': 'إرسال',
-  'sosSent': 'حُفظ نداء الاستغاثة؛ وصوله غير مؤكد. راجع حالة الرسائل وأكّد إرسال SMS يدويًا إن فُتحت.',
+  'sosSent':
+      'حُفظ نداء الاستغاثة؛ وصوله غير مؤكد. راجع حالة الرسائل وأكّد إرسال SMS يدويًا إن فُتحت.',
   'sosFailed': 'تعذّر إرسال الطلب — أعد المحاولة أو اتصل مباشرة',
   'deviceSection': 'الجهاز',
   'deviceConnected': 'متصل',
@@ -860,7 +867,8 @@ const Map<String, String> _ar = {
   'sensitivityLow': 'منخفضة',
   'sensitivityMedium': 'متوسطة',
   'sensitivityHigh': 'عالية',
-  'sensitivityTradeoff': 'حساسية أعلى = تنبيه أبكر + إنذارات خاطئة أكثر.',
+  'sensitivityTradeoff':
+      'تعديل عتبة التنبيه التجريبية؛ لا توجد حساسية سريرية مثبتة لهذه الإعدادات.',
   'sensitivityLowDesc': 'تنبيهات أقل، واحتمال أكبر لتفويت نوبة.',
   'sensitivityMediumDesc': 'توازن بين الإنذار المبكر وعدد الإنذارات الخاطئة.',
   'sensitivityHighDesc': 'تنبيه أبكر، مع إنذارات خاطئة أكثر بشكل ملحوظ.',
@@ -995,7 +1003,8 @@ const Map<String, String> _ar = {
   'severityInfo': 'معلومة',
 
   'forecastSection': 'التنبؤ',
-  'forecastResearchWarning': 'درجة بحثية غير معتمدة طبيًا، وليست احتمالًا مُعايرًا لحدوث نوبة. لا يمكن تقدير وقت النوبة من هذه الدرجة أو الاعتماد عليها لاتخاذ قرار علاجي.',
+  'forecastResearchWarning':
+      'درجة بحثية غير معتمدة طبيًا، وليست احتمالًا مُعايرًا لحدوث نوبة. لا يمكن تقدير وقت النوبة من هذه الدرجة أو الاعتماد عليها لاتخاذ قرار علاجي.',
   'preictalProb': 'درجة النموذج التجريبية',
   'leadTime': 'زمن الاستباق',
   'forecastSourceModel': 'نموذج تنبؤ عصبي (CNN-LSTM)',
@@ -1027,7 +1036,8 @@ const Map<String, String> _ar = {
   'appTagline': 'مراقبة مرضى الصرع والتنبؤ المبكر بالنوبات',
   'showPassword': 'إظهار كلمة المرور',
   'hidePassword': 'إخفاء كلمة المرور',
-  'demoNote': 'الحسابات الحقيقية تُنشأ من لوحة الإدارة. وضع العرض يعمل دون حساب.',
+  'demoNote':
+      'الحسابات الحقيقية تُنشأ من لوحة الإدارة. وضع العرض يعمل دون حساب.',
   'demoUserName': 'مستخدم تجريبي',
   'signInFailed': 'تعذّر تسجيل الدخول',
 
@@ -1055,6 +1065,10 @@ const Map<String, String> _ar = {
   'lockScreenHint': 'اعرض هذه الشاشة لمن يساعدك.',
   'copyMedicalCard': 'نسخ البطاقة',
   'editMedicalCard': 'تعديل البطاقة',
+  'cardConflictWarning':
+      'تم تحديث البطاقة الطبية من جهاز آخر أثناء وجود تعديلات محلية غير مرسلة.',
+  'keepLocalVersion': 'الاحتفاظ بالنسخة المحلية',
+  'acceptServerVersion': 'اعتماد نسخة الخادم',
 
   'sensitivitySaved': 'تم حفظ مستوى الحساسية.',
   'exportStarted': 'جارٍ تجهيز نسخة من بياناتك.',
@@ -1128,7 +1142,7 @@ const Map<String, String> _ar = {
   'predictionEventsCount': '{n} حدث تنبؤ مُسجَّل',
   'noPredictionEvents':
       'لا توجد أحداث تنبؤ بعد. عند إطلاق تنبيه مبكر — ثم تصعيده أو إلغاؤه خلال '
-          'مهلة السماح — يُسجَّل هنا كدليل على أن التنبؤ سبق الحدث.',
+      'مهلة السماح — يُسجَّل هنا كدليل على أن التنبؤ سبق الحدث.',
   'outcomeEscalated': 'صُعِّد إلى تنبيه',
   'outcomeFalseAlarm': 'أُلغي (إنذار كاذب)',
   'outcomeOnsetConfirmed': 'تأكّد بدء النوبة',
@@ -1138,7 +1152,7 @@ const Map<String, String> _ar = {
 
   'deviceIntro':
       'لا يوجد جهاز رأس حقيقي بعد. يمكن التشغيل من قاعدة بيانات إشارات موسومة أو '
-          'من محاكاة برمجية، وعند توفّر الجهاز يعمل بالمسار نفسه دون تغيير.',
+      'من محاكاة برمجية، وعند توفّر الجهاز يعمل بالمسار نفسه دون تغيير.',
   'currentSource': 'المصدر الحالي',
   'sourceSimulatorDesc': 'توليد إشارات داخل التطبيق للتجربة السريعة',
   'sourceDatasetDesc':
@@ -1147,7 +1161,8 @@ const Map<String, String> _ar = {
   'recommendedNow': 'موصى به الآن',
   'serverSettings': 'إعدادات الخادم',
   'demoPathTitle': 'مسار العرض بدون جهاز',
-  'demoPathSteps': '١) شغّل الخادم\n'
+  'demoPathSteps':
+      '١) شغّل الخادم\n'
       '٢) اختر «قاعدة بيانات الإشارات» من هنا\n'
       '٣) راقب الحالة والتنبيه والسجل\n'
       '٤) حساب الأسرة أو الطبيب يرى التنبيهات عبر الخادم',
@@ -1167,7 +1182,8 @@ const Map<String, String> _ar = {
   // biometrics & security
   'biometricPromptReason': 'يرجى التحقق من بصمتك للمتابعة بأمان',
   'autoLockTitle': 'تم قفل التطبيق تلقائياً',
-  'autoLockMessage': 'لحماية خصوصية بياناتك الطبية، تم قفل الشاشة بعد 5 دقائق من الخمول.',
+  'autoLockMessage':
+      'لحماية خصوصية بياناتك الطبية، تم قفل الشاشة بعد 5 دقائق من الخمول.',
   'unlockWithBiometrics': 'فتح القفل بالبصمة',
   'biometricsEnabled': 'تسجيل الدخول بالبصمة',
   'biometricsEnabledDesc': 'استخدام بصمة الإصبع أو الوجه للوصول السريع والآمن',
@@ -1191,7 +1207,8 @@ const Map<String, String> _ar = {
 
   // exit dialog & background
   'exitConfirmTitle': 'الخروج من التطبيق',
-  'exitConfirmMessage': 'هل ترغب في إغلاق التطبيق أم إبقائه يعمل في الخلفية لمراقبة النوبات؟',
+  'exitConfirmMessage':
+      'هل ترغب في إغلاق التطبيق أم إبقائه يعمل في الخلفية لمراقبة النوبات؟',
   'keepInBackground': 'إبقاء في الخلفية',
   'exitApp': 'إغلاق التطبيق',
 
@@ -1203,11 +1220,14 @@ const Map<String, String> _ar = {
   'simulatorTitle': 'محاكي الإشارات الحيوية والتصعيد',
   'openPatientNavigation': 'فتح الملاحة اللحظية (خرائط Google)',
   'patientLocationAvailable': 'الموقع الجغرافي للمريض متاح فوراً',
-  'patientLocationAvailableSub': 'اضغط للبدء في الملاحة اللحظية والوصول للمريض عبر خرائط Google',
+  'patientLocationAvailableSub':
+      'اضغط للبدء في الملاحة اللحظية والوصول للمريض عبر خرائط Google',
   'patientDirectPhone': 'هاتف المريض المباشر',
-  'preAlertSimulatorStarted': 'تم تفعيل إنذار ما قبل النوبة وبدء عداد الـ 30 ثانية!',
+  'preAlertSimulatorStarted':
+      'تم تفعيل إنذار ما قبل النوبة وبدء عداد الـ 30 ثانية!',
   'preAlertActiveBanner': 'إنذار ما قبل النوبة نشط (Pre-Ictal)',
-  'preAlertCountdownSuffix': 'سيتم التصعيد التلقائي للأسرة والطبيب إذا لم يتم الإلغاء',
+  'preAlertCountdownSuffix':
+      'سيتم التصعيد التلقائي للأسرة والطبيب إذا لم يتم الإلغاء',
 };
 
 // ---------------------------------------------------------------------------
@@ -1252,7 +1272,8 @@ const Map<String, String> _en = {
   'errTimeout': 'The server is slow to respond.',
   'errSessionExpired': 'Your session expired. Please sign in again.',
   'errInvalidCredentials': 'Invalid username or password.',
-  'errAccountLocked': 'Account temporarily locked for 15 minutes due to repeated failed attempts.',
+  'errAccountLocked':
+      'Account temporarily locked for 15 minutes due to repeated failed attempts.',
   'chatWithPatient': 'Direct Patient Chat',
   'chatWithFamily': 'Family & Caregiver Chat',
   'doctorInboxTitle': 'Clinical Messages & Inbox',
@@ -1274,11 +1295,13 @@ const Map<String, String> _en = {
   'offlineTitle': 'Offline',
   'offlineSince': 'Offline — last update {v}',
   'offlineNoData': 'Offline, and nothing stored locally.',
-  'savedLocallyWillSync': 'Saved on this device; it will sync when back online.',
+  'savedLocallyWillSync':
+      'Saved on this device; it will sync when back online.',
   'pendingSync': 'Pending sync',
 
   'riskSafeTitle': 'Stable',
-  'riskSafeBody': 'No signs of an approaching seizure right now.',
+  'riskSafeBody':
+      'The latest assessment found no elevated indicators. This does not rule out a seizure.',
   'riskCautionTitle': 'Slightly elevated',
   'riskCautionBody': 'Stay near a safe place and near someone you know.',
   'riskDangerTitle': 'High likelihood',
@@ -1287,7 +1310,8 @@ const Map<String, String> _en = {
   'riskUnknownTitle': 'Not enough data',
   'riskUnknownBody':
       'We cannot assess you right now, and we will not claim you are safe without data.',
-  'riskUnknownWhy': 'Reason: the device is offline or no recent reading arrived.',
+  'riskUnknownWhy':
+      'Reason: the device is offline or no recent reading arrived.',
   'riskStale': 'Last reading is stale',
 
   'loginTitle': 'Sign in',
@@ -1310,7 +1334,8 @@ const Map<String, String> _en = {
   'needHelpConfirmBody':
       'Your family and doctor will be alerted immediately, with your location if available.',
   'send': 'Send',
-  'sosSent': 'SOS saved; delivery is unconfirmed. Check message status and confirm SMS sending if opened.',
+  'sosSent':
+      'SOS saved; delivery is unconfirmed. Check message status and confirm SMS sending if opened.',
   'sosFailed': 'Could not send — retry or call directly',
   'deviceSection': 'Device',
   'deviceConnected': 'Connected',
@@ -1433,7 +1458,8 @@ const Map<String, String> _en = {
   'sensitivityLow': 'Low',
   'sensitivityMedium': 'Medium',
   'sensitivityHigh': 'High',
-  'sensitivityTradeoff': 'Higher sensitivity = earlier warning + more false alarms.',
+  'sensitivityTradeoff':
+      'Adjust the experimental alert threshold. Clinical sensitivity for these settings is unvalidated.',
   'sensitivityLowDesc': 'Fewer alerts, higher chance of missing a seizure.',
   'sensitivityMediumDesc': 'A balance between early warning and false alarms.',
   'sensitivityHighDesc': 'Earlier warning, with noticeably more false alarms.',
@@ -1508,10 +1534,12 @@ const Map<String, String> _en = {
   'consentAlertsOnlyDesc': 'Urgent alerts and nothing else.',
   'consentBasicDesc': 'Alerts + your current status and device state.',
   'consentFullDesc': 'The above + history and medication.',
-  'consentGuardianDesc': 'Everything + edit rights. For a minor under documented guardianship.',
+  'consentGuardianDesc':
+      'Everything + edit rights. For a minor under documented guardianship.',
   'shareLocation': 'Share my location on alert',
   'revoke': 'Revoke',
-  'revokeConfirm': 'Revoke this person’s access? They will no longer see your data.',
+  'revokeConfirm':
+      'Revoke this person’s access? They will no longer see your data.',
   'revoked': 'Access revoked',
   'accessLog': 'Access log',
   'accessLogEmpty': 'Nobody has viewed your data yet',
@@ -1569,7 +1597,8 @@ const Map<String, String> _en = {
   'severityInfo': 'Info',
 
   'forecastSection': 'Forecast',
-  'forecastResearchWarning': 'Unvalidated research score, not a calibrated seizure probability. Seizure onset time cannot be estimated from this score. Do not use it for treatment decisions.',
+  'forecastResearchWarning':
+      'Unvalidated research score, not a calibrated seizure probability. Seizure onset time cannot be estimated from this score. Do not use it for treatment decisions.',
   'preictalProb': 'Experimental model score',
   'leadTime': 'Lead time',
   'forecastSourceModel': 'Neural forecast model (CNN-LSTM)',
@@ -1630,6 +1659,10 @@ const Map<String, String> _en = {
   'lockScreenHint': 'Show this screen to whoever is helping you.',
   'copyMedicalCard': 'Copy card',
   'editMedicalCard': 'Edit card',
+  'cardConflictWarning':
+      'The medical card was updated on another device while unsent local edits exist.',
+  'keepLocalVersion': 'Keep local version',
+  'acceptServerVersion': 'Accept server version',
 
   'sensitivitySaved': 'Sensitivity saved.',
   'exportStarted': 'Preparing a copy of your data.',
@@ -1689,7 +1722,8 @@ const Map<String, String> _en = {
   'liveEngine': 'Live forecast engine: trained neural model',
   'modelAvailableOffline':
       'Live forecast engine: transparent heuristic (trained model available offline)',
-  'metricsUnavailable': 'Could not load model metrics — check the server connection.',
+  'metricsUnavailable':
+      'Could not load model metrics — check the server connection.',
   'taskPrediction': 'Seizure prediction (preictal vs interictal)',
   'taskDetection': 'Seizure detection (ictal vs non-ictal)',
   'perWindow': 'per window',
@@ -1701,8 +1735,8 @@ const Map<String, String> _en = {
   'predictionEventsCount': '{n} prediction events recorded',
   'noPredictionEvents':
       'No prediction events yet. When a pre-alert fires — and is then escalated '
-          'or cancelled within the grace window — it is logged here as evidence '
-          'that the forecast preceded the event.',
+      'or cancelled within the grace window — it is logged here as evidence '
+      'that the forecast preceded the event.',
   'outcomeEscalated': 'Escalated to an alert',
   'outcomeFalseAlarm': 'Cancelled (false alarm)',
   'outcomeOnsetConfirmed': 'Seizure onset confirmed',
@@ -1712,8 +1746,8 @@ const Map<String, String> _en = {
 
   'deviceIntro':
       'There is no real head device yet. You can run from a labelled signal '
-          'dataset or from a software simulator; when the device arrives it uses '
-          'the same path unchanged.',
+      'dataset or from a software simulator; when the device arrives it uses '
+      'the same path unchanged.',
   'currentSource': 'Current source',
   'sourceSimulatorDesc': 'Signals generated inside the app for a quick trial',
   'sourceDatasetDesc':
@@ -1722,7 +1756,8 @@ const Map<String, String> _en = {
   'recommendedNow': 'recommended now',
   'serverSettings': 'Server settings',
   'demoPathTitle': 'Demo path without a device',
-  'demoPathSteps': '1) Start the server\n'
+  'demoPathSteps':
+      '1) Start the server\n'
       '2) Choose "Signal dataset" here\n'
       '3) Watch the status, the alert, and the history\n'
       '4) The family or doctor account sees alerts through the server',
@@ -1736,17 +1771,20 @@ const Map<String, String> _en = {
   'highRiskNotification': 'Risk indicators are rising',
   'preAlertCancelWindowNote':
       'If you are fine, cancel the alert within the grace window; otherwise your '
-          'contacts are notified automatically.',
-  'preAlertNotCancelled': 'The alert was not cancelled — contacts were notified.',
+      'contacts are notified automatically.',
+  'preAlertNotCancelled':
+      'The alert was not cancelled — contacts were notified.',
   'withinMinutes': 'within {n} minutes',
 
   // biometrics & security
   'biometricPromptReason': 'Please verify your biometrics to proceed securely',
   'autoLockTitle': 'App Auto-Locked',
-  'autoLockMessage': 'To protect your medical privacy, the app locked after 5 minutes of inactivity.',
+  'autoLockMessage':
+      'To protect your medical privacy, the app locked after 5 minutes of inactivity.',
   'unlockWithBiometrics': 'Unlock with Biometrics',
   'biometricsEnabled': 'Biometric Login',
-  'biometricsEnabledDesc': 'Use fingerprint or face recognition for fast and secure access',
+  'biometricsEnabledDesc':
+      'Use fingerprint or face recognition for fast and secure access',
 
   // change password
   'changePassword': 'Change Password',
@@ -1767,23 +1805,28 @@ const Map<String, String> _en = {
 
   // exit dialog & background
   'exitConfirmTitle': 'Exit Application',
-  'exitConfirmMessage': 'Do you want to close the app or keep it running in the background for seizure monitoring?',
+  'exitConfirmMessage':
+      'Do you want to close the app or keep it running in the background for seizure monitoring?',
   'keepInBackground': 'Keep in Background',
   'exitApp': 'Exit App',
 
   // clinical messages
   'messagesTitle': 'Messages & Directives',
   'typeMessage': 'Type a message…',
-  'repliesDisabledByDoctor': 'Replies are disabled by the doctor for this directive',
+  'repliesDisabledByDoctor':
+      'Replies are disabled by the doctor for this directive',
   'logoutConfirmBody': 'Are you sure you want to log out of this account?',
   'simulatorTitle': 'Vital Signs Simulator & Escalation',
   'openPatientNavigation': 'Open Live Navigation (Google Maps)',
   'patientLocationAvailable': 'Patient GPS Location Available',
-  'patientLocationAvailableSub': 'Tap to start live turn-by-turn navigation via Google Maps',
+  'patientLocationAvailableSub':
+      'Tap to start live turn-by-turn navigation via Google Maps',
   'patientDirectPhone': 'Direct Patient Phone',
-  'preAlertSimulatorStarted': 'Pre-Ictal forecast triggered and 30s countdown started!',
+  'preAlertSimulatorStarted':
+      'Pre-Ictal forecast triggered and 30s countdown started!',
   'preAlertActiveBanner': 'Pre-Ictal Forecast Active',
-  'preAlertCountdownSuffix': 'Will automatically escalate to family & doctor if not cancelled',
+  'preAlertCountdownSuffix':
+      'Will automatically escalate to family & doctor if not cancelled',
 };
 
 class _AppLocalizationsDelegate
@@ -1791,10 +1834,9 @@ class _AppLocalizationsDelegate
   const _AppLocalizationsDelegate();
 
   @override
-  bool isSupported(Locale locale) =>
-      AppLocalizations.supportedLocales.any(
-        (l) => l.languageCode == locale.languageCode,
-      );
+  bool isSupported(Locale locale) => AppLocalizations.supportedLocales.any(
+    (l) => l.languageCode == locale.languageCode,
+  );
 
   @override
   Future<AppLocalizations> load(Locale locale) async =>

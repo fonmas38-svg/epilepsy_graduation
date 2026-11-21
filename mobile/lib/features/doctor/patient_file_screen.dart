@@ -42,17 +42,9 @@ import 'adjudication_screen.dart' show verdictIcon, verdictLabel, verdictView;
 ///    the above has been read.
 /// 7. **Reports** — the export, last because it is the exit.
 ///
-/// Three constraints worth stating out loud:
-///
-/// * **Everything is read from SQLite, not the network.** A ward round happens
-///   wherever the patient is, and that is rarely where the Wi-Fi is. The one
-///   exception is the operating point, and it is marked as such.
-/// * **Changing the operating point needs a connection.**
-///   `CareService.setThreshold` is network-only by design — a sensitivity that
-///   silently sat in an outbox would leave the doctor and the device disagreeing
-///   about when to alert. So the button is disabled offline instead of lying.
-/// * **Nothing here retrains the model.** The analytics are read-outs of past
-///   behaviour; `l.modelPerformance` says so on screen.
+/// Local records remain available offline; supported resources refresh from the
+/// server. Model operating points are not editable until a validated server
+/// contract exists. Nothing here retrains the model.
 class PatientFileScreen extends StatefulWidget {
   const PatientFileScreen({super.key, this.args});
 
@@ -69,6 +61,33 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
   bool _busy = false;
   _FileData? _data;
   Failure? _failure;
+  AppUser? _owner;
+  String? _origin;
+  int? _revision;
+  String? _patientId;
+  bool _bound = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_bound) return;
+    final app = context.read<AppState>();
+    _owner = app.auth.currentUser;
+    _origin = app.api.baseUrl;
+    _revision = app.api.tokens.revision;
+    _patientId = widget.args?.patientId ?? app.activePatientId;
+    _bound = true;
+  }
+
+  bool _current(AppState app) =>
+      mounted &&
+      identical(_owner, app.auth.currentUser) &&
+      _owner?.role == UserRole.doctor &&
+      _origin == app.api.baseUrl &&
+      _revision == app.api.tokens.revision &&
+      _patientId != null &&
+      app.auth.canAccessPatient(_patientId!) &&
+      (widget.args != null || _patientId == app.activePatientId);
 
   @override
   void initState() {
@@ -80,12 +99,13 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
 
   Future<void> _load() async {
     final app = context.read<AppState>();
-    final pid = widget.args?.patientId ?? app.activePatientId;
+    final pid = _patientId;
+    bool current() => _current(app);
     setState(() {
       _loading = true;
       _failure = null;
     });
-    if (pid == null) {
+    if (pid == null || !current()) {
       setState(() => _loading = false);
       return;
     }
@@ -96,6 +116,7 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
       if (app.care.patientId != pid) {
         await app.care.loadFor(pid);
       }
+      if (!current()) return;
       final db = app.db;
       final readings = await db.recentReadings(pid, limit: 1);
       // Load prescriptions and triggers from API (best-effort).
@@ -117,7 +138,10 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
         seizures: await db.seizureLogsFor(pid, limit: 200),
         events: await db.predictionEventsFor(pid, limit: 200),
         adjudications: await db.adjudicationsFor(pid, limit: 200),
-        notes: await app.care.clinicalNotesFor(pid),
+        notes: await app.care.clinicalNotesFor(
+          pid,
+          refreshRemote: app.apiOnline,
+        ),
         reading: readings.isEmpty ? null : readings.first,
         adherence: await app.medication.adherence(pid),
         activeMeds: (await app.medication.forPatient(
@@ -127,14 +151,14 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
         prescriptions: prescriptions,
         triggers: triggers,
       );
-      if (!mounted) return;
+      if (!current()) return;
       setState(() {
         _data = data;
         _loading = false;
       });
       await _logAccess(app);
     } catch (e) {
-      if (!mounted) return;
+      if (!current()) return;
       setState(() {
         _failure = Failure.from(e);
         _loading = false;
@@ -162,63 +186,69 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
   Future<void> _addNote(_FileData d) async {
     final l = AppLocalizations.of(context);
     final app = context.read<AppState>();
+    final owner = _owner;
+    bool current() => _current(app) && d.patientId == _patientId;
+    if (!current()) return;
     final text = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       builder: (_) => const _NoteSheet(),
     );
-    if (text == null || text.trim().isEmpty || !mounted) return;
+    if (text == null || text.trim().isEmpty || !current()) return;
     setState(() => _busy = true);
     try {
       await app.care.addClinicalNote(
         patientId: d.patientId,
         text: text,
-        doctorId: app.auth.currentUser?.uid ?? '',
+        doctorId: owner?.uid ?? '',
       );
       final notes = await app.care.clinicalNotesFor(d.patientId);
-      if (!mounted) return;
+      if (!current()) return;
       setState(() {
         _data = d.withNotes(notes);
         _busy = false;
       });
-      AppSnack.success(
-        context,
-        app.apiOnline ? l.noteSaved : l.savedLocallyWillSync,
-      );
-    } catch (_) {
       if (!mounted) return;
+      AppSnack.success(context, l.savedLocallyWillSync);
+    } catch (_) {
+      if (!current()) return;
       setState(() => _busy = false);
+      if (!mounted) return;
       AppSnack.error(context, l.errUnknown);
     }
   }
 
-  Future<void> _applyPoint(_FileData d, AlertSensitivity point) async {
-    final l = AppLocalizations.of(context);
+  Future<void> _resetPassword() async {
     final app = context.read<AppState>();
-    setState(() => _busy = true);
-    try {
-      await app.care.setThreshold(
-        patientId: d.patientId,
-        preictalThreshold: point.preictalThreshold,
-        profile: point.value,
-      );
-      if (!mounted) return;
-      setState(() => _busy = false);
-      AppSnack.success(context, l.thresholdSaved);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      // The one write on this screen that cannot be queued, so the reason it
-      // failed matters: «لا يوجد اتصال» tells the doctor to try again on the
-      // ward Wi-Fi, a generic error tells them nothing.
-      AppSnack.error(context, Failure.from(e).message(l));
-    }
+    final pid = _patientId;
+    if (!_current(app) || pid == null || _busy) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => DoctorPatientPasswordResetDialog(
+        patientName: _data?.profile?.name ?? widget.args?.patientName ?? '',
+        isCurrent: () => _current(app),
+        onSave: (password) async {
+          if (!_current(app)) throw const Failure(FailureKind.unauthorized);
+          final result = await app.api.sendJson(
+            method: 'POST',
+            path: '/doctor/patients/${Uri.encodeComponent(pid)}/password',
+            body: {'password': password},
+          );
+          if (!_current(app)) throw const Failure(FailureKind.unauthorized);
+          if (result['ok'] != true) {
+            throw const FormatException('Password reset was not acknowledged');
+          }
+        },
+      ),
+    );
   }
 
   Future<void> _exportPdf(_FileData d) async {
     final l = AppLocalizations.of(context);
+    final app = context.read<AppState>();
     final profile = d.profile;
-    if (profile == null) return;
+    if (profile == null || !_current(app) || d.patientId != _patientId) return;
     setState(() => _busy = true);
     try {
       final doc = await _reports.toPdf(
@@ -226,19 +256,21 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
         assessments: d.assessments,
         alerts: d.alerts,
       );
+      if (!_current(app)) return;
       await Printing.layoutPdf(onLayout: (_) => doc.save());
-      if (mounted) AppSnack.success(context, l.reportReady);
+      if (mounted && _current(app)) AppSnack.success(context, l.reportReady);
     } catch (_) {
-      if (mounted) AppSnack.error(context, l.exportFailed);
+      if (mounted && _current(app)) AppSnack.error(context, l.exportFailed);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (_current(app)) setState(() => _busy = false);
     }
   }
 
   Future<void> _exportCsv(_FileData d) async {
     final l = AppLocalizations.of(context);
+    final app = context.read<AppState>();
     final profile = d.profile;
-    if (profile == null) return;
+    if (profile == null || !_current(app) || d.patientId != _patientId) return;
     setState(() => _busy = true);
     try {
       final csv = _reports.toCsv(
@@ -249,12 +281,12 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
       // Same reasoning as §3.3: no file picker is wired and a share sheet needs
       // a plugin that may not be there, but the clipboard always works.
       final ok = await ExternalActions.copy(csv);
-      if (!mounted) return;
+      if (!mounted || !_current(app)) return;
       ok
           ? AppSnack.success(context, l.copied)
           : AppSnack.error(context, l.exportFailed);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (_current(app)) setState(() => _busy = false);
     }
   }
 
@@ -262,7 +294,8 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
-    final pid = widget.args?.patientId ?? app.activePatientId;
+    final pid = _patientId;
+    final ar = Localizations.localeOf(context).languageCode == 'ar';
 
     if (pid == null) {
       return Scaffold(
@@ -275,127 +308,327 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
       );
     }
 
+    if (!_current(app)) {
+      return Scaffold(
+        appBar: AppBar(title: Text(l.patientFile)),
+        body: EmptyState(
+          title: l.errSessionExpired,
+          body: ar
+              ? 'أعد فتح ملف المريض من قائمة المرضى.'
+              : 'Reopen the patient file from your patient list.',
+          icon: Icons.lock_outline,
+        ),
+      );
+    }
+
+    final args = PatientRouteArgs(
+      patientId: pid,
+      patientName: _data?.profile?.name ?? widget.args?.patientName,
+    );
+    Future<void> medications() async {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => MedicationScreen(patientId: pid)),
+      );
+      if (_current(app)) _load();
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_data?.profile?.name ?? l.patientFile),
         actions: [
           IconButton(
-            tooltip: 'توجيهات ورسائل المريض',
-            onPressed: () => Navigator.pushNamed(
-              context,
-              Routes.messages,
-              arguments: PatientRouteArgs(
-                patientId: pid,
-                patientName: _data?.profile?.name,
-              ),
-            ),
-            icon: const Icon(Icons.chat_bubble_outline),
-          ),
-          IconButton(
-            tooltip: 'التقارير الطبية وتصدير Excel',
-            onPressed: () => Navigator.pushNamed(
-              context,
-              Routes.reports,
-              arguments: PatientRouteArgs(
-                patientId: pid,
-                patientName: _data?.profile?.name,
-              ),
-            ),
-            icon: const Icon(Icons.table_chart_outlined),
-          ),
-          IconButton(
-            tooltip: l.adjudicationTitle,
-            onPressed: () =>
-                Navigator.pushNamed(context, Routes.doctorAdjudication),
-            icon: const Icon(Icons.gavel_outlined),
-          ),
-          IconButton(
-            tooltip: 'إدارة ووصف أدوية المريض',
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => MedicationScreen(patientId: pid),
-                ),
-              );
-              if (mounted) _load();
-            },
-            icon: const Icon(Icons.medication_outlined),
-          ),
-          IconButton(
             tooltip: l.refresh,
             onPressed: _loading ? null : _load,
             icon: const Icon(Icons.refresh),
           ),
-        ],
-      ),
-      body: AsyncView<_FileData>(
-        loading: _loading,
-        failure: _failure,
-        value: _data,
-        onRetry: _load,
-        emptyTitle: l.emptyTitle,
-        emptyBody: l.emptyBody,
-        builder: (context, d) => RefreshIndicator(
-          onRefresh: _load,
-          child: ListView(
-            padding: Insets.pageBottomSafe,
-            children: [
-              OfflineBanner(
-                visible: !app.apiOnline,
-                lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
-                pendingCount: app.care.pendingCount,
+          PopupMenuButton<String>(
+            key: const ValueKey('patient-file-actions'),
+            tooltip: ar ? 'خدمات المريض' : 'Patient actions',
+            onSelected: (action) {
+              if (!_current(app)) return;
+              if (action == 'password') {
+                _resetPassword();
+              } else if (action == 'medications') {
+                medications();
+              } else {
+                final route = switch (action) {
+                  'messages' => Routes.messages,
+                  'reports' => Routes.reports,
+                  _ => Routes.doctorAdjudication,
+                };
+                Navigator.pushNamed(context, route, arguments: args);
+              }
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'messages',
+                child: Text(ar ? 'رسائل المريض' : 'Patient messages'),
               ),
-              _SummarySection(
-                data: d,
-                onManageMeds: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => MedicationScreen(patientId: pid),
-                    ),
-                  );
-                  if (mounted) _load();
-                },
+              PopupMenuItem(
+                value: 'reports',
+                child: Text(ar ? 'تقارير المريض' : 'Patient reports'),
               ),
-              Gap.vMd,
-              _TimelineSection(data: d),
-              Gap.vMd,
-              _SignalSection(reading: d.reading),
-              Gap.vMd,
-              _AnalyticsSection(data: d),
-              Gap.vMd,
-              // ─── Prescriptions ────────────────────────────────────
-              _PrescriptionSection(
-                patientId: d.patientId,
-                prescriptions: d.prescriptions,
-                onRefresh: _load,
+              PopupMenuItem(
+                value: 'medications',
+                child: Text(ar ? 'أدوية المريض' : 'Patient medications'),
               ),
-              Gap.vMd,
-              // ─── Trigger Diary ────────────────────────────────────
-              _TriggersSection(triggers: d.triggers),
-              Gap.vMd,
-              _NotesSection(
-                notes: d.notes,
+              PopupMenuItem(value: 'review', child: Text(l.adjudicationTitle)),
+              PopupMenuItem(
+                value: 'password',
                 enabled: !_busy,
-                onAdd: () => _addNote(d),
-              ),
-              Gap.vMd,
-              _OperatingPointSection(
-                current: app.settings.sensitivity,
-                online: app.apiOnline,
-                enabled: !_busy,
-                onApply: (p) => _applyPoint(d, p),
-              ),
-              Gap.vMd,
-              _ReportsSection(
-                enabled: !_busy && d.profile != null,
-                onPdf: () => _exportPdf(d),
-                onCsv: () => _exportCsv(d),
+                child: Text(
+                  ar ? 'إعادة تعيين كلمة المرور' : 'Reset patient password',
+                ),
               ),
             ],
           ),
+        ],
+      ),
+      body: ResponsiveContent(
+        maxWidth: 1000,
+        child: AsyncView<_FileData>(
+          loading: _loading,
+          failure: _failure,
+          value: _data,
+          onRetry: _load,
+          emptyTitle: l.emptyTitle,
+          emptyBody: l.emptyBody,
+          builder: (context, d) => RefreshIndicator(
+            onRefresh: _load,
+            child: ListView(
+              padding: Insets.pageBottomSafe,
+              children: [
+                OfflineBanner(
+                  visible: !app.apiOnline,
+                  lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
+                  pendingCount: app.care.pendingCount,
+                ),
+                _SummarySection(data: d, onManageMeds: medications),
+                Gap.vMd,
+                _TimelineSection(data: d),
+                Gap.vMd,
+                _SignalSection(reading: d.reading),
+                Gap.vMd,
+                _AnalyticsSection(data: d),
+                Gap.vMd,
+                // ─── Prescriptions ────────────────────────────────────
+                _PrescriptionSection(
+                  patientId: d.patientId,
+                  prescriptions: d.prescriptions,
+                  onRefresh: _load,
+                ),
+                Gap.vMd,
+                // ─── Trigger Diary ────────────────────────────────────
+                _TriggersSection(triggers: d.triggers),
+                Gap.vMd,
+                _NotesSection(
+                  notes: d.notes,
+                  enabled: !_busy,
+                  onAdd: () => _addNote(d),
+                ),
+                Gap.vMd,
+                const _OperatingPointSection(),
+                Gap.vMd,
+                _ReportsSection(
+                  patientArgs: args,
+                  enabled: !_busy && d.profile != null,
+                  onPdf: () => _exportPdf(d),
+                  onCsv: () => _exportCsv(d),
+                ),
+              ],
+            ),
+          ),
         ),
+      ),
+    );
+  }
+}
+
+/// Explicit passwords keep an uncertain response recoverable: the doctor knows
+/// the chosen credential even if the server commits before the connection drops.
+class DoctorPatientPasswordResetDialog extends StatefulWidget {
+  const DoctorPatientPasswordResetDialog({
+    super.key,
+    required this.patientName,
+    required this.onSave,
+    required this.isCurrent,
+  });
+
+  final String patientName;
+  final Future<void> Function(String password) onSave;
+  final bool Function() isCurrent;
+
+  @override
+  State<DoctorPatientPasswordResetDialog> createState() =>
+      _DoctorPatientPasswordResetDialogState();
+}
+
+class _DoctorPatientPasswordResetDialogState
+    extends State<DoctorPatientPasswordResetDialog> {
+  final _form = GlobalKey<FormState>();
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  bool _busy = false;
+  bool _saved = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_busy || _saved || !widget.isCurrent()) return;
+    if (!_form.currentState!.validate()) return;
+    final ar = Localizations.localeOf(context).languageCode == 'ar';
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.onSave(_password.text);
+      if (!mounted || !widget.isCurrent()) return;
+      _password.clear();
+      _confirm.clear();
+      setState(() => _saved = true);
+    } catch (error) {
+      if (!mounted || !widget.isCurrent()) return;
+      final failure = Failure.from(error);
+      setState(
+        () => _error =
+            failure.isConnectivity || failure.kind == FailureKind.server
+            ? (ar
+                  ? 'لم نتمكن من تأكيد النتيجة. قد تكون الكلمة قد تغيّرت؛ تحقق مع المريض باستخدام الكلمة التي اخترتها قبل إعادة الطلب.'
+                  : 'The result could not be confirmed. The password may have changed; check with the patient using your chosen password before submitting again.')
+            : failure.message(AppLocalizations.of(context)),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    context.watch<AppState>();
+    final ar = Localizations.localeOf(context).languageCode == 'ar';
+    final valid = widget.isCurrent();
+    return PopScope(
+      canPop: !_busy,
+      child: AlertDialog(
+        title: Text(ar ? 'إعادة تعيين كلمة المرور' : 'Reset patient password'),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: !valid
+                ? Text(
+                    ar
+                        ? 'تغيرت الجلسة. أغلق النافذة وأعد فتح ملف المريض.'
+                        : 'The session changed. Close this dialog and reopen the patient file.',
+                  )
+                : _saved
+                ? Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      ar
+                          ? 'تم تغيير كلمة المرور. شارك الكلمة التي اخترتها مع المريض بطريقة آمنة. سيحتاج إلى تسجيل الدخول مجددًا عند الاتصال بالخادم.'
+                          : 'Password changed. Share your chosen password securely with the patient. They must sign in again when connecting to the server.',
+                    ),
+                  )
+                : Form(
+                    key: _form,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          ar
+                              ? 'تأكيد إعادة التعيين للمريض: ${widget.patientName}. سيبطل الخادم رموز دخوله السابقة؛ لا يمسح هذا بيانات جهاز مفقود أو يوقفه أثناء انقطاع الاتصال.'
+                              : 'Confirm a password reset for ${widget.patientName}. The server will reject previous login tokens; this does not erase a lost device or stop its offline use.',
+                        ),
+                        Gap.vMd,
+                        if (_error != null) ...[
+                          Semantics(
+                            liveRegion: true,
+                            child: Text(
+                              _error!,
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.error,
+                              ),
+                            ),
+                          ),
+                          Gap.vSm,
+                        ],
+                        TextFormField(
+                          key: const ValueKey('reset-patient-password'),
+                          controller: _password,
+                          readOnly: _busy,
+                          obscureText: true,
+                          enableSuggestions: false,
+                          autocorrect: false,
+                          decoration: InputDecoration(
+                            labelText: ar
+                                ? 'كلمة المرور الجديدة'
+                                : 'New password',
+                            helperText: ar
+                                ? 'من 6 إلى 128 حرفًا'
+                                : '6–128 characters',
+                          ),
+                          validator: (value) =>
+                              value == null ||
+                                  value.length < 6 ||
+                                  value.length > 128
+                              ? (ar
+                                    ? 'أدخل من 6 إلى 128 حرفًا'
+                                    : 'Enter 6–128 characters')
+                              : null,
+                        ),
+                        Gap.vMd,
+                        TextFormField(
+                          key: const ValueKey('reset-patient-confirm'),
+                          controller: _confirm,
+                          readOnly: _busy,
+                          obscureText: true,
+                          enableSuggestions: false,
+                          autocorrect: false,
+                          decoration: InputDecoration(
+                            labelText: ar
+                                ? 'تأكيد كلمة المرور'
+                                : 'Confirm password',
+                          ),
+                          validator: (value) => value != _password.text
+                              ? (ar
+                                    ? 'كلمتا المرور غير متطابقتين'
+                                    : 'Passwords do not match')
+                              : null,
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _busy ? null : () => Navigator.pop(context),
+            child: Text(
+              _saved || !valid
+                  ? (ar ? 'تم' : 'Done')
+                  : (ar ? 'إلغاء' : 'Cancel'),
+            ),
+          ),
+          if (!_saved && valid)
+            FilledButton(
+              key: const ValueKey('confirm-patient-password-reset'),
+              onPressed: _busy ? null : _save,
+              child: Text(
+                _busy
+                    ? (ar ? 'جارٍ الحفظ…' : 'Saving…')
+                    : (ar ? 'تأكيد إعادة التعيين' : 'Confirm reset'),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -472,8 +705,9 @@ class _FileData {
   RiskLabel? get latestLabel =>
       assessments.isNotEmpty ? assessments.first.label : profile?.currentStatus;
 
-  DateTime? get observedAt =>
-      assessments.isNotEmpty ? assessments.first.timestamp : profile?.lastUpdated;
+  DateTime? get observedAt => assessments.isNotEmpty
+      ? assessments.first.timestamp
+      : profile?.lastUpdated;
 }
 
 /// One row of the merged timeline. Built from four different sources, so the
@@ -523,10 +757,7 @@ class _SummarySection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          RiskGauge(
-            view: view,
-            freshnessLabel: TimeAgo.since(d.observedAt, l),
-          ),
+          RiskGauge(view: view, freshnessLabel: TimeAgo.since(d.observedAt, l)),
           Gap.vSm,
           RiskStrip(view: view),
           Gap.vMd,
@@ -737,9 +968,7 @@ class _TimelineSection extends StatelessWidget {
               icon: Icons.event_note_outlined,
               compact: true,
             )
-          : Column(
-              children: [for (final e in events) _EventTile(event: e)],
-            ),
+          : Column(children: [for (final e in events) _EventTile(event: e)]),
     );
   }
 }
@@ -992,171 +1221,20 @@ class _NotesSection extends StatelessWidget {
 }
 
 class _OperatingPointSection extends StatelessWidget {
-  const _OperatingPointSection({
-    required this.current,
-    required this.online,
-    required this.enabled,
-    required this.onApply,
-  });
-
-  final AlertSensitivity current;
-  final bool online;
-  final bool enabled;
-  final ValueChanged<AlertSensitivity> onApply;
-
-  static String _name(AlertSensitivity s, AppLocalizations l) => switch (s) {
-    AlertSensitivity.low => l.opConservative,
-    AlertSensitivity.medium => l.opBalanced,
-    AlertSensitivity.high => l.opSensitive,
-  };
+  const _OperatingPointSection();
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final theme = Theme.of(context);
-
+    final ar = Localizations.localeOf(context).languageCode == 'ar';
     return SectionCard(
-      title: l.perPatientSettings,
-      icon: Icons.tune_outlined,
-      subtitle: l.operatingPoints,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // A table, not three vague words. §5.3 asks the doctor to trade
-          // detection against false alarms, and they cannot do that without
-          // seeing both numbers next to each other.
-          Row(
-            children: [
-              Expanded(flex: 3, child: Text('', style: theme.textTheme.labelSmall)),
-              Expanded(
-                flex: 2,
-                child: Text(
-                  l.colSensitivity,
-                  style: theme.textTheme.labelSmall,
-                  textAlign: TextAlign.center,
-                ),
-              ),
-              Expanded(
-                flex: 2,
-                child: Text(
-                  l.colFalseAlarmsPerHour,
-                  style: theme.textTheme.labelSmall,
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ],
-          ),
-          const Divider(),
-          for (final s in AlertSensitivity.values)
-            _PointRow(
-              point: s,
-              label: _name(s, l),
-              selected: s == current,
-            ),
-          Gap.vSm,
-          // The same figure in the unit a consultation is held in. «كل ~٢ ساعة»
-          // is a sentence a doctor can repeat to the patient; «0.45/hour» is not.
-          InfoNote(
-            text: l.opImpact(
-              current.hoursBetweenFalseAlarms.isFinite
-                  ? current.hoursBetweenFalseAlarms.toStringAsFixed(1)
-                  : '—',
-            ),
-            icon: Icons.balance_outlined,
-          ),
-          Gap.vSm,
-          InfoNote(text: l.operatingPointNote, icon: Icons.info_outline),
-          if (!online) ...[
-            Gap.vSm,
-            // Not a generic offline banner: this specific control is the only
-            // one on the screen that cannot be saved locally, so it says so
-            // where the button is.
-            InfoNote(
-              text: l.errNoConnection,
-              icon: Icons.cloud_off_outlined,
-              view: RiskView.caution,
-            ),
-          ],
-          Gap.vSm,
-          Wrap(
-            spacing: Gap.sm,
-            runSpacing: Gap.sm,
-            children: [
-              for (final s in AlertSensitivity.values)
-                OutlinedButton(
-                  onPressed: (enabled && online && s != current)
-                      ? () => onApply(s)
-                      : null,
-                  child: Text('${l.applyThreshold}: ${_name(s, l)}'),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PointRow extends StatelessWidget {
-  const _PointRow({
-    required this.point,
-    required this.label,
-    required this.selected,
-  });
-
-  final AlertSensitivity point;
-  final String label;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final weight = selected ? FontWeight.w800 : FontWeight.w400;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Gap.xs),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 3,
-            child: Row(
-              children: [
-                Icon(
-                  selected
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked,
-                  size: 18,
-                  color: selected ? theme.colorScheme.primary : null,
-                ),
-                Gap.hXs,
-                Expanded(
-                  child: Text(
-                    label,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: weight,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              _pct(point.detection),
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(fontWeight: weight),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              point.falseAlarmsPerHour.toStringAsFixed(2),
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(fontWeight: weight),
-            ),
-          ),
-        ],
+      key: const ValueKey('model-operating-point-notice'),
+      title: ar ? 'إعدادات النموذج' : 'Model configuration',
+      icon: Icons.science_outlined,
+      child: InfoNote(
+        text: ar
+            ? 'تعديل عتبة النموذج لكل مريض غير متاح في الإصدار الحالي. لا توجد نتائج موثقة تربط إعدادات الحساسية بنسبة كشف النوبات أو عدد الإنذارات الكاذبة لهذا المريض.'
+            : 'Per-patient model thresholds cannot be changed in this version. No validated results link sensitivity settings to seizure detection or false-alarm rates for this patient.',
+        icon: Icons.info_outline,
       ),
     );
   }
@@ -1164,12 +1242,14 @@ class _PointRow extends StatelessWidget {
 
 class _ReportsSection extends StatelessWidget {
   const _ReportsSection({
+    required this.patientArgs,
     required this.enabled,
     required this.onPdf,
     required this.onCsv,
   });
 
   final bool enabled;
+  final PatientRouteArgs patientArgs;
   final VoidCallback onPdf;
   final VoidCallback onCsv;
 
@@ -1213,7 +1293,11 @@ class _ReportsSection extends StatelessWidget {
             height: A11y.minTouchTarget,
             child: OutlinedButton.icon(
               onPressed: enabled
-                  ? () => Navigator.pushNamed(context, Routes.reports)
+                  ? () => Navigator.pushNamed(
+                      context,
+                      Routes.reports,
+                      arguments: patientArgs,
+                    )
                   : null,
               icon: const Icon(Icons.table_chart_outlined),
               label: const Text('مركز التقارير الطبية الشاملة وتصدير Excel'),
@@ -1328,18 +1412,32 @@ class _PrescriptionSection extends StatefulWidget {
 class _PrescriptionSectionState extends State<_PrescriptionSection> {
   bool _busy = false;
 
-  Future<void> _addPrescription() async {
+  Future<void> _addPrescription({Map<String, dynamic>? existing}) async {
+    if (_busy) return;
+    final ar = AppLocalizations.of(context).isArabic;
     final app = context.read<AppState>();
     final formKey = GlobalKey<FormState>();
-    final nameCtrl = TextEditingController();
-    final doseCtrl = TextEditingController();
-    final schedCtrl = TextEditingController();
-    final notesCtrl = TextEditingController();
+    final nameCtrl = TextEditingController(
+      text: existing?['name'] as String? ?? '',
+    );
+    final doseCtrl = TextEditingController(
+      text: existing?['dose'] as String? ?? '',
+    );
+    final schedCtrl = TextEditingController(
+      text: existing?['schedule'] as String? ?? '',
+    );
+    final notesCtrl = TextEditingController(
+      text: existing?['notes'] as String? ?? '',
+    );
 
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('وصف دواء جديد'),
+        title: Text(
+          existing == null
+              ? (ar ? 'وصف دواء' : 'Prescribe medication')
+              : (ar ? 'تعديل الوصفة' : 'Edit prescription'),
+        ),
         content: Form(
           key: formKey,
           child: SingleChildScrollView(
@@ -1406,13 +1504,27 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
     if (result != true || !mounted) return;
     setState(() => _busy = true);
     try {
-      await app.api.prescribeMedication(
-        patientId: widget.patientId,
-        name: nameCtrl.text.trim(),
-        dose: doseCtrl.text.trim(),
-        schedule: schedCtrl.text.trim(),
-        notes: notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
-      );
+      if (existing == null) {
+        await app.api.prescribeMedication(
+          patientId: widget.patientId,
+          name: nameCtrl.text.trim(),
+          dose: doseCtrl.text.trim(),
+          schedule: schedCtrl.text.trim(),
+          notes: notesCtrl.text.trim(),
+        );
+      } else {
+        await app.api.sendJson(
+          method: 'PATCH',
+          path:
+              '/doctor/patients/${widget.patientId}/prescriptions/${existing['id']}',
+          body: {
+            'name': nameCtrl.text.trim(),
+            'dose': doseCtrl.text.trim(),
+            'schedule': schedCtrl.text.trim(),
+            'notes': notesCtrl.text.trim(),
+          },
+        );
+      }
       if (mounted) AppSnack.success(context, 'تم حفظ الوصفة الطبية بنجاح ✓');
       widget.onRefresh();
     } catch (e) {
@@ -1422,11 +1534,66 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
     }
   }
 
+  Future<void> _cancelPrescription(Map<String, dynamic> rx) async {
+    if (_busy) return;
+    final ar = AppLocalizations.of(context).isArabic;
+    final app = context.read<AppState>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text(ar ? 'إلغاء الوصفة؟' : 'Cancel prescription?'),
+        content: Text(
+          ar
+              ? 'ستُعلّم وصفة ${rx['name']} كملغاة. راجع خطة المريض وأبلغه بالتغيير.'
+              : 'Mark ${rx['name']} as cancelled. Review the patient plan and communicate the change.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, false),
+            child: Text(ar ? 'البقاء' : 'Keep'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: Text(ar ? 'إلغاء الوصفة' : 'Cancel prescription'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await app.api.sendJson(
+        method: 'DELETE',
+        path: '/doctor/patients/${widget.patientId}/prescriptions/${rx['id']}',
+      );
+      if (mounted) {
+        AppSnack.success(
+          context,
+          ar ? 'أُلغيت الوصفة' : 'Prescription cancelled',
+        );
+        widget.onRefresh();
+      }
+    } catch (_) {
+      if (mounted) {
+        AppSnack.error(
+          context,
+          ar ? 'تعذر إلغاء الوصفة' : 'Unable to cancel prescription',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final active = widget.prescriptions.where((p) => p['active'] == true).toList();
-    final inactive = widget.prescriptions.where((p) => p['active'] != true).toList();
+    final active = widget.prescriptions
+        .where((p) => p['active'] == true)
+        .toList();
+    final inactive = widget.prescriptions
+        .where((p) => p['active'] != true)
+        .toList();
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1434,45 +1601,72 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         borderRadius: Radii.rMd,
-        border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.medication_rounded, color: theme.colorScheme.primary, size: 20),
+              Icon(
+                Icons.medication_rounded,
+                color: theme.colorScheme.primary,
+                size: 20,
+              ),
               Gap.hSm,
               Expanded(
                 child: Text(
                   'الأدوية الموصوفة (${active.length} نشط)',
-                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               if (!_busy)
                 TextButton.icon(
                   icon: const Icon(Icons.add, size: 16),
                   label: const Text('وصف دواء'),
-                  onPressed: _addPrescription,
+                  onPressed: () => _addPrescription(),
                 )
               else
-                const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
             ],
           ),
           if (widget.prescriptions.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text('لا توجد أدوية موصوفة حتى الآن',
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              child: Text(
+                'لا توجد أدوية موصوفة حتى الآن',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
             )
           else ...[
             // Active prescriptions
-            ...active.map((rx) => _RxTile(rx: rx, active: true)),
+            ...active.map(
+              (rx) => _RxTile(
+                rx: rx,
+                active: true,
+                onEdit: _busy ? null : () => _addPrescription(existing: rx),
+                onCancel: _busy ? null : () => _cancelPrescription(rx),
+              ),
+            ),
             // Inactive/cancelled
             if (inactive.isNotEmpty) ...[
               const Divider(height: 16),
-              Text('ملغاة / قديمة',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              Text(
+                'ملغاة / قديمة',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
               ...inactive.take(3).map((rx) => _RxTile(rx: rx, active: false)),
             ],
           ],
@@ -1483,7 +1677,14 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
 }
 
 class _RxTile extends StatelessWidget {
-  const _RxTile({required this.rx, required this.active});
+  const _RxTile({
+    required this.rx,
+    required this.active,
+    this.onEdit,
+    this.onCancel,
+  });
+  final VoidCallback? onEdit;
+  final VoidCallback? onCancel;
   final Map<String, dynamic> rx;
   final bool active;
 
@@ -1497,7 +1698,9 @@ class _RxTile extends StatelessWidget {
           Icon(
             active ? Icons.check_circle_rounded : Icons.cancel_rounded,
             size: 16,
-            color: active ? Colors.green : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+            color: active
+                ? Colors.green
+                : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
           ),
           Gap.hSm,
           Expanded(
@@ -1521,6 +1724,36 @@ class _RxTile extends StatelessWidget {
               ],
             ),
           ),
+          if (active)
+            PopupMenuButton<String>(
+              enabled: onEdit != null || onCancel != null,
+              tooltip: AppLocalizations.of(context).isArabic
+                  ? 'إجراءات الوصفة'
+                  : 'Prescription actions',
+              onSelected: (value) {
+                if (value == 'edit') {
+                  onEdit?.call();
+                } else {
+                  onCancel?.call();
+                }
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: 'edit',
+                  child: Text(
+                    AppLocalizations.of(context).isArabic ? 'تعديل' : 'Edit',
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'cancel',
+                  child: Text(
+                    AppLocalizations.of(context).isArabic
+                        ? 'إلغاء الوصفة'
+                        : 'Cancel prescription',
+                  ),
+                ),
+              ],
+            ),
         ],
       ),
     );
@@ -1549,7 +1782,9 @@ class _TriggersSection extends StatelessWidget {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         borderRadius: Radii.rMd,
-        border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1558,37 +1793,55 @@ class _TriggersSection extends StatelessWidget {
             children: [
               Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
               Gap.hSm,
-              Text(
-                'مذكرات المحفزات (${triggers.length})',
-                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+              Expanded(
+                child: Text(
+                  AppLocalizations.of(context).isArabic
+                      ? 'مذكرات المحفزات (${triggers.length})'
+                      : 'Trigger diary (${triggers.length})',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
             ],
           ),
           if (triggers.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text('لم يسجّل المريض أي محفزات حتى الآن',
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              child: Text(
+                'لم يسجّل المريض أي محفزات حتى الآن',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
             )
           else
-            ...grouped.entries.take(5).map((entry) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  Container(
-                    width: 8, height: 8,
-                    margin: const EdgeInsets.only(left: 8),
-                    decoration: const BoxDecoration(color: Colors.orange, shape: BoxShape.circle),
-                  ),
-                  Expanded(
-                    child: Text(
-                      '${entry.key} (${entry.value.length})',
-                      style: theme.textTheme.bodyMedium,
+            ...grouped.entries
+                .take(5)
+                .map(
+                  (entry) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          margin: const EdgeInsets.only(left: 8),
+                          decoration: const BoxDecoration(
+                            color: Colors.orange,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            '${entry.key} (${entry.value.length})',
+                            style: theme.textTheme.bodyMedium,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
-            )),
+                ),
         ],
       ),
     );

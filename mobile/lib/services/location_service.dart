@@ -49,6 +49,8 @@ abstract class LocationPlatform {
   Future<LocationPermission> permission();
   Future<LocationPermission> requestPermission();
   Future<GpsFix> acquire();
+  Future<bool> openLocationSettings() async => true;
+  Future<bool> openAppSettings() async => true;
 }
 
 class GeolocatorPlatformAdapter implements LocationPlatform {
@@ -59,6 +61,10 @@ class GeolocatorPlatformAdapter implements LocationPlatform {
   @override
   Future<LocationPermission> requestPermission() =>
       Geolocator.requestPermission();
+  @override
+  Future<bool> openLocationSettings() => Geolocator.openLocationSettings();
+  @override
+  Future<bool> openAppSettings() => Geolocator.openAppSettings();
   @override
   Future<GpsFix> acquire() async {
     final p = await Geolocator.getCurrentPosition(
@@ -80,6 +86,13 @@ class LocationService {
     : _platform = platform ?? GeolocatorPlatformAdapter();
   final LocationPlatform _platform;
   LocationResult? lastResult;
+
+  Future<bool> isServiceEnabled() => _platform.enabled();
+  Future<LocationPermission> checkPermission() => _platform.permission();
+  Future<LocationPermission> requestPermission() =>
+      _platform.requestPermission();
+  Future<bool> openLocationSettings() => _platform.openLocationSettings();
+  Future<bool> openAppSettings() => _platform.openAppSettings();
   Future<LocationResult> currentResult({
     Duration timeout = const Duration(seconds: 8),
   }) async {
@@ -116,7 +129,7 @@ class LocationService {
     if (!fix.valid) return const LocationResult(LocationStatus.invalidFix);
     if (fix.capturedAt != null) {
       final age = DateTime.now().difference(fix.capturedAt!);
-      if (age > const Duration(minutes: 1) ||
+      if (age > const Duration(minutes: 5) ||
           age < const Duration(seconds: -30)) {
         return const LocationResult(LocationStatus.stale);
       }

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:uuid/uuid.dart';
 
 /// Thin wrapper over platform secure storage (Keychain on iOS, EncryptedShared
 /// Preferences / Keystore on Android). Used for two secrets that must never
@@ -20,6 +21,20 @@ class SecureStore {
   );
 
   final Map<String, String> _memoryFallback = {};
+
+  static const _kDeviceId = 'device_id';
+
+  /// Return the persistent installation/hardware UUID, generating and storing
+  /// a fresh UUID v4 on first use. Used to enforce single-device hardware binding.
+  Future<String> getOrCreateDeviceId() async {
+    final existing = await read(_kDeviceId);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final id = const Uuid().v4();
+    await write(_kDeviceId, id);
+    return id;
+  }
+
+  Future<String> getDeviceId() => getOrCreateDeviceId();
 
   Future<String?> read(String key) async {
     try {

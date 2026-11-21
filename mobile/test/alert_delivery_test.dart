@@ -29,10 +29,28 @@ class MemoryStore implements LocalDatabase {
   Future<void> deleteOutbox(String id) async =>
       pending.removeWhere((item) => item.id == id);
   @override
+  Future<void> acknowledgeCareWrite(OutboxItem item) => deleteOutbox(item.id);
+  @override
+  Future<int> pendingOutboxCount() async => pending.length;
+  @override
+  Future<List<OutboxItem>> careOutboxForOwner(
+    String ownerId, {
+    String? origin,
+  }) async =>
+      pending
+          .where((item) =>
+              item.body['_ownerId'] == ownerId &&
+              (origin == null ||
+                  origin.isEmpty ||
+                  item.body['_ownerOrigin'] == origin))
+          .toList();
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class SessionTokens implements TokenProvider {
+  @override
+  int get revision => 0;
   @override
   bool get hasSession => true;
   @override
@@ -42,6 +60,8 @@ class SessionTokens implements TokenProvider {
 }
 
 class DeliveryApi implements ApiClient {
+  @override
+  String get baseUrl => 'https://delivery.invalid';
   bool fail = true;
   final sent = <Map<String, Object?>>[];
   @override
@@ -73,7 +93,7 @@ void main() {
             id: '$owner',
             method: 'POST',
             path: '/patients/p1/triggers',
-            body: {'_ownerId': owner},
+            body: {'_ownerId': owner, '_ownerOrigin': api.baseUrl},
             createdAt: DateTime.now(),
           ),
         );

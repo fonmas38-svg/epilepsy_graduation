@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io' show File, Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
 import 'package:sqflite_sqlcipher/sqflite.dart';
@@ -18,7 +18,103 @@ import 'signal_simulator.dart';
 Future<void> migrateAlertDetails(DatabaseExecutor db) async {
   final columns = await db.rawQuery('PRAGMA table_info(alerts)');
   if (columns.any((column) => column['name'] == 'details')) return;
-  await db.execute("ALTER TABLE alerts ADD COLUMN details TEXT NOT NULL DEFAULT '{}'");
+  await db.execute(
+    "ALTER TABLE alerts ADD COLUMN details TEXT NOT NULL DEFAULT '{}'",
+  );
+}
+
+/// Additive and idempotent: isolates stored data by server origin and account,
+/// preventing cross-server/cross-account bleed or collisions. Preserves all legacy
+/// data as serverOrigin = '' without data loss.
+Future<void> migrateOriginIsolation(DatabaseExecutor db) async {
+  final tables = const [
+    'readings',
+    'assessments',
+    'alerts',
+    'medications',
+    'medication_logs',
+    'prediction_events',
+    'emergency_contacts',
+    'trigger_entries',
+    'consents',
+    'access_log',
+    'seizure_logs',
+    'adjudications',
+    'alert_responses',
+    'clinical_notes',
+    'messages',
+  ];
+
+  for (final table in tables) {
+    final tableExists = (await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='$table'",
+    )).isNotEmpty;
+    if (!tableExists) continue;
+
+    final columns = await db.rawQuery('PRAGMA table_info($table)');
+    if (!columns.any((column) => column['name'] == 'serverOrigin')) {
+      await db.execute(
+        "ALTER TABLE $table ADD COLUMN serverOrigin TEXT NOT NULL DEFAULT ''",
+      );
+    }
+  }
+
+  // Handle medical_card composite primary key (patientId, serverOrigin)
+  final cardExists = (await db.rawQuery(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='medical_card'",
+  )).isNotEmpty;
+  if (cardExists) {
+    final cardCols = await db.rawQuery('PRAGMA table_info(medical_card)');
+    if (!cardCols.any((column) => column['name'] == 'serverOrigin')) {
+      await db.execute('ALTER TABLE medical_card RENAME TO _legacy_medical_card');
+      await db.execute('''
+        CREATE TABLE medical_card (
+          patientId TEXT NOT NULL,
+          serverOrigin TEXT NOT NULL DEFAULT '',
+          diagnosis TEXT NOT NULL DEFAULT '',
+          allergies TEXT NOT NULL DEFAULT '',
+          bloodType TEXT NOT NULL DEFAULT '',
+          doctorName TEXT NOT NULL DEFAULT '',
+          doctorPhone TEXT NOT NULL DEFAULT '',
+          notes TEXT NOT NULL DEFAULT '',
+          updatedAt TEXT NOT NULL,
+          synced INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (patientId, serverOrigin)
+        )
+      ''');
+      await db.execute('''
+        INSERT INTO medical_card (
+          patientId, serverOrigin, diagnosis, allergies, bloodType,
+          doctorName, doctorPhone, notes, updatedAt, synced
+        )
+        SELECT patientId, '', diagnosis, allergies, bloodType,
+               doctorName, doctorPhone, notes, updatedAt, synced
+        FROM _legacy_medical_card
+      ''');
+      await db.execute('DROP TABLE _legacy_medical_card');
+    }
+  }
+
+  for (final table in const [
+    'emergency_contacts',
+    'trigger_entries',
+    'consents',
+    'access_log',
+    'seizure_logs',
+    'adjudications',
+    'alert_responses',
+    'clinical_notes',
+    'messages',
+  ]) {
+    final exists = (await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='$table'",
+    )).isNotEmpty;
+    if (exists) {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_${table}_patient_origin ON $table (patientId, serverOrigin)',
+      );
+    }
+  }
 }
 
 /// Platform-adaptive local database.
@@ -36,6 +132,15 @@ Future<void> migrateAlertDetails(DatabaseExecutor db) async {
 /// `openDatabase` call differs.
 class LocalDatabase {
   LocalDatabase._();
+  @visibleForTesting
+  LocalDatabase.forDatabase(Database db) : _db = db;
+
+  /// Initializes an isolated test database using the production schema only.
+  /// Never opens the patient's database or reads its encryption key.
+  @visibleForTesting
+  static Future<void> createTestSchema(Database db) =>
+      LocalDatabase.forDatabase(db)._createSchema(db, _dbVersion);
+
   static final LocalDatabase instance = LocalDatabase._();
 
   Database? _db;
@@ -48,7 +153,9 @@ class LocalDatabase {
   /// seizure logs, adjudications, alert responses, clinical notes) plus the
   /// outgoing `outbox` queue. v4 = + messages table for doctor and family channels.
   /// v5 adds alert details through an additive migration, preserving existing rows.
-  static const _dbVersion = 5;
+  /// v6 adds origin and account isolation to eliminate cross-server collisions.
+  /// v7 adds encrypted user_credentials table for offline authentication.
+  static const _dbVersion = 7;
 
   /// True on desktop platforms where SQLCipher is unavailable.
   static bool get _isDesktop =>
@@ -110,7 +217,8 @@ class LocalDatabase {
             ecg TEXT NOT NULL,
             motion TEXT NOT NULL,
             hr REAL NOT NULL,
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -121,7 +229,8 @@ class LocalDatabase {
             label TEXT NOT NULL,
             confidence REAL NOT NULL,
             features TEXT NOT NULL,
-            processingMs REAL NOT NULL
+            processingMs REAL NOT NULL,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -134,17 +243,21 @@ class LocalDatabase {
             recipients TEXT NOT NULL,
             acknowledged INTEGER NOT NULL DEFAULT 0,
             acknowledgedBy TEXT,
-            details TEXT NOT NULL DEFAULT '{}'
+            details TEXT NOT NULL DEFAULT '{}',
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
-    // v2/v3/v4 tables are created here for fresh installs and in _onUpgrade for
+    // v2/v3/v4/v7 tables are created here for fresh installs and in _onUpgrade for
     // existing ones. Same idempotent DDL is used in both paths.
     await _createV2Tables(db);
     await _createV3Tables(db);
     await _createV4Tables(db);
+    await _createV7Tables(db);
   }
 
   /// Additive migrations preserve existing rows; v5 adds alert context.
+  /// v6 adds origin isolation for care, telemetry, and messages.
+  /// v7 adds encrypted user_credentials for offline credential validation.
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await _createV2Tables(db);
@@ -157,6 +270,12 @@ class LocalDatabase {
     }
     if (oldVersion < 5) {
       await migrateAlertDetails(db);
+    }
+    if (oldVersion < 6) {
+      await migrateOriginIsolation(db);
+    }
+    if (oldVersion < 7) {
+      await _createV7Tables(db);
     }
   }
 
@@ -172,7 +291,8 @@ class LocalDatabase {
             schedule TEXT NOT NULL DEFAULT '',
             times TEXT NOT NULL DEFAULT '[]',
             active INTEGER NOT NULL DEFAULT 1,
-            createdAt TEXT NOT NULL
+            createdAt TEXT NOT NULL,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -182,7 +302,8 @@ class LocalDatabase {
             patientId TEXT NOT NULL,
             scheduledFor TEXT NOT NULL,
             takenAt TEXT,
-            status TEXT NOT NULL DEFAULT 'taken'
+            status TEXT NOT NULL DEFAULT 'taken',
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -194,7 +315,8 @@ class LocalDatabase {
             leadTimeMin REAL,
             horizonMin REAL,
             source TEXT,
-            outcome TEXT NOT NULL
+            outcome TEXT NOT NULL,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
   }
@@ -219,12 +341,14 @@ class LocalDatabase {
             phone TEXT NOT NULL,
             relation TEXT NOT NULL DEFAULT '',
             priority INTEGER NOT NULL DEFAULT 0,
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
           CREATE TABLE IF NOT EXISTS medical_card (
-            patientId TEXT PRIMARY KEY,
+            patientId TEXT NOT NULL,
+            serverOrigin TEXT NOT NULL DEFAULT '',
             diagnosis TEXT NOT NULL DEFAULT '',
             allergies TEXT NOT NULL DEFAULT '',
             bloodType TEXT NOT NULL DEFAULT '',
@@ -232,7 +356,8 @@ class LocalDatabase {
             doctorPhone TEXT NOT NULL DEFAULT '',
             notes TEXT NOT NULL DEFAULT '',
             updatedAt TEXT NOT NULL,
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (patientId, serverOrigin)
           )
         ''');
     // `trigger_entries`, not `triggers`: TRIGGER is a SQL keyword and the plural
@@ -245,7 +370,8 @@ class LocalDatabase {
             kind TEXT NOT NULL,
             intensity INTEGER NOT NULL DEFAULT 3,
             note TEXT NOT NULL DEFAULT '',
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -258,7 +384,8 @@ class LocalDatabase {
             shareLocation INTEGER NOT NULL DEFAULT 0,
             grantedAt TEXT NOT NULL,
             revokedAt TEXT,
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -267,7 +394,8 @@ class LocalDatabase {
             patientId TEXT NOT NULL,
             actorName TEXT NOT NULL DEFAULT '',
             action TEXT NOT NULL,
-            at TEXT NOT NULL
+            at TEXT NOT NULL,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -280,7 +408,8 @@ class LocalDatabase {
             notes TEXT NOT NULL DEFAULT '',
             reportedBy TEXT NOT NULL DEFAULT '',
             alertId TEXT,
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -292,7 +421,8 @@ class LocalDatabase {
             decidedAt TEXT NOT NULL,
             notes TEXT NOT NULL DEFAULT '',
             doctorId TEXT NOT NULL DEFAULT '',
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -304,7 +434,8 @@ class LocalDatabase {
             responderName TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'seen',
             at TEXT NOT NULL,
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -314,7 +445,8 @@ class LocalDatabase {
             text TEXT NOT NULL DEFAULT '',
             writtenAt TEXT NOT NULL,
             doctorId TEXT NOT NULL DEFAULT '',
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute('''
@@ -342,6 +474,9 @@ class LocalDatabase {
     ]) {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_${table}_patient ON $table (patientId)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_${table}_patient_origin ON $table (patientId, serverOrigin)',
       );
     }
   }
@@ -434,20 +569,27 @@ class LocalDatabase {
     await batch.commit(noResult: true);
   }
 
-  Future<void> insertAssessment(RiskAssessment a, {OutboxItem? delivery}) async {
+  Future<void> insertAssessment(
+    RiskAssessment a, {
+    OutboxItem? delivery,
+  }) async {
     final db = await database;
     await db.transaction((txn) async {
-    await txn.insert('assessments', {
-      'id': a.id,
-      'patientId': a.patientId,
-      'timestamp': a.timestamp.toIso8601String(),
-      'label': a.label.apiValue,
-      'confidence': a.confidence,
-      'features': jsonEncode(a.features),
-      'processingMs': a.processingMs,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+      await txn.insert('assessments', {
+        'id': a.id,
+        'patientId': a.patientId,
+        'timestamp': a.timestamp.toIso8601String(),
+        'label': a.label.apiValue,
+        'confidence': a.confidence,
+        'features': jsonEncode(a.features),
+        'processingMs': a.processingMs,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
       if (delivery != null) {
-        await txn.insert('outbox', delivery.toMap(), conflictAlgorithm: ConflictAlgorithm.ignore);
+        await txn.insert(
+          'outbox',
+          delivery.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
       }
     });
   }
@@ -551,7 +693,9 @@ class LocalDatabase {
             ),
             acknowledged: (r['acknowledged'] as int) == 1,
             acknowledgedBy: r['acknowledgedBy'] as String?,
-            details: Map<String, dynamic>.from(jsonDecode(r['details'] as String? ?? '{}') as Map),
+            details: Map<String, dynamic>.from(
+              jsonDecode(r['details'] as String? ?? '{}') as Map,
+            ),
           ),
         )
         .toList();
@@ -705,12 +849,21 @@ class LocalDatabase {
     );
   }
 
-  Future<List<EmergencyContact>> emergencyContactsFor(String patientId) async {
+  Future<List<EmergencyContact>> emergencyContactsFor(
+    String patientId, {
+    String? serverOrigin,
+  }) async {
     final db = await database;
+    final where = serverOrigin != null && serverOrigin.isNotEmpty
+        ? 'patientId = ? AND (serverOrigin = ? OR serverOrigin = \'\')'
+        : 'patientId = ?';
+    final whereArgs = serverOrigin != null && serverOrigin.isNotEmpty
+        ? [patientId, serverOrigin]
+        : [patientId];
     final rows = await db.query(
       'emergency_contacts',
-      where: 'patientId = ?',
-      whereArgs: [patientId],
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'priority ASC, name ASC',
     );
     return rows
@@ -718,26 +871,58 @@ class LocalDatabase {
         .toList();
   }
 
-  Future<void> deleteEmergencyContact(String id) async {
+  Future<void> deleteEmergencyContact(
+    String id, {
+    String? patientId,
+    String? serverOrigin,
+  }) async {
     final db = await database;
-    await db.delete('emergency_contacts', where: 'id = ?', whereArgs: [id]);
+    if (patientId != null && serverOrigin != null && serverOrigin.isNotEmpty) {
+      await db.delete(
+        'emergency_contacts',
+        where: 'id = ? AND patientId = ? AND serverOrigin = ?',
+        whereArgs: [id, patientId, serverOrigin],
+      );
+    } else if (patientId != null) {
+      await db.delete(
+        'emergency_contacts',
+        where: 'id = ? AND patientId = ?',
+        whereArgs: [id, patientId],
+      );
+    } else {
+      await db.delete('emergency_contacts', where: 'id = ?', whereArgs: [id]);
+    }
   }
 
-  Future<void> upsertMedicalCard(MedicalCard card) async {
+  Future<void> upsertMedicalCard(MedicalCard card, {String? serverOrigin}) async {
     final db = await database;
+    final map = card.toMap();
+    if (serverOrigin != null && serverOrigin.isNotEmpty) {
+      map['serverOrigin'] = serverOrigin;
+    }
     await db.insert(
       'medical_card',
-      card.toMap(),
+      map,
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
 
-  Future<MedicalCard?> medicalCardFor(String patientId) async {
+  Future<MedicalCard?> medicalCardFor(
+    String patientId, {
+    String? serverOrigin,
+  }) async {
     final db = await database;
+    final where = serverOrigin != null && serverOrigin.isNotEmpty
+        ? 'patientId = ? AND (serverOrigin = ? OR serverOrigin = \'\')'
+        : 'patientId = ?';
+    final whereArgs = serverOrigin != null && serverOrigin.isNotEmpty
+        ? [patientId, serverOrigin]
+        : [patientId];
     final rows = await db.query(
       'medical_card',
-      where: 'patientId = ?',
-      whereArgs: [patientId],
+      where: where,
+      whereArgs: whereArgs,
+      orderBy: 'updatedAt DESC',
       limit: 1,
     );
     if (rows.isEmpty) return null;
@@ -757,16 +942,23 @@ class LocalDatabase {
     String patientId, {
     DateTime? since,
     int limit = 200,
+    String? serverOrigin,
   }) async {
     final db = await database;
+    var where = since == null
+        ? 'patientId = ?'
+        : 'patientId = ? AND occurredAt >= ?';
+    final whereArgs = since == null
+        ? <Object?>[patientId]
+        : <Object?>[patientId, since.toIso8601String()];
+    if (serverOrigin != null && serverOrigin.isNotEmpty) {
+      where = '$where AND serverOrigin = ?';
+      whereArgs.add(serverOrigin);
+    }
     final rows = await db.query(
       'trigger_entries',
-      where: since == null
-          ? 'patientId = ?'
-          : 'patientId = ? AND occurredAt >= ?',
-      whereArgs: since == null
-          ? [patientId]
-          : [patientId, since.toIso8601String()],
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'occurredAt DESC',
       limit: limit,
     );
@@ -775,9 +967,27 @@ class LocalDatabase {
         .toList();
   }
 
-  Future<void> deleteTrigger(String id) async {
+  Future<void> deleteTrigger(
+    String id, {
+    String? patientId,
+    String? serverOrigin,
+  }) async {
     final db = await database;
-    await db.delete('trigger_entries', where: 'id = ?', whereArgs: [id]);
+    if (patientId != null && serverOrigin != null && serverOrigin.isNotEmpty) {
+      await db.delete(
+        'trigger_entries',
+        where: 'id = ? AND patientId = ? AND serverOrigin = ?',
+        whereArgs: [id, patientId, serverOrigin],
+      );
+    } else if (patientId != null) {
+      await db.delete(
+        'trigger_entries',
+        where: 'id = ? AND patientId = ?',
+        whereArgs: [id, patientId],
+      );
+    } else {
+      await db.delete('trigger_entries', where: 'id = ?', whereArgs: [id]);
+    }
   }
 
   Future<void> upsertConsent(CaregiverConsent c) async {
@@ -792,14 +1002,21 @@ class LocalDatabase {
   Future<List<CaregiverConsent>> consentsFor(
     String patientId, {
     bool activeOnly = false,
+    String? serverOrigin,
   }) async {
     final db = await database;
+    var where = activeOnly
+        ? 'patientId = ? AND revokedAt IS NULL'
+        : 'patientId = ?';
+    final whereArgs = <Object?>[patientId];
+    if (serverOrigin != null && serverOrigin.isNotEmpty) {
+      where = '$where AND serverOrigin = ?';
+      whereArgs.add(serverOrigin);
+    }
     final rows = await db.query(
       'consents',
-      where: activeOnly
-          ? 'patientId = ? AND revokedAt IS NULL'
-          : 'patientId = ?',
-      whereArgs: [patientId],
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'grantedAt DESC',
     );
     return rows
@@ -819,12 +1036,19 @@ class LocalDatabase {
   Future<List<AccessLogEntry>> accessLogFor(
     String patientId, {
     int limit = 100,
+    String? serverOrigin,
   }) async {
     final db = await database;
+    final where = serverOrigin != null && serverOrigin.isNotEmpty
+        ? 'patientId = ? AND (serverOrigin = ? OR serverOrigin = \'\')'
+        : 'patientId = ?';
+    final whereArgs = serverOrigin != null && serverOrigin.isNotEmpty
+        ? [patientId, serverOrigin]
+        : [patientId];
     final rows = await db.query(
       'access_log',
-      where: 'patientId = ?',
-      whereArgs: [patientId],
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'at DESC',
       limit: limit,
     );
@@ -846,16 +1070,23 @@ class LocalDatabase {
     String patientId, {
     DateTime? since,
     int limit = 200,
+    String? serverOrigin,
   }) async {
     final db = await database;
+    var where = since == null
+        ? 'patientId = ?'
+        : 'patientId = ? AND occurredAt >= ?';
+    final whereArgs = since == null
+        ? <Object?>[patientId]
+        : <Object?>[patientId, since.toIso8601String()];
+    if (serverOrigin != null && serverOrigin.isNotEmpty) {
+      where = '$where AND serverOrigin = ?';
+      whereArgs.add(serverOrigin);
+    }
     final rows = await db.query(
       'seizure_logs',
-      where: since == null
-          ? 'patientId = ?'
-          : 'patientId = ? AND occurredAt >= ?',
-      whereArgs: since == null
-          ? [patientId]
-          : [patientId, since.toIso8601String()],
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'occurredAt DESC',
       limit: limit,
     );
@@ -876,12 +1107,19 @@ class LocalDatabase {
   Future<List<Adjudication>> adjudicationsFor(
     String patientId, {
     int limit = 200,
+    String? serverOrigin,
   }) async {
     final db = await database;
+    final where = serverOrigin != null && serverOrigin.isNotEmpty
+        ? 'patientId = ? AND (serverOrigin = ? OR serverOrigin = \'\')'
+        : 'patientId = ?';
+    final whereArgs = serverOrigin != null && serverOrigin.isNotEmpty
+        ? [patientId, serverOrigin]
+        : [patientId];
     final rows = await db.query(
       'adjudications',
-      where: 'patientId = ?',
-      whereArgs: [patientId],
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'decidedAt DESC',
       limit: limit,
     );
@@ -892,13 +1130,22 @@ class LocalDatabase {
 
   /// Every alert id under [patientId] that already carries a verdict — used to
   /// show the doctor only what still needs review (§5.4).
-  Future<Set<String>> adjudicatedAlertIds(String patientId) async {
+  Future<Set<String>> adjudicatedAlertIds(
+    String patientId, {
+    String? serverOrigin,
+  }) async {
     final db = await database;
+    final where = serverOrigin != null && serverOrigin.isNotEmpty
+        ? 'patientId = ? AND (serverOrigin = ? OR serverOrigin = \'\')'
+        : 'patientId = ?';
+    final whereArgs = serverOrigin != null && serverOrigin.isNotEmpty
+        ? [patientId, serverOrigin]
+        : [patientId];
     final rows = await db.query(
       'adjudications',
       columns: ['alertId'],
-      where: 'patientId = ?',
-      whereArgs: [patientId],
+      where: where,
+      whereArgs: whereArgs,
     );
     return rows.map((r) => r['alertId'] as String).toSet();
   }
@@ -912,12 +1159,21 @@ class LocalDatabase {
     );
   }
 
-  Future<List<AlertResponse>> alertResponsesFor(String alertId) async {
+  Future<List<AlertResponse>> alertResponsesFor(
+    String alertId, {
+    String? serverOrigin,
+  }) async {
     final db = await database;
+    final where = serverOrigin != null && serverOrigin.isNotEmpty
+        ? 'alertId = ? AND serverOrigin = ?'
+        : 'alertId = ?';
+    final whereArgs = serverOrigin != null && serverOrigin.isNotEmpty
+        ? [alertId, serverOrigin]
+        : [alertId];
     final rows = await db.query(
       'alert_responses',
-      where: 'alertId = ?',
-      whereArgs: [alertId],
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'at ASC',
     );
     return rows
@@ -937,12 +1193,19 @@ class LocalDatabase {
   Future<List<ClinicalNote>> clinicalNotesFor(
     String patientId, {
     int limit = 100,
+    String? serverOrigin,
   }) async {
     final db = await database;
+    final where = serverOrigin != null && serverOrigin.isNotEmpty
+        ? 'patientId = ? AND (serverOrigin = ? OR serverOrigin = \'\')'
+        : 'patientId = ?';
+    final whereArgs = serverOrigin != null && serverOrigin.isNotEmpty
+        ? [patientId, serverOrigin]
+        : [patientId];
     final rows = await db.query(
       'clinical_notes',
-      where: 'patientId = ?',
-      whereArgs: [patientId],
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'writtenAt DESC',
       limit: limit,
     );
@@ -952,6 +1215,328 @@ class LocalDatabase {
   }
 
   // ----------------------------------------------------------------- outbox (v3)
+
+  /// Includes exhausted intents so they remain visible and block dependent writes.
+  Future<List<OutboxItem>> careOutboxForOwner(String ownerId, {String? origin}) async {
+    final db = await database;
+    final rows = await db.query(
+      'outbox',
+      where: 'path != ?',
+      whereArgs: ['/cloud/sync'],
+      orderBy: 'createdAt ASC, rowid ASC',
+    );
+    return rows
+        .map((row) => OutboxItem.fromMap(Map<String, dynamic>.from(row)))
+        .where((item) =>
+            item.body['_ownerId'] == ownerId &&
+            (origin == null ||
+                origin.isEmpty ||
+                item.body['_ownerOrigin'] == origin))
+        .toList();
+  }
+
+  Future<int> retryCareWrites({
+    required String ownerId,
+    required String origin,
+  }) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      var reset = 0;
+      final rows = await txn.query(
+        'outbox',
+        where: 'attempts > 0 AND path != ?',
+        whereArgs: ['/cloud/sync'],
+      );
+      for (final row in rows) {
+        final item = OutboxItem.fromMap(Map<String, dynamic>.from(row));
+        if (item.body['_ownerId'] != ownerId ||
+            item.body['_ownerOrigin'] != origin) {
+          continue;
+        }
+        reset += await txn.update(
+          'outbox',
+          {'attempts': 0, 'lastError': null},
+          where: 'id = ? AND body = ?',
+          whereArgs: [item.id, row['body']],
+        );
+      }
+      return reset;
+    });
+  }
+
+  static const _careTables = {
+    'emergency_contacts',
+    'medical_card',
+    'trigger_entries',
+    'seizure_logs',
+    'clinical_notes',
+    'consents',
+    'adjudications',
+    'alert_responses',
+  };
+
+  static void _validateCareTable(String table) {
+    if (!_careTables.contains(table)) {
+      throw ArgumentError.value(table, 'table', 'Unsupported care table');
+    }
+  }
+
+  static String? _carePatientId(OutboxItem item) {
+    final parts = Uri.tryParse(item.path)?.pathSegments;
+    if (parts == null || parts.length < 2 || parts.first != 'patients') {
+      return null;
+    }
+    return parts[1].isEmpty ? null : parts[1];
+  }
+
+  /// Commit the visible local change and its durable delivery together. A
+  /// duplicate delivery ID aborts the transaction instead of losing a write.
+  Future<void> persistCareWrite({
+    required OutboxItem item,
+    String? table,
+    Map<String, Object?>? row,
+    String? deleteId,
+    String? patientId,
+  }) async {
+    final metadataTable = item.body['_table'];
+    if (metadataTable != null && metadataTable is! String) {
+      throw ArgumentError('Invalid care table metadata');
+    }
+    final careTable = table ?? metadataTable as String?;
+    if (careTable != null) {
+      _validateCareTable(careTable);
+    }
+    if (table != null && metadataTable != null && table != metadataTable) {
+      throw ArgumentError('Care table does not match delivery metadata');
+    }
+    if (row != null && deleteId != null) {
+      throw ArgumentError('A care write cannot both save and delete');
+    }
+    if ((row != null || deleteId != null) && careTable == null) {
+      throw ArgumentError('A care change requires a table');
+    }
+    if (deleteId != null && (patientId == null || patientId.isEmpty)) {
+      throw ArgumentError('A care deletion requires an explicit patientId');
+    }
+    final rowPatient = row?['patientId'];
+    if (row != null && (rowPatient is! String || rowPatient.isEmpty)) {
+      throw ArgumentError('A care row requires a patientId');
+    }
+    final scopedPatient = patientId ?? rowPatient as String?;
+    if (scopedPatient != null &&
+        (_carePatientId(item) != scopedPatient ||
+            (row != null && rowPatient != scopedPatient))) {
+      throw ArgumentError('Care patient does not match delivery path');
+    }
+    final rowId =
+        deleteId ??
+        (careTable == 'medical_card' ? rowPatient : row?['id']) ??
+        item.body['_rowId'];
+    if (careTable != null && (rowId is! String || rowId.isEmpty)) {
+      throw ArgumentError('A care delivery requires a row ID');
+    }
+    if (item.body['_rowId'] != null && item.body['_rowId'] != rowId) {
+      throw ArgumentError('Care row does not match delivery metadata');
+    }
+    final origin = (item.body['_ownerOrigin'] as String?) ??
+        (row?['serverOrigin'] as String?) ??
+        '';
+    final delivery = item.toMap();
+    delivery['body'] = jsonEncode({
+      ...item.body,
+      '_table': ?careTable,
+      '_rowId': ?rowId,
+      if (origin.isNotEmpty) '_ownerOrigin': origin,
+    });
+    final db = await database;
+    await db.transaction((txn) async {
+      if (row != null) {
+        final key = careTable == 'medical_card' ? 'patientId' : 'id';
+        final queryWhere = careTable == 'medical_card' && origin.isNotEmpty
+            ? 'patientId = ? AND serverOrigin = ?'
+            : '$key = ?';
+        final queryArgs = careTable == 'medical_card' && origin.isNotEmpty
+            ? [scopedPatient, origin]
+            : [rowId];
+        final existing = await txn.query(
+          careTable!,
+          columns: ['patientId'],
+          where: queryWhere,
+          whereArgs: queryArgs,
+          limit: 1,
+        );
+        if (existing.isNotEmpty &&
+            existing.first['patientId'] != scopedPatient) {
+          throw StateError('Care row belongs to another patient');
+        }
+        await txn.insert(careTable, {
+          ...row,
+          'synced': 0,
+          if (origin.isNotEmpty) 'serverOrigin': origin,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      } else if (deleteId != null) {
+        final key = careTable == 'medical_card' ? 'patientId' : 'id';
+        final delWhere = origin.isNotEmpty
+            ? '$key = ? AND patientId = ? AND (serverOrigin = ? OR serverOrigin = \'\')'
+            : '$key = ? AND patientId = ?';
+        final delArgs = origin.isNotEmpty
+            ? [deleteId, scopedPatient, origin]
+            : [deleteId, scopedPatient];
+        await txn.delete(
+          careTable!,
+          where: delWhere,
+          whereArgs: delArgs,
+        );
+      }
+      await txn.insert(
+        'outbox',
+        delivery,
+        conflictAlgorithm: ConflictAlgorithm.abort,
+      );
+    });
+  }
+
+  /// Remove only this accepted delivery. A newer queued edit (even exhausted)
+  /// keeps the current local row unsynced until that edit is accepted as well.
+  Future<void> acknowledgeCareWrite(OutboxItem item) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'outbox',
+        where: 'id = ?',
+        whereArgs: [item.id],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        return;
+      }
+      final stored = OutboxItem.fromMap(Map<String, dynamic>.from(rows.single));
+      if (stored.method != item.method ||
+          stored.path != item.path ||
+          jsonEncode(stored.body) != jsonEncode(item.body) ||
+          stored.createdAt != item.createdAt) {
+        throw StateError('Delivery changed before acknowledgment');
+      }
+      final table = stored.body['_table'];
+      final rowId = stored.body['_rowId'];
+      if (table != null) {
+        if (table is! String || rowId is! String || rowId.isEmpty) {
+          throw StateError('Invalid care delivery metadata');
+        }
+        _validateCareTable(table);
+      }
+      await txn.delete('outbox', where: 'id = ?', whereArgs: [item.id]);
+      if (table == null) {
+        return;
+      }
+      final patient = _carePatientId(stored);
+      if (patient == null) {
+        return;
+      }
+      final remaining = await txn.query('outbox', columns: ['body', 'path']);
+      for (final pending in remaining) {
+        final body = jsonDecode(pending['body'] as String);
+        if (body is! Map) {
+          return; // Unknown pending state cannot prove delivery.
+        }
+        if (body['_table'] == table &&
+            body['_rowId'] == rowId &&
+            body['_ownerId'] == stored.body['_ownerId'] &&
+            body['_ownerOrigin'] == stored.body['_ownerOrigin']) {
+          return;
+        }
+      }
+      final origin = stored.body['_ownerOrigin'] as String?;
+      final ackWhere = table == 'medical_card'
+          ? (origin != null && origin.isNotEmpty
+              ? 'patientId = ? AND serverOrigin = ?'
+              : 'patientId = ?')
+          : (origin != null && origin.isNotEmpty
+              ? 'id = ? AND patientId = ? AND serverOrigin = ?'
+              : 'id = ? AND patientId = ?');
+      final ackArgs = table == 'medical_card'
+          ? (origin != null && origin.isNotEmpty ? [patient, origin] : [patient])
+          : (origin != null && origin.isNotEmpty
+              ? [rowId, patient, origin]
+              : [rowId, patient]);
+      await txn.update(
+        table as String,
+        {'synced': 1},
+        where: ackWhere,
+        whereArgs: ackArgs,
+      );
+    });
+  }
+
+  /// Tombstones stay protective after retry exhaustion. A stale remote read
+  /// must not resurrect a local deletion awaiting this owner's server.
+  Future<Set<String>> queuedCareDeletes({
+    required String patientId,
+    required String ownerId,
+    required String origin,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'outbox',
+      columns: ['path', 'body'],
+      where: 'UPPER(method) = ?',
+      whereArgs: ['DELETE'],
+    );
+    final prefix = '/patients/$patientId/';
+    final paths = <String>{};
+    for (final row in rows) {
+      final path = row['path'] as String;
+      if (!path.startsWith(prefix)) {
+        continue;
+      }
+      final body = jsonDecode(row['body'] as String);
+      if (body is Map &&
+          body['_ownerId'] == ownerId &&
+          body['_ownerOrigin'] == origin) {
+        paths.add(path);
+      }
+    }
+    return paths;
+  }
+
+  /// Apply a remote deletion only to a delivered cached row. Local unsent
+  /// edits retain their outbox state for reconciliation instead of disappearing.
+  Future<void> removeSyncedCareRows({
+    required String table,
+    required String patientId,
+    required List<String> ids,
+    String? serverOrigin,
+  }) async {
+    if (table != 'emergency_contacts' && table != 'trigger_entries') {
+      throw ArgumentError.value(table, 'table', 'Unsupported deletion table');
+    }
+    if (patientId.isEmpty) {
+      throw ArgumentError('A patientId is required');
+    }
+    final unique = ids.toSet().toList();
+    if (unique.isEmpty) {
+      return;
+    }
+    final db = await database;
+    await db.transaction((txn) async {
+      for (var start = 0; start < unique.length; start += 200) {
+        final end = start + 200 < unique.length ? start + 200 : unique.length;
+        final chunk = unique.sublist(start, end);
+        final inClause = List.filled(chunk.length, '?').join(',');
+        final where = serverOrigin != null && serverOrigin.isNotEmpty
+            ? 'patientId = ? AND synced = 1 AND serverOrigin = ? AND id IN ($inClause)'
+            : 'patientId = ? AND synced = 1 AND id IN ($inClause)';
+        final whereArgs = serverOrigin != null && serverOrigin.isNotEmpty
+            ? [patientId, serverOrigin, ...chunk]
+            : [patientId, ...chunk];
+        await txn.delete(
+          table,
+          where: where,
+          whereArgs: whereArgs,
+        );
+      }
+    });
+  }
 
   Future<void> enqueueOutbox(OutboxItem item) async {
     final db = await database;
@@ -1012,6 +1597,7 @@ class LocalDatabase {
   /// Mark a locally-created row as delivered. [table] is always one of the v3
   /// care tables; the call sites pass a constant, never user input.
   Future<void> markCareSynced(String table, String id) async {
+    _validateCareTable(table);
     final db = await database;
     await db.update(
       table,
@@ -1037,11 +1623,15 @@ class LocalDatabase {
             content TEXT NOT NULL,
             createdAt TEXT NOT NULL,
             readAt TEXT,
-            synced INTEGER NOT NULL DEFAULT 0
+            synced INTEGER NOT NULL DEFAULT 0,
+            serverOrigin TEXT NOT NULL DEFAULT ''
           )
         ''');
     await db.execute(
       'CREATE INDEX IF NOT EXISTS ix_local_messages_patient_channel ON messages(patientId, channelType)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS ix_local_messages_patient_origin ON messages(patientId, serverOrigin)',
     );
     await db.execute(
       'CREATE INDEX IF NOT EXISTS ix_local_messages_created_at ON messages(createdAt)',
@@ -1061,12 +1651,19 @@ class LocalDatabase {
     String patientId,
     String channelType, {
     int limit = 100,
+    String? serverOrigin,
   }) async {
     final db = await database;
+    final where = serverOrigin != null && serverOrigin.isNotEmpty
+        ? 'patientId = ? AND channelType = ? AND serverOrigin = ?'
+        : 'patientId = ? AND channelType = ?';
+    final whereArgs = serverOrigin != null && serverOrigin.isNotEmpty
+        ? [patientId, channelType, serverOrigin]
+        : [patientId, channelType];
     final rows = await db.query(
       'messages',
-      where: 'patientId = ? AND channelType = ?',
-      whereArgs: [patientId, channelType],
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'createdAt DESC, id DESC',
       limit: limit,
     );
@@ -1102,5 +1699,84 @@ class LocalDatabase {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // v7: Offline Encrypted Credentials
+  // ---------------------------------------------------------------------------
+
+  Future<void> _createV7Tables(Database db) async {
+    await db.execute('''
+          CREATE TABLE IF NOT EXISTS user_credentials (
+            username TEXT NOT NULL,
+            serverOrigin TEXT NOT NULL,
+            passwordHash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            userProfile TEXT NOT NULL,
+            role TEXT NOT NULL,
+            userId TEXT NOT NULL,
+            updatedAt TEXT NOT NULL,
+            PRIMARY KEY (username, serverOrigin)
+          )
+        ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS ix_user_credentials_username ON user_credentials(username)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS ix_user_credentials_origin ON user_credentials(serverOrigin)',
+    );
+  }
+
+  Future<void> saveUserCredentials({
+    required String username,
+    required String serverOrigin,
+    required String passwordHash,
+    required String salt,
+    required String userProfile,
+    required String role,
+    required String userId,
+    required String updatedAt,
+  }) async {
+    final db = await database;
+    await db.insert('user_credentials', {
+      'username': username,
+      'serverOrigin': serverOrigin,
+      'passwordHash': passwordHash,
+      'salt': salt,
+      'userProfile': userProfile,
+      'role': role,
+      'userId': userId,
+      'updatedAt': updatedAt,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<Map<String, dynamic>?> getUserCredentials({
+    required String username,
+    required String serverOrigin,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'user_credentials',
+      where: 'username = ? AND serverOrigin = ?',
+      whereArgs: [username, serverOrigin],
+      limit: 1,
+    );
+    if (rows.isNotEmpty) {
+      return Map<String, dynamic>.from(rows.first);
+    }
+    // Fallback matching: normalized trailing slashes and case-insensitive username
+    final normalizedOrigin = serverOrigin.replaceAll(RegExp(r'/+$'), '');
+    final altRows = await db.query(
+      'user_credentials',
+      where: 'LOWER(username) = LOWER(?)',
+      whereArgs: [username.trim()],
+    );
+    for (final r in altRows) {
+      final origin = (r['serverOrigin'] as String?)?.replaceAll(RegExp(r'/+$'), '');
+      if (origin == normalizedOrigin) {
+        return Map<String, dynamic>.from(r);
+      }
+    }
+    return null;
   }
 }

@@ -96,6 +96,8 @@ docs/*.pdf
 .coverage
 htmlcov/
 .pytest_cache/
+.pytest_temp/
+**/.pytest_temp/
 **/__pycache__/
 
 # Scratch files & temporary prompts

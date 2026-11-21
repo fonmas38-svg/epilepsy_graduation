@@ -1,0 +1,6 @@
+interface:
+  display_name: "Epilepsy System"
+  short_description: "Unified workflow for the epilepsy monitoring system"
+  default_prompt: "Use $epilepsy-system and read the matching references/*.md modules (including supabase-and-migrations.md and static-analysis-and-tooling.md when relevant) to audit or improve this project's requested flow and verify its UI, service contract, permissions, schemas, and failure states."
+policy:
+  allow_implicit_invocation: true

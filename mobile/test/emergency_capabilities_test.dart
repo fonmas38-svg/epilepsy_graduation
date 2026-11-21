@@ -23,6 +23,10 @@ class FakeLocation implements LocationPlatform {
   @override
   Future<LocationPermission> requestPermission() async => access;
   @override
+  Future<bool> openLocationSettings() async => true;
+  @override
+  Future<bool> openAppSettings() async => true;
+  @override
   Future<GpsFix> acquire() async =>
       waitForever ? Completer<GpsFix>().future : fix;
 }

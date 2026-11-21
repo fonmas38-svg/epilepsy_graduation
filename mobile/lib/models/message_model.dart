@@ -14,6 +14,7 @@ class ChatMessage {
     required this.createdAt,
     this.readAt,
     this.synced = true,
+    this.serverOrigin = '',
   });
 
   final String id;
@@ -26,6 +27,7 @@ class ChatMessage {
   final DateTime createdAt;
   final DateTime? readAt;
   final bool synced;
+  final String serverOrigin;
 
   bool get isDoctorPatient => channelType == 'doctor_patient';
   bool get isFamilyPatient => channelType == 'family_patient';
@@ -41,6 +43,7 @@ class ChatMessage {
     DateTime? createdAt,
     DateTime? readAt,
     bool? synced,
+    String? serverOrigin,
   }) =>
       ChatMessage(
         id: id ?? this.id,
@@ -53,6 +56,7 @@ class ChatMessage {
         createdAt: createdAt ?? this.createdAt,
         readAt: readAt ?? this.readAt,
         synced: synced ?? this.synced,
+        serverOrigin: serverOrigin ?? this.serverOrigin,
       );
 
   Map<String, dynamic> toMap() => {
@@ -66,6 +70,7 @@ class ChatMessage {
         'createdAt': createdAt.toIso8601String(),
         'readAt': readAt?.toIso8601String(),
         'synced': synced ? 1 : 0,
+        'serverOrigin': serverOrigin,
       };
 
   factory ChatMessage.fromMap(Map<String, dynamic> map) {
@@ -104,6 +109,7 @@ class ChatMessage {
       createdAt: parsedCreated,
       readAt: parsedRead,
       synced: !map.containsKey('synced') || map['synced'] == 1 || map['synced'] == true,
+      serverOrigin: map['serverOrigin'] as String? ?? '',
     );
   }
 }

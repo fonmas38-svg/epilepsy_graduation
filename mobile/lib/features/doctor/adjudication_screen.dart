@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/errors/failure.dart';
+import '../../core/enums.dart';
+import '../../core/router/route_names.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/risk_view.dart';
@@ -56,13 +58,24 @@ RiskView verdictView(AdjudicationVerdict v) => switch (v) {
 /// it works on a hospital connection that comes and goes. Verdicts are written
 /// locally and flushed through the outbox like every other care write.
 class AdjudicationScreen extends StatefulWidget {
-  const AdjudicationScreen({super.key});
+  const AdjudicationScreen({super.key, this.args});
+  final PatientRouteArgs? args;
 
   @override
   State<AdjudicationScreen> createState() => _AdjudicationScreenState();
 }
 
 class _AdjudicationScreenState extends State<AdjudicationScreen> {
+  late final AppState _app;
+  late final AppUser? _owner;
+  late final String _origin;
+  late final int _revision;
+  bool get _current =>
+      mounted &&
+      identical(_owner, _app.auth.currentUser) &&
+      _owner?.role == UserRole.doctor &&
+      _origin == _app.api.baseUrl &&
+      _revision == _app.api.tokens.revision;
   bool _loading = true;
   bool _busy = false;
   List<_Pending> _items = const [];
@@ -71,12 +84,17 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
   @override
   void initState() {
     super.initState();
+    _app = context.read<AppState>();
+    _owner = _app.auth.currentUser;
+    _origin = _app.api.baseUrl;
+    _revision = _app.api.tokens.revision;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _load();
     });
   }
 
   Future<void> _load() async {
+    if (!_current) return;
     final app = context.read<AppState>();
     setState(() {
       _loading = true;
@@ -85,6 +103,10 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
     try {
       final out = <_Pending>[];
       for (final p in app.auth.accessiblePatients()) {
+        if (widget.args != null && widget.args!.patientId != p.patientId) {
+          continue;
+        }
+        if (!_current) return;
         final decided = await app.db.adjudicatedAlertIds(p.patientId);
         final alerts = await app.db.alertsFor(p.patientId, limit: 100);
         for (final a in alerts) {
@@ -96,13 +118,13 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
         }
       }
       out.sort((x, y) => y.alert.timestamp.compareTo(x.alert.timestamp));
-      if (!mounted) return;
+      if (!_current) return;
       setState(() {
         _items = out;
         _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!_current) return;
       setState(() {
         _failure = Failure.from(e);
         _loading = false;
@@ -111,6 +133,11 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
   }
 
   Future<void> _decide(_Pending item) async {
+    if (!_current ||
+        _busy ||
+        !_app.auth.canAccessPatient(item.alert.patientId)) {
+      return;
+    }
     final l = AppLocalizations.of(context);
     final app = context.read<AppState>();
     final draft = await showModalBottomSheet<_Draft>(
@@ -118,7 +145,7 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
       isScrollControlled: true,
       builder: (_) => _VerdictSheet(item: item),
     );
-    if (draft == null || !mounted) return;
+    if (draft == null || !_current) return;
     setState(() => _busy = true);
     try {
       await app.care.adjudicate(
@@ -126,21 +153,18 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
         alertId: item.alert.id,
         verdict: draft.verdict,
         notes: draft.notes,
-        doctorId: app.auth.currentUser?.uid ?? '',
+        doctorId: _owner?.uid ?? '',
       );
-      if (!mounted) return;
+      if (!_current || !mounted) return;
       // Dropped from the queue immediately rather than after a reload: the row
       // has a verdict now, and leaving it visible invites a second one.
       setState(() {
         _items = _items.where((i) => i.alert.id != item.alert.id).toList();
         _busy = false;
       });
-      AppSnack.success(
-        context,
-        app.apiOnline ? l.adjSaved : l.savedLocallyWillSync,
-      );
+      AppSnack.success(context, l.savedLocallyWillSync);
     } catch (_) {
-      if (!mounted) return;
+      if (!_current || !mounted) return;
       setState(() => _busy = false);
       AppSnack.error(context, l.errUnknown);
     }
@@ -150,6 +174,7 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
+    if (!_current) return const Scaffold(body: SizedBox.shrink());
 
     return Scaffold(
       appBar: AppBar(
@@ -385,10 +410,7 @@ class _VerdictSheetState extends State<_VerdictSheet> {
                           ? null
                           : () => Navigator.pop(
                               context,
-                              _Draft(
-                                verdict: _verdict!,
-                                notes: _notes.text,
-                              ),
+                              _Draft(verdict: _verdict!, notes: _notes.text),
                             ),
                       child: Text(l.save),
                     ),
@@ -430,9 +452,7 @@ class _VerdictOption extends StatelessWidget {
           onTap: onTap,
           borderRadius: Radii.rMd,
           child: Container(
-            constraints: const BoxConstraints(
-              minHeight: A11y.minTouchTarget,
-            ),
+            constraints: const BoxConstraints(minHeight: A11y.minTouchTarget),
             padding: Insets.tile,
             decoration: BoxDecoration(
               color: selected ? tone.container : null,
@@ -453,9 +473,7 @@ class _VerdictOption extends StatelessWidget {
                   child: Text(
                     label,
                     style: theme.textTheme.bodyLarge?.copyWith(
-                      fontWeight: selected
-                          ? FontWeight.w800
-                          : FontWeight.w500,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
                       color: selected ? tone.foreground : null,
                     ),
                   ),

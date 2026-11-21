@@ -36,6 +36,16 @@
 # SMS / URL launcher
 -keep class io.flutter.plugins.urllauncher.** { *; }
 
+# Geolocator
+-keep class com.baseflow.geolocator.** { *; }
+
+# SharedPreferences & SQFlite
+-keep class io.flutter.plugins.sharedpreferences.** { *; }
+-keep class com.tekartik.sqflite.** { *; }
+
+# Play Core deferred components (not used directly, suppress Flutter embedding references)
+-dontwarn com.google.android.play.core.**
+
 # General: don't warn about missing optional deps
 -dontwarn javax.annotation.**
 -dontwarn org.conscrypt.**

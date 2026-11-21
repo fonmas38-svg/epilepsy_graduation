@@ -8,15 +8,24 @@
 /// restoration — are all implemented in `AppRouter` on top of `Navigator`.
 abstract final class Routes {
   static const login = '/login';
+  static const account = '/account';
+  static const accountSessions = '/account/sessions';
+  static const privacyRequests = '/account/erasure-requests';
+  static const devicePermissions = '/account/device-permissions';
+  static const patientDevice = '/patient/device';
+  static const patientMonitoring = '/patient/monitoring';
 
   // Patient (§3)
   static const patient = '/patient';
+  static const patientEntry = '/patient/entry';
+  static const patientSeizureEntry = '/patient/entry/seizure';
   static const patientHistory = '/patient/history';
   static const patientMedications = '/patient/medications';
   static const patientEmergency = '/patient/emergency';
   static const patientTriggers = '/patient/triggers';
   static const patientSettings = '/patient/settings';
   static const patientConsents = '/patient/consents';
+  static const patientCaregivers = '/patient/caregivers';
   static const patientSimulator = '/patient/simulator';
 
   // Family (§4)
@@ -30,6 +39,9 @@ abstract final class Routes {
 
   // Admin (§6)
   static const admin = '/admin';
+  static const adminAccounts = '/admin/accounts';
+  static const adminLinks = '/admin/links';
+  static const adminDevices = '/admin/devices';
 
   /// Full-screen active alert (§3.2). Shared by all roles: a family member
   /// tapping the push notification and the patient whose device raised it land
@@ -54,7 +66,11 @@ class AlertRouteArgs {
 
 /// Arguments for [Routes.doctorPatient] and [Routes.familyRespond].
 class PatientRouteArgs {
-  const PatientRouteArgs({required this.patientId, this.alertId, this.patientName});
+  const PatientRouteArgs({
+    required this.patientId,
+    this.alertId,
+    this.patientName,
+  });
 
   final String patientId;
   final String? alertId;

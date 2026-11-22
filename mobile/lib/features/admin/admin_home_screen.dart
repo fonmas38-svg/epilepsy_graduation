@@ -189,6 +189,115 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         app.api.baseUrl == origin;
   }
 
+  Future<void> _toggleDoctorDisabled(Map<String, dynamic> doctor) async {
+    final docId = doctor['id']?.toString() ?? '';
+    final name = doctor['name'] ?? doctor['username'] ?? '';
+    final isDisabled = doctor['disabled'] == true;
+    final actionText = isDisabled ? 'تفعيل حساب الطبيب $name' : 'تعطيل حساب الطبيب $name';
+    final verified = await _requireAdminSecurityVerification(actionText);
+    if (!verified || !mounted) return;
+
+    final app = context.read<AppState>();
+    try {
+      if (isDisabled) {
+        await app.api.adminEnableUser(docId);
+        if (mounted) AppSnack.success(context, 'تم تفعيل حساب الطبيب بنجاح');
+      } else {
+        await app.api.adminDisableUser(docId);
+        if (mounted) AppSnack.success(context, 'تم تعطيل حساب الطبيب بنجاح');
+      }
+      await _load('users');
+    } catch (e) {
+      if (mounted) AppSnack.error(context, Failure.from(e).message(AppLocalizations.of(context)));
+    }
+  }
+
+  Future<void> _resetDoctorPassword(Map<String, dynamic> doctor) async {
+    final docId = doctor['id']?.toString() ?? '';
+    final name = doctor['name'] ?? doctor['username'] ?? '';
+    final verified = await _requireAdminSecurityVerification('إعادة تعيين كلمة مرور الطبيب $name');
+    if (!verified || !mounted) return;
+
+    final app = context.read<AppState>();
+    try {
+      final generated = await app.api.adminResetUserPassword(docId);
+      if (!mounted) return;
+      if (generated != null && generated.isNotEmpty) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('كلمة المرور المؤقتة الجديدة'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('تم توليد كلمة مرور جديدة للطبيب "$name":'),
+                const SizedBox(height: 12),
+                SelectableText(
+                  generated,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.5,
+                    color: Color(0xFF0066FF),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'يرجى نسخ كلمة المرور ومشاركتها مع الطبيب بشكل آمن. لن تظهر مجدداً.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('تم الحفظ'),
+              ),
+            ],
+          ),
+        );
+      } else {
+        AppSnack.success(context, 'تم إعادة تعيين كلمة المرور بنجاح');
+      }
+      await _loadAdminData();
+    } catch (e) {
+      if (mounted) AppSnack.error(context, Failure.from(e).message(AppLocalizations.of(context)));
+    }
+  }
+
+  Future<void> _deleteDoctor(Map<String, dynamic> doctor) async {
+    final docId = doctor['id']?.toString() ?? '';
+    final name = doctor['name'] ?? doctor['username'] ?? '';
+    final verified = await _requireAdminSecurityVerification('الحذف النهائي لحساب الطبيب $name وإلغاء كافة إسناداته');
+    if (!verified || !mounted) return;
+
+    final app = context.read<AppState>();
+    try {
+      await app.api.adminDeleteUser(docId);
+      if (mounted) AppSnack.success(context, 'تم حذف حساب الطبيب نهائياً');
+      await _loadAdminData();
+    } catch (e) {
+      if (mounted) AppSnack.error(context, Failure.from(e).message(AppLocalizations.of(context)));
+    }
+  }
+
+  Future<void> _revokeDoctorSessions(Map<String, dynamic> doctor) async {
+    final docId = doctor['id']?.toString() ?? '';
+    final name = doctor['name'] ?? doctor['username'] ?? '';
+    final verified = await _requireAdminSecurityVerification('فك قفل الأجهزة والجلسات للحساب $name');
+    if (!verified || !mounted) return;
+
+    final app = context.read<AppState>();
+    try {
+      final revoked = await app.api.adminRevokeUserSessions(docId);
+      if (mounted) AppSnack.success(context, 'تم إنهاء $revoked جلسة وفك قفل الجهاز بنجاح');
+      await _loadAdminData();
+    } catch (e) {
+      if (mounted) AppSnack.error(context, Failure.from(e).message(AppLocalizations.of(context)));
+    }
+  }
+
   Future<void> _openAddDoctorDialog() async {
     final verified = await _requireAdminSecurityVerification(
       'إضافة طبيب معالج جديد',
@@ -455,32 +564,189 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               ),
             ),
           ...doctors.map(
-            (doctor) => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '${doctor['name'] ?? doctor['username'] ?? ''}',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    Text(
-                      '${doctor['username'] ?? ''}${doctor['disabled'] == true ? (ar ? ' — معطل' : ' — disabled') : ''}',
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton(
-                      onPressed: () => Navigator.pushNamed(
-                        context,
-                        Routes.adminLinks,
-                        arguments: doctor['id'],
+            (doctor) {
+              final isDisabled = doctor['disabled'] == true;
+              final meta = doctor['meta'] as Map? ?? {};
+              final license = meta['licenseNumber']?.toString() ?? '';
+              final spec = meta['specialization']?.toString() ?? '';
+              final hospital = meta['hospitalAffiliation']?.toString() ?? '';
+
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 6),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            backgroundColor: isDisabled
+                                ? const Color(0xFFFEE2E2)
+                                : const Color(0xFFEFF6FF),
+                            child: Icon(
+                              Icons.medical_services_outlined,
+                              color: isDisabled
+                                  ? const Color(0xFFDC2626)
+                                  : const Color(0xFF0066FF),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${doctor['name'] ?? doctor['username'] ?? ''}',
+                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${doctor['username'] ?? ''}',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontFamily: 'monospace',
+                                    color: Color(0xFF64748B),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (isDisabled)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEE2E2),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: const Color(0xFFFCA5A5)),
+                              ),
+                              child: Text(
+                                ar ? 'معطّل' : 'Disabled',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFFDC2626),
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            )
+                          else
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFECFDF5),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: const Color(0xFFA7F3D0)),
+                              ),
+                              child: Text(
+                                ar ? 'نشط' : 'Active',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFF059669),
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
-                      child: Text(ar ? 'عرض روابط الرعاية' : 'View care links'),
-                    ),
-                  ],
+                      if (license.isNotEmpty || spec.isNotEmpty || hospital.isNotEmpty) ...[
+                        const Divider(height: 20),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 6,
+                          children: [
+                            if (license.isNotEmpty)
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.verified_outlined, size: 14, color: Color(0xFF059669)),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'MOH: $license',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF059669)),
+                                  ),
+                                ],
+                              ),
+                            if (spec.isNotEmpty)
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.badge_outlined, size: 14, color: Color(0xFF64748B)),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    spec,
+                                    style: const TextStyle(fontSize: 12, color: Color(0xFF475569)),
+                                  ),
+                                ],
+                              ),
+                            if (hospital.isNotEmpty)
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.local_hospital_outlined, size: 14, color: Color(0xFF64748B)),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    hospital,
+                                    style: const TextStyle(fontSize: 12, color: Color(0xFF475569)),
+                                  ),
+                                ],
+                              ),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.end,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: () => Navigator.pushNamed(
+                              context,
+                              Routes.adminLinks,
+                              arguments: doctor['id'],
+                            ),
+                            icon: const Icon(Icons.people_alt_outlined, size: 16),
+                            label: Text(ar ? 'المرضى' : 'Patients'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: () => _resetDoctorPassword(doctor),
+                            icon: const Icon(Icons.password_outlined, size: 16),
+                            label: Text(ar ? 'كلمة المرور' : 'Password'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: () => _revokeDoctorSessions(doctor),
+                            icon: const Icon(Icons.devices_other_outlined, size: 16),
+                            label: Text(ar ? 'فك ربط الأجهزة' : 'Revoke device'),
+                          ),
+                          if (isDisabled)
+                            FilledButton.tonalIcon(
+                              onPressed: () => _toggleDoctorDisabled(doctor),
+                              icon: const Icon(Icons.check_circle_outline, size: 16),
+                              label: Text(ar ? 'تفعيل' : 'Enable'),
+                            )
+                          else
+                            OutlinedButton.icon(
+                              onPressed: () => _toggleDoctorDisabled(doctor),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFFEA580C),
+                              ),
+                              icon: const Icon(Icons.block_outlined, size: 16),
+                              label: Text(ar ? 'تعطيل' : 'Disable'),
+                            ),
+                          IconButton(
+                            tooltip: ar ? 'حذف الحساب نهائياً' : 'Delete account',
+                            onPressed: () => _deleteDoctor(doctor),
+                            icon: const Icon(Icons.delete_forever_outlined, color: Color(0xFFDC2626)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ],
       ],

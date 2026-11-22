@@ -998,6 +998,68 @@ class ApiClient {
     return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  Future<void> adminDisableUser(String userId) async {
+    final r = await _postAuthed('/admin/users/$userId/disable', {});
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر تعطيل الحساب'),
+        statusCode: r.statusCode,
+      );
+    }
+  }
+
+  Future<void> adminEnableUser(String userId) async {
+    final r = await _postAuthed('/admin/users/$userId/enable', {});
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر تفعيل الحساب'),
+        statusCode: r.statusCode,
+      );
+    }
+  }
+
+  Future<String?> adminResetUserPassword(String userId, [String? password]) async {
+    final r = await _postAuthed(
+      '/admin/users/$userId/password',
+      {'password': ?password},
+    );
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر إعادة تعيين كلمة المرور'),
+        statusCode: r.statusCode,
+      );
+    }
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    return data['generatedPassword'] as String?;
+  }
+
+  Future<void> adminDeleteUser(String userId) async {
+    final r = await _client
+        .delete(
+          _u('/admin/users/$userId'),
+          headers: await _headers(),
+        )
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر حذف الحساب'),
+        statusCode: r.statusCode,
+      );
+    }
+  }
+
+  Future<int> adminRevokeUserSessions(String userId) async {
+    final r = await _postAuthed('/admin/users/$userId/revoke-sessions', {});
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر فك قفل جلسات المستخدم'),
+        statusCode: r.statusCode,
+      );
+    }
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    return (data['revoked'] as num?)?.toInt() ?? 0;
+  }
+
   Future<Map<String, dynamic>> verifyAdminDoctorMoh({
     required String licenseNumber,
     String? nationalId,

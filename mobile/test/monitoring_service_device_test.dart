@@ -170,7 +170,9 @@ void main() {
         sourceLabel: 'emulator_synthetic',
       ),
     );
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    for (var i = 0; i < 20 && monitoring.latestAssessment == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
 
     expect(monitoring.latestReading, isNotNull);
     expect(monitoring.latestAssessment, isNotNull);
@@ -190,7 +192,9 @@ void main() {
         sourceLabel: 'emulator_synthetic',
       ),
     );
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    for (var i = 0; i < 20 && monitoring.latestAssessment?.label != RiskLabel.highRisk; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
 
     expect(monitoring.latestAssessment!.label, RiskLabel.highRisk);
     final storedReadings = await db.recentReadings(patientId, limit: 10);

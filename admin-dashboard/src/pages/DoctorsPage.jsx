@@ -194,7 +194,59 @@ function CreateDoctorModal({ onClose, onCreated }) {
   const [username, setUsername] = useState('');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [licenseNumber, setLicenseNumber] = useState('');
+  const [specialization, setSpecialization] = useState('طب وجراحة المخ والأعصاب');
+  const [hospitalAffiliation, setHospitalAffiliation] = useState('');
+  const [nationalId, setNationalId] = useState('');
+  const [mohVerified, setMohVerified] = useState(false);
+  const [mohOverride, setMohOverride] = useState(false);
+  const [verifyingMoh, setVerifyingMoh] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const generateUsername = (fullName) => {
+    if (!fullName) return '';
+    const clean = fullName.replace(/^(د\.?|الدكتور|دكتور)\s+/i, '').trim();
+    const parts = clean.split(/\s+/).filter(Boolean);
+    if (!parts.length) return '';
+    const translit = parts
+      .map((p) => p.toLowerCase().replace(/[^a-z0-9]/g, ''))
+      .filter(Boolean);
+    const base = translit.length ? translit.join('.') : 'dr.' + Math.floor(1000 + Math.random() * 9000);
+    return base.startsWith('dr.') ? base : `dr.${base}`;
+  };
+
+  const onNameChange = (val) => {
+    setName(val);
+    if (!username || username.startsWith('dr.')) {
+      setUsername(generateUsername(val));
+    }
+  };
+
+  const handleVerifyMoh = async () => {
+    if (!licenseNumber.trim()) return toast.error('يرجى إدخال رقم الترخيص الطبي أولاً');
+    setVerifyingMoh(true);
+    try {
+      const res = await usersApi.verifyDoctorMoh({
+        license_number: licenseNumber.trim(),
+        national_id: nationalId.trim() || undefined,
+        name: name.trim() || undefined,
+      });
+      if (res.verified) {
+        setMohVerified(true);
+        toast.success(res.message || 'تم التحقق من ترخيص وزارة الصحة بنجاح');
+      } else {
+        setMohVerified(false);
+        toast.error(res.message || 'فشل التحقق من ترخيص وزارة الصحة');
+      }
+    } catch (err) {
+      setMohVerified(false);
+      toast.error(err.message || 'خطأ أثناء التحقق من السجل');
+    } finally {
+      setVerifyingMoh(false);
+    }
+  };
 
   const submit = async (e) => {
     e?.preventDefault?.();
@@ -207,6 +259,13 @@ function CreateDoctorModal({ onClose, onCreated }) {
         username: username.trim(),
         name: name.trim(),
         password: password || null,
+        phone: phone.trim() || undefined,
+        email: email.trim() || undefined,
+        license_number: licenseNumber.trim() || undefined,
+        specialization: specialization.trim() || undefined,
+        hospital_affiliation: hospitalAffiliation.trim() || undefined,
+        national_id: nationalId.trim() || undefined,
+        moh_override: mohOverride,
       });
       onCreated(res.generatedPassword);
     } catch (err) {
@@ -226,20 +285,28 @@ function CreateDoctorModal({ onClose, onCreated }) {
             إلغاء
           </button>
           <button className="btn btn--primary" onClick={submit} disabled={busy}>
-            {busy ? '…' : 'إنشاء'}
+            {busy ? '…' : 'إنشاء الحساب'}
           </button>
         </>
       }
     >
       <form onSubmit={submit}>
-        <FormField label="الاسم الكامل" name="name" value={name} onChange={setName} required autoFocus />
+        <FormField
+          label="الاسم الكامل"
+          name="name"
+          value={name}
+          onChange={onNameChange}
+          required
+          autoFocus
+          hint="سيظهر مسبوقاً برمز 'د.' في كامل النظام"
+        />
         <FormField
           label="اسم المستخدم"
           name="username"
           value={username}
           onChange={setUsername}
           required
-          hint="يُستخدم لتسجيل الدخول (3 أحرف على الأقل)"
+          hint="يُولد تلقائياً بنمط dr.name ويمكن تعديله"
         />
         <FormField
           label="كلمة المرور"
@@ -249,6 +316,71 @@ function CreateDoctorModal({ onClose, onCreated }) {
           onChange={setPassword}
           hint="اتركها فارغة لتوليد كلمة مرور مؤقتة تلقائياً"
         />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <FormField label="رقم الهاتف" name="phone" value={phone} onChange={setPhone} />
+          <FormField label="البريد الإلكتروني (اختياري)" name="email" type="email" value={email} onChange={setEmail} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <FormField
+            label="التخصص الطبي"
+            name="specialization"
+            value={specialization}
+            onChange={setSpecialization}
+          />
+          <FormField
+            label="المستشفى / جهة العمل"
+            name="hospitalAffiliation"
+            value={hospitalAffiliation}
+            onChange={setHospitalAffiliation}
+          />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <FormField
+            label="رقم الترخيص الطبي (MOH)"
+            name="licenseNumber"
+            value={licenseNumber}
+            onChange={setLicenseNumber}
+          />
+          <FormField
+            label="الرقم القومي / الهوية"
+            name="nationalId"
+            value={nationalId}
+            onChange={setNationalId}
+          />
+        </div>
+
+        <div style={{ margin: '14px 0', padding: '12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+            <div>
+              <span style={{ fontSize: '13px', fontWeight: 'bold' }}>التحقق من وزارة الصحة: </span>
+              {mohVerified ? (
+                <span style={{ color: '#16a34a', fontWeight: 'bold' }}>✓ معتمد وموثق</span>
+              ) : (
+                <span style={{ color: '#64748b' }}>غير معتمد حالياً</span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={handleVerifyMoh}
+              disabled={verifyingMoh || !licenseNumber.trim()}
+            >
+              {verifyingMoh ? 'جارِ التحقق…' : 'تحقق من السجل'}
+            </button>
+          </div>
+          <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input
+              type="checkbox"
+              id="mohOverride"
+              checked={mohOverride}
+              onChange={(e) => setMohOverride(e.target.checked)}
+            />
+            <label htmlFor="mohOverride" style={{ fontSize: '12px', color: '#475569', cursor: 'pointer' }}>
+              تجاوز التحقق الإداري (Administrative MOH Override)
+            </label>
+          </div>
+        </div>
+
         <button type="submit" style={{ display: 'none' }} />
       </form>
     </Modal>

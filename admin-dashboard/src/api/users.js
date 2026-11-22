@@ -15,6 +15,7 @@ export const usersApi = {
   listUsers: (params) => api.get('/admin/users' + qs(params)),
   getUser: (id) => api.get(`/admin/users/${id}`),
   createDoctor: (payload) => api.post('/admin/doctors', payload),
+  verifyDoctorMoh: (payload) => api.post('/admin/doctors/verify-moh', payload),
   createPatient: (payload) => api.post('/admin/patients', payload),
   createUser: (payload) => api.post('/admin/users', payload),
   updateUser: (id, payload) => api.patch(`/admin/users/${id}`, payload),

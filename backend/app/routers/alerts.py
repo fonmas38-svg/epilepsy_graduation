@@ -36,10 +36,13 @@ def evaluate_alert(
     label, confidence = result.label, result.confidence
     should_notify = label == "high_risk"
     severity = {"stable": "info", "watch": "warning", "high_risk": "critical"}[label]
+
+    lead = result.lead_time_min
+    lead_text = f" خلال ~{round(lead, 1) if lead and lead < 10 else int(lead or 0)} دقيقة" if lead and lead > 0 else ""
     message = {
         "stable": "المؤشرات الحيوية للمريض مستقرة وطبيعية.",
         "watch": "ملاحظة: المؤشرات الحيوية بحاجة لمتابعة هادئة.",
-        "high_risk": "رصد احتمال نوبة محتملة: يرجى اتخاذ تدابير الراحة والسلامة فوراً.",
+        "high_risk": f"رصد احتمال نوبة محتملة{lead_text}: يرجى اتخاذ تدابير الراحة والسلامة فوراً.",
     }[label]
     return AlertPayload(
         patient_id=body.patient_id,

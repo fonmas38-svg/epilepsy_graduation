@@ -223,12 +223,17 @@ class SyncService {
       remote = null;
     }
 
+    final lead = assessment.features['lead_time_min'] as num?;
+    final defaultMsg = (lead != null && lead > 0)
+        ? _l10n.riskDangerBody(lead >= 10 ? lead.toStringAsFixed(0) : lead.toStringAsFixed(1))
+        : _l10n.riskDangerBodyNoLead;
+
     final alert = AlertItem(
       id: _uuid.v4(),
       patientId: reading.patientId,
       timestamp: DateTime.now(),
       severity: remote?['severity'] as String? ?? 'critical',
-      message: remote?['message'] as String? ?? _l10n.riskDangerBodyNoLead,
+      message: remote?['message'] as String? ?? defaultMsg,
       recipients: List<String>.from(
         remote?['recipients'] as List? ??
             const ['patient', 'caregiver', 'doctor'],

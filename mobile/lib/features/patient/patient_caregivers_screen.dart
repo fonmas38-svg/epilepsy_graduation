@@ -4,6 +4,7 @@ import '../../core/enums.dart';
 import '../../core/errors/failure.dart';
 import '../../core/ui/common.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/models.dart';
 import '../../providers/app_state.dart';
 
 class PatientCaregiversScreen extends StatefulWidget {
@@ -14,7 +15,7 @@ class PatientCaregiversScreen extends StatefulWidget {
 }
 
 class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
-  Object? _owner;
+  AppUser? _owner;
   String? _origin;
   List<Map<String, dynamic>> _members = [];
   bool _loading = false, _busy = false, _loaded = false;
@@ -32,7 +33,7 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
   bool _current() {
     if (!mounted) return false;
     final app = context.read<AppState>();
-    return identical(app.auth.currentUser, _owner) &&
+    return AppUser.sameSessionOwner(app.auth.currentUser, _owner) &&
         app.api.baseUrl == _origin &&
         app.auth.currentUser?.role == UserRole.patient;
   }

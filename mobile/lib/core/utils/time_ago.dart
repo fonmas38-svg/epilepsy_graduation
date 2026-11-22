@@ -49,15 +49,36 @@ abstract final class TimeAgo {
     return l.agoLabel(span(delta, l));
   }
 
-  /// A wall-clock `HH:mm`, 24-hour, digits kept ASCII so they stay readable next
-  /// to Latin-numeral data from the backend.
-  static String clock(DateTime at) =>
-      '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
+  /// Localized 12-hour wall-clock (`h:mm ص/م` in Arabic, `h:mm AM/PM` in English) (#13).
+  static String clock(DateTime at, [AppLocalizations? l]) {
+    final ar = l?.isArabic ?? true;
+    final hour12 = at.hour % 12 == 0 ? 12 : at.hour % 12;
+    final minute = at.minute.toString().padLeft(2, '0');
+    final period = at.hour < 12 ? (ar ? 'ص' : 'AM') : (ar ? 'م' : 'PM');
+    return '$hour12:$minute $period';
+  }
+
+  /// Localized 12-hour wall-clock formatting (`h:mm ص/م` in Arabic, `h:mm AM/PM` in English).
+  static String clock12h(DateTime at, AppLocalizations l) => clock(at, l);
+
+  /// Formats a stored `"HH:mm"` string into 12-hour `h:mm ص/م` (`AM/PM`).
+  static String formatHhmm12h(String hhmm, {bool isArabic = true}) {
+    final parts = hhmm.trim().split(':');
+    if (parts.length < 2) return hhmm;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return hhmm;
+    final hour12 = h % 12 == 0 ? 12 : h % 12;
+    final minute = m.toString().padLeft(2, '0');
+    final period = h < 12 ? (isArabic ? 'ص' : 'AM') : (isArabic ? 'م' : 'PM');
+    return '$hour12:$minute $period';
+  }
 
   /// `yyyy-MM-dd` — used in exports and file names, never localised.
   static String isoDate(DateTime at) =>
       '${at.year}-${at.month.toString().padLeft(2, '0')}-${at.day.toString().padLeft(2, '0')}';
 
-  /// `yyyy-MM-dd HH:mm` for list rows that span more than one day.
-  static String stamp(DateTime at) => '${isoDate(at)} ${clock(at)}';
+  /// `yyyy-MM-dd h:mm ص/م` for list rows that span more than one day.
+  static String stamp(DateTime at, [AppLocalizations? l]) =>
+      '${isoDate(at)} ${clock(at, l)}';
 }

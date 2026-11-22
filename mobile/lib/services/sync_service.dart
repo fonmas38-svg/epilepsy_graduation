@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:uuid/uuid.dart';
@@ -42,8 +43,12 @@ class SyncService {
   final Map<String, List<Map<String, dynamic>>> cloudAlerts = {};
 
   Future<bool> get isOnline async {
-    final result = await Connectivity().checkConnectivity();
-    return result.any((e) => e != ConnectivityResult.none);
+    try {
+      final result = await Connectivity().checkConnectivity();
+      return result.any((e) => e != ConnectivityResult.none);
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<RiskAssessment> analyzeAndStore(VitalReading reading) async {
@@ -311,16 +316,79 @@ class SyncService {
         if (readingId is String) byReading.putIfAbsent(readingId, () => assessment);
       }
       cloudReadings.putIfAbsent(patientId, () => []);
-      for (final reading in pending) {
+      const maxBatchItems = 500;
+      const maxBatchBytes = 5 * 1024 * 1024;
+      var index = 0;
+      while (index < pending.length) {
         if (auth.currentUser?.uid != owner) break;
-        try {
+        final chunkReadings = <VitalReading>[];
+        final chunkItems = <Map<String, dynamic>>[];
+        var chunkBytes = 128; // envelope overhead
+        while (index < pending.length && chunkReadings.length < maxBatchItems) {
+          final reading = pending[index];
           final assessment = byReading[reading.id];
-          await api.cloudSync(patientId: patientId, reading: reading.toMap(), assessment: assessment?.toMap());
+          final item = <String, dynamic>{
+            'patient_id': patientId,
+            'reading': reading.toMap(),
+            if (assessment != null) 'assessment': assessment.toMap(),
+          };
+          final itemBytes = utf8.encode(jsonEncode(item)).length + 2;
+          if (chunkReadings.isNotEmpty && chunkBytes + itemBytes > maxBatchBytes) {
+            break;
+          }
+          chunkReadings.add(reading);
+          chunkItems.add(item);
+          chunkBytes += itemBytes;
+          index++;
+        }
+
+        final idempotencyKey =
+            'sync-batch-$patientId-${chunkReadings.first.id}-${chunkReadings.last.id}-${chunkReadings.length}';
+        try {
+          final res = await api.cloudSyncBatch(
+            patientId: patientId,
+            items: chunkItems,
+            idempotencyKey: idempotencyKey,
+          );
           if (auth.currentUser?.uid != owner) break;
-          await db.markSynced([reading.id]);
-          cloudReadings[patientId]!.add(reading.toMap());
+          final chunkIdSet = chunkReadings.map((r) => r.id).toSet();
+          final rawIds = res['synced_reading_ids'];
+          final ackIds = rawIds is List
+              ? rawIds.whereType<String>().where(chunkIdSet.contains).toList()
+              : chunkReadings.map((r) => r.id).toList();
+          await db.markSynced(ackIds);
+          final ackSet = ackIds.toSet();
+          for (final r in chunkReadings) {
+            if (ackSet.contains(r.id)) {
+              cloudReadings[patientId]!.add(r.toMap());
+            }
+          }
+        } on ApiException catch (e) {
+          if (e.statusCode == 404 || e.statusCode == 405) {
+            var singleFailed = false;
+            for (final reading in chunkReadings) {
+              if (auth.currentUser?.uid != owner) break;
+              try {
+                final assessment = byReading[reading.id];
+                await api.cloudSync(
+                  patientId: patientId,
+                  reading: reading.toMap(),
+                  assessment: assessment?.toMap(),
+                );
+                if (auth.currentUser?.uid != owner) break;
+                await db.markSynced([reading.id]);
+                cloudReadings[patientId]!.add(reading.toMap());
+              } catch (_) {
+                singleFailed = true;
+                break;
+              }
+            }
+            if (singleFailed) break;
+          } else {
+            break;
+          }
         } catch (_) {
-          // Preserve the reading and its assessment for an idempotent retry.
+          // Preserve remaining unsynced readings for an idempotent retry.
           break;
         }
       }

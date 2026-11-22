@@ -4,6 +4,7 @@ import '../../core/errors/failure.dart';
 import '../../core/ui/common.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/app_state.dart';
+import '../../services/eeg_hardware_device.dart';
 import '../../services/monitoring_service.dart';
 
 class DeviceLinkScreen extends StatefulWidget {
@@ -31,10 +32,21 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
       return await app.api.getObject('/device/contract');
     } catch (_) {
       return const {
+        'version': 1,
+        'intended_use': 'research_and_simulation_only',
         'sample_rate_hz': 256,
         'eeg_channels': 1,
-        'analysis_window_samples': 256,
+        'signal_units': 'normalized_demo',
+        'max_batch_samples': 512,
+        'analysis_window_samples': 262,
+        'channels': ['eeg', 'ecg', 'motion', 'hr'],
         'physical_device_compatible': false,
+        'requirements_for_physical_device': [
+          'Document sensor, electrode montage and reference, units and calibration',
+          'Implement validated sampling, timestamps, signal quality and missing-channel handling',
+          'Match the deployed model preprocessing and training input contract',
+          'Validate on independent continuous annotated patient recordings',
+        ],
       };
     }
   }
@@ -100,6 +112,41 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
                   const SizedBox(height: 8),
                   if (monitor.deviceId != null)
                     Text('${ar ? 'الجهاز' : 'Device'}: ${monitor.deviceId}'),
+                  FutureBuilder<DeviceDiagnostics?>(
+                    future: monitor.getDiagnostics(),
+                    builder: (context, diagSnapshot) {
+                      final diag = diagSnapshot.data;
+                      if (diag == null) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8, bottom: 4),
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            Chip(
+                              avatar: Icon(
+                                diag.isSimulated
+                                    ? Icons.memory_outlined
+                                    : Icons.bluetooth_connected,
+                                size: 16,
+                              ),
+                              label: Text(
+                                diag.isSimulated
+                                    ? (ar ? 'محاكي برمجي' : 'Software Emulator')
+                                    : (ar ? 'جهاز حقيقي' : 'Physical Device'),
+                              ),
+                            ),
+                            Chip(
+                              label: Text(
+                                '${diag.sampleRateHz} Hz • ${diag.samplesBuffered} ${ar ? 'عيّنة' : 'samples'}',
+                              ),
+                            ),
+                            Chip(label: Text(diag.transportMode)),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                   Text(
                     ar
                         ? 'اختيار المصدر لا يعني اقتران جهاز. هذا الإصدار يستقبل بيانات الجهاز من الخادم، ولا يوفر ربط EEG مباشرًا بالهاتف.'
@@ -165,6 +212,16 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
                             ? 'عينات نافذة التحليل'
                             : 'Analysis window samples',
                         value: '${data['analysis_window_samples'] ?? '—'}',
+                      ),
+                      LabeledValue(
+                        label: ar ? 'القنوات المدعومة' : 'Channels',
+                        value:
+                            (data['channels'] as List?)?.join(', ') ??
+                            'eeg, ecg, motion, hr',
+                      ),
+                      LabeledValue(
+                        label: ar ? 'وحدات الإشارة' : 'Signal units',
+                        value: '${data['signal_units'] ?? 'normalized_demo'}',
                       ),
                       const SizedBox(height: 12),
                       InfoNote(

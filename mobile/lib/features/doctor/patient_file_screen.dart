@@ -81,7 +81,7 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
 
   bool _current(AppState app) =>
       mounted &&
-      identical(_owner, app.auth.currentUser) &&
+      AppUser.sameSessionOwner(_owner, app.auth.currentUser) &&
       _owner?.role == UserRole.doctor &&
       _origin == app.api.baseUrl &&
       _revision == app.api.tokens.revision &&
@@ -130,6 +130,17 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
           triggers = await app.api.getDoctorPatientTriggers(pid);
         } catch (_) {}
       }
+      List<ClinicalNote> notes = const [];
+      try {
+        notes = await app.care.clinicalNotesFor(
+          pid,
+          refreshRemote: app.apiOnline,
+        );
+      } catch (e) {
+        final f = Failure.from(e);
+        if (f.kind != FailureKind.notFound && !f.isConnectivity) rethrow;
+        notes = await app.care.clinicalNotesFor(pid, refreshRemote: false);
+      }
       final data = _FileData(
         patientId: pid,
         profile: app.auth.patientById(pid),
@@ -138,10 +149,7 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
         seizures: await db.seizureLogsFor(pid, limit: 200),
         events: await db.predictionEventsFor(pid, limit: 200),
         adjudications: await db.adjudicationsFor(pid, limit: 200),
-        notes: await app.care.clinicalNotesFor(
-          pid,
-          refreshRemote: app.apiOnline,
-        ),
+        notes: notes,
         reading: readings.isEmpty ? null : readings.first,
         adherence: await app.medication.adherence(pid),
         activeMeds: (await app.medication.forPatient(

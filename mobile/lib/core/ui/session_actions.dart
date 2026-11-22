@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../models/models.dart';
 import '../../providers/app_state.dart';
 import '../enums.dart';
 import '../router/route_names.dart';
@@ -63,7 +64,7 @@ Future<void> confirmSignOut(BuildContext context, AppState app) async {
   );
   if (confirmed != true ||
       !context.mounted ||
-      !identical(app.auth.currentUser, owner) ||
+      !AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
       app.api.baseUrl != origin ||
       app.api.tokens.revision != revision) {
     return;

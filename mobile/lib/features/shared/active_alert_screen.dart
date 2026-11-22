@@ -64,7 +64,7 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
   late final int _revision;
   bool get _current =>
       mounted &&
-      identical(_owner, _app.auth.currentUser) &&
+      AppUser.sameSessionOwner(_owner, _app.auth.currentUser) &&
       _origin == _app.api.baseUrl &&
       _revision == _app.api.tokens.revision;
   bool _loading = true;

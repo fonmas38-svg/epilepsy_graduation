@@ -101,7 +101,7 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
   bool _refreshingResponses = false;
   bool get _current =>
       mounted &&
-      identical(_owner, _app.auth.currentUser) &&
+      AppUser.sameSessionOwner(_owner, _app.auth.currentUser) &&
       _owner?.role == UserRole.caregiver &&
       _origin == _app.api.baseUrl &&
       _revision == _app.api.tokens.revision;

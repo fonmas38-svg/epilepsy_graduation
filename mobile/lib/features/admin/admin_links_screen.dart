@@ -4,6 +4,7 @@ import '../../core/enums.dart';
 import '../../core/errors/failure.dart';
 import '../../core/ui/common.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/models.dart';
 import '../../providers/app_state.dart';
 
 class AdminLinksScreen extends StatefulWidget {
@@ -47,7 +48,7 @@ class _AdminLinksScreenState extends State<AdminLinksScreen> {
     bool current() =>
         mounted &&
         generation == _loadRevision &&
-        identical(app.auth.currentUser, owner) &&
+        AppUser.sameSessionOwner(app.auth.currentUser, owner) &&
         app.api.baseUrl == origin;
     setState(() {
       _loading = true;
@@ -122,7 +123,7 @@ class _AdminLinksScreenState extends State<AdminLinksScreen> {
     final key = _family ? 'caregiver_id' : 'doctor_id';
     bool current() =>
         mounted &&
-        identical(app.auth.currentUser, owner) &&
+        AppUser.sameSessionOwner(app.auth.currentUser, owner) &&
         app.api.baseUrl == origin;
     final title = remove == null
         ? (ar ? 'تأكيد الربط' : 'Confirm link')

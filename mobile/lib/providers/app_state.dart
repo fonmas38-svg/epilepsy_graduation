@@ -15,6 +15,7 @@ import '../models/prediction_state.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/care_service.dart';
+import '../services/eeg_hardware_device.dart';
 import '../services/local_database.dart';
 import '../services/location_service.dart';
 import '../services/medication_service.dart';
@@ -31,7 +32,12 @@ import '../services/sync_service.dart';
 import '../services/edge_model_service.dart';
 
 class AppState extends ChangeNotifier {
-  AppState({ApiClient? apiClient, LocalDatabase? database}) {
+  AppState({
+    ApiClient? apiClient,
+    LocalDatabase? database,
+    LocalNotificationGateway? notificationGateway,
+    bool useBackgroundIsolate = true,
+  }) : _ownsApi = apiClient == null {
     auth = AuthService();
     db = database ?? LocalDatabase.instance;
     api = apiClient ?? ApiClient();
@@ -39,8 +45,10 @@ class AppState extends ChangeNotifier {
     sync = SyncService(db: db, api: api, auth: auth)..adoptLocalizations(_l10n);
     notifications = NotificationService(
       fallbackTitle: _l10n.notificationFallbackTitle,
+      gateway: notificationGateway,
     );
-    medication = MedicationService(db: db, notifications: notifications);
+    medication = MedicationService(db: db, notifications: notifications)
+      ..adoptLocalizations(_l10n);
     care = CareService(api: api, db: db);
     messages = MessageService(db: db, api: api, auth: auth);
     monitoring = MonitoringService(
@@ -49,11 +57,12 @@ class AppState extends ChangeNotifier {
       sync: sync,
       auth: auth,
       api: api,
+      useBackgroundIsolate: useBackgroundIsolate,
     );
-    monitoring.onUpdate = () {
-      notifyListeners();
-      _maybeFireReminders();
-    };
+    monitoring.onUpdate = notifyListeners;
+    try {
+      api.wakingNotifier.addListener(_onWakingChanged);
+    } catch (_) {}
     monitoring.onAlert = (alert) {
       lastAlert = alert;
       unawaited(_prepareEmergencySms(alert));
@@ -123,7 +132,12 @@ class AppState extends ChangeNotifier {
     if (value.locale.languageCode == _l10n.locale.languageCode) return;
     _l10n = value;
     sync.adoptLocalizations(value);
+    medication.adoptLocalizations(value);
     notifications.fallbackTitle = value.notificationFallbackTitle;
+    final user = auth.currentUser;
+    if (user != null && user.role == UserRole.patient) {
+      unawaited(medication.syncReminders(user.uid, value));
+    }
   }
 
   late final AuthService auth;
@@ -157,9 +171,21 @@ class AppState extends ChangeNotifier {
 
   /// Owns the early pre-alert lifecycle + 30-second false-alarm cancel window.
   final PreAlertController preAlerts = PreAlertController();
+  final bool _ownsApi;
   VitalReading? _preAlertReading;
   PredictionState? _preAlertPrediction;
-  String? _reminderMinute;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+
+  void _onWakingChanged() => notifyListeners();
+
+  bool get isWakingServer {
+    try {
+      return api.isWakingServer;
+    } catch (_) {
+      return false;
+    }
+  }
+  Future<DeviceDiagnostics?> get deviceDiagnostics => monitoring.getDiagnostics();
 
   bool ready = false;
   bool apiOnline = false;
@@ -362,16 +388,10 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Best-effort medication reminders: at most once per wall-clock minute, ask
-  /// the service to surface any dose due right now. Cheap and idempotent.
-  void _maybeFireReminders() {
-    final pid = monitoring.activePatientId;
-    if (pid == null) return;
-    final now = DateTime.now();
-    final key = '${now.hour}:${now.minute}';
-    if (key == _reminderMinute) return;
-    _reminderMinute = key;
-    medication.fireDueReminders(pid, _l10n); // fire-and-forget
+  Future<void> onAppResumed() async {
+    final user = auth.currentUser;
+    if (user == null || user.role != UserRole.patient) return;
+    await medication.rescheduleIfTimezoneChanged(user.uid, _l10n);
   }
 
   Future<void> _initServerConnection() async {
@@ -652,9 +672,12 @@ class AppState extends ChangeNotifier {
     _initServerConnection();
 
     // Continuous network connectivity watcher: detects drops and auto-flushes on reconnection
-    Connectivity().onConnectivityChanged.listen((results) async {
+    _connectivitySub?.cancel();
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) async {
       final isNowConnected = results.any((r) => r != ConnectivityResult.none);
-      final health = isNowConnected ? await api.health() : false;
+      final health = isNowConnected
+          ? await api.health(null, const Duration(seconds: 10), true)
+          : false;
       if (health != apiOnline) {
         apiOnline = health;
         notifyListeners();
@@ -1034,6 +1057,7 @@ class AppState extends ChangeNotifier {
     _smsPrepared.clear();
     location.lastResult = null;
     monitoring.activePatientId = null;
+    await medication.cancelAllReminders();
     // Clear FCM patient-filter so no stale alerts show after sign-out.
     notifications.setActivePatient(null);
     final pushToken = notifications.token;
@@ -1065,7 +1089,13 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    try {
+      api.wakingNotifier.removeListener(_onWakingChanged);
+    } catch (_) {}
+    unawaited(_connectivitySub?.cancel());
+    unawaited(monitoring.dispose());
     notifications.dispose();
+    if (_ownsApi) api.dispose();
     settings.removeListener(notifyListeners);
     care.removeListener(notifyListeners);
     messages.removeListener(notifyListeners);
@@ -1097,6 +1127,13 @@ class AppState extends ChangeNotifier {
         final profile = auth.patientById(patientId);
         if (profile != null) await medication.seedFromProfile(profile);
       } catch (_) {}
+      // Schedule patient OS medication reminders completely independently of
+      // EEG monitoring. Non-patient roles must never schedule patient alarms.
+      if (user.role == UserRole.patient) {
+        try {
+          await medication.syncReminders(user.uid, _l10n);
+        } catch (_) {}
+      }
       // Care data loads from SQLite first, so the emergency screen is usable
       // before the network is even tried. Best-effort: a failure here must never
       // stop monitoring from starting.
@@ -1142,6 +1179,23 @@ class AppState extends ChangeNotifier {
     } catch (_) {}
   }
 
+  String? _pendingPatientEmail;
+  String? _pendingPatientGender;
+  String? _pendingPatientEmergencyContact;
+  String? _pendingPatientIdempotencyKey;
+
+  void setPendingPatientMetadata({
+    String? email,
+    String? gender,
+    String? emergencyContact,
+    String? idempotencyKey,
+  }) {
+    _pendingPatientEmail = email;
+    _pendingPatientGender = gender;
+    _pendingPatientEmergencyContact = emergencyContact;
+    _pendingPatientIdempotencyKey = idempotencyKey;
+  }
+
   Future<PatientProfile> createDoctorPatient({
     required String name,
     required String username,
@@ -1159,6 +1213,14 @@ class AppState extends ChangeNotifier {
     failure = null;
     PatientProfile? profile;
     String? backendPatientId;
+    final email = _pendingPatientEmail;
+    final gender = _pendingPatientGender;
+    final emergencyContact = _pendingPatientEmergencyContact;
+    final idempotencyKey = _pendingPatientIdempotencyKey;
+    _pendingPatientEmail = null;
+    _pendingPatientGender = null;
+    _pendingPatientEmergencyContact = null;
+    _pendingPatientIdempotencyKey = null;
 
     if (apiOnline && api.tokens.hasSession) {
       try {
@@ -1166,8 +1228,11 @@ class AppState extends ChangeNotifier {
           username: username,
           name: name,
           password: password,
+          email: email,
           phone: phone,
           age: age,
+          gender: gender,
+          emergencyContact: emergencyContact,
           diagnosis: diagnosis,
           notes: notes,
           caregiverName: caregiverName,
@@ -1175,6 +1240,7 @@ class AppState extends ChangeNotifier {
           caregiverPhone: caregiverPhone,
           caregiverRelation: caregiverRelation,
           caregiverPassword: caregiverPassword,
+          idempotencyKey: idempotencyKey,
         );
         final userMap = res['user'] as Map<String, dynamic>?;
         if (userMap != null) {
@@ -1289,8 +1355,15 @@ class AppState extends ChangeNotifier {
     // service. `refresh` overwrites its app-wide latest reading, assessment and
     // alert list, so calling it once per patient inside the loop would leave
     // every screen that reads those fields showing whoever happened to be last.
-    final active = monitoring.activePatientId;
-    if (active != null) await monitoring.refresh(active);
+    final active =
+        monitoring.activePatientId ??
+        (auth.currentUser?.role == UserRole.patient
+            ? auth.currentUser?.uid
+            : null);
+    if (monitoring.activePatientId != null) {
+      await monitoring.refresh(monitoring.activePatientId!);
+    }
+    if (active != null) await sync.syncPending(active);
     await messages.flushPendingMessages();
     await sync.flushPendingAlerts();
     notifyListeners();

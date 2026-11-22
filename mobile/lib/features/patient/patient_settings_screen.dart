@@ -10,6 +10,7 @@ import '../../core/enums.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/risk_view.dart';
 import '../../core/ui/common.dart';
+import '../../core/utils/doctor_title_formatter.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/app_state.dart';
 import '../../services/biometric_service.dart';
@@ -572,7 +573,11 @@ class _PrivacySectionState extends State<_PrivacySection> {
       );
       if (!success) {
         if (mounted) {
-          AppSnack.warn(context, 'لم يتم التحقق من البصمة عبر المستشعر');
+          AppSnack.warn(
+            context,
+            _biometrics.lastErrorMessage ??
+                'لم يتم التحقق من البصمة عبر المستشعر',
+          );
         }
         return;
       }
@@ -597,11 +602,18 @@ class _PrivacySectionState extends State<_PrivacySection> {
     }
     if (mounted) {
       setState(() => _biometricsEnabled = enable);
+      final displayAccount = user != null
+          ? DoctorTitleFormatter.format(
+              user.name.isNotEmpty ? user.name : u,
+              role: user.role,
+              isArabic: l.isArabic,
+            )
+          : u;
       AppSnack.success(
         context,
         enable
-            ? 'تم تفعيل تسجيل الدخول بالبصمة لحساب «$u»'
-            : 'تم تعطيل الدخول بالبصمة لحساب «$u»',
+            ? 'تم تفعيل تسجيل الدخول بالبصمة لحساب «$displayAccount»'
+            : 'تم تعطيل الدخول بالبصمة لحساب «$displayAccount»',
       );
     }
   }
@@ -780,7 +792,12 @@ class _AboutSection extends StatelessWidget {
                 Gap.hXs,
                 Expanded(
                   child: Text(
-                    '${user.name} ($roleName)',
+                    DoctorTitleFormatter.formatWithRole(
+                      user.name,
+                      roleName,
+                      role: user.role,
+                      isArabic: l.isArabic,
+                    ),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),

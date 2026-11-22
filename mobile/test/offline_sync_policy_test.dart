@@ -93,6 +93,7 @@ class Cloud implements ApiClient {
   Future<bool> health([
     String? overrideUrl,
     Duration timeout = const Duration(seconds: 10),
+    bool forceRefresh = false,
   ]) async => healthy;
   @override
   Future<AnalyzeResult> analyze(VitalReading r) async {

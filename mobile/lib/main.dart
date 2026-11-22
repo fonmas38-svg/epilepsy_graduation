@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart'
     show debugPrint, defaultTargetPlatform, kIsWeb, TargetPlatform;
@@ -21,6 +23,7 @@ import 'features/doctor/doctor_home_screen.dart';
 import 'features/onboarding/permissions_onboarding_screen.dart';
 import 'features/patient/patient_home_screen.dart';
 import 'l10n/app_localizations.dart';
+import 'models/models.dart';
 import 'providers/app_state.dart';
 import 'widgets/animated_splash_screen.dart';
 import 'widgets/inactivity_watcher.dart';
@@ -87,6 +90,8 @@ class EpilepsyApp extends StatelessWidget {
             debugShowCheckedModeBanner: false,
             theme: AppTheme.light(),
             darkTheme: AppTheme.dark(),
+            themeAnimationDuration: const Duration(milliseconds: 220),
+            themeAnimationCurve: Curves.easeInOut,
             // Dark mode is not optional (§2.4): a patient checking their status
             // at 3 a.m. should not be hit with a white screen.
             themeMode: state.settings.themeMode,
@@ -138,11 +143,37 @@ class _AppOverlay extends StatefulWidget {
   State<_AppOverlay> createState() => _AppOverlayState();
 }
 
-class _AppOverlayState extends State<_AppOverlay> {
+class _AppOverlayState extends State<_AppOverlay> with WidgetsBindingObserver {
   bool _restoreScheduled = false;
-  Object? _sessionOwner;
+  AppUser? _sessionOwner;
   String? _sessionOrigin;
   String? _autoOpenedAlertId;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      unawaited(context.read<AppState>().onAppResumed());
+    }
+  }
+
+  @override
+  void didChangeLocales(List<Locale>? locales) {
+    if (mounted) {
+      unawaited(context.read<AppState>().onAppResumed());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -203,6 +234,17 @@ class _AppOverlayState extends State<_AppOverlay> {
                             icon: const Icon(Icons.close),
                             onPressed: state.dismissAlertBanner,
                           ),
+                        )
+                      else if (state.isWakingServer)
+                        _TopBanner(
+                          view: RiskView.unknown,
+                          icon: Icons.cloud_sync_outlined,
+                          title: l.wakingCloudServer,
+                          action: const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
                         ),
                     ],
                   ),
@@ -219,7 +261,10 @@ class _AppOverlayState extends State<_AppOverlay> {
   void _syncSession(AppState state) {
     final owner = state.auth.currentUser;
     final origin = state.api.baseUrl;
-    if (identical(owner, _sessionOwner) && origin == _sessionOrigin) return;
+    if (AppUser.sameSessionOwner(owner, _sessionOwner) &&
+        origin == _sessionOrigin) {
+      return;
+    }
     final previous = _sessionOwner;
     _sessionOwner = owner;
     _sessionOrigin = origin;
@@ -227,7 +272,7 @@ class _AppOverlayState extends State<_AppOverlay> {
     _autoOpenedAlertId = null;
     if (previous == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!identical(state.auth.currentUser, owner) ||
+      if (!AppUser.sameSessionOwner(state.auth.currentUser, owner) ||
           state.api.baseUrl != origin) {
         return;
       }
@@ -418,7 +463,7 @@ class _RootShellState extends State<RootShell> {
     if (user == null) return const LoginScreen();
 
     return KeyedSubtree(
-      key: ValueKey((user, state.api.baseUrl)),
+      key: ValueKey((user.uid, user.role, state.api.baseUrl)),
       child: switch (user.role) {
         UserRole.patient => const PatientHomeScreen(),
         UserRole.caregiver => const CaregiverHomeScreen(),

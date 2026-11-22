@@ -12,11 +12,13 @@ import '../../core/ui/common.dart';
 import '../../core/ui/risk_indicator.dart';
 import '../../core/ui/states.dart';
 import '../../core/utils/time_ago.dart';
+import '../../core/utils/username_generator.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
 import '../../widgets/metrics_panel.dart';
 import '../shared/alerts_list.dart';
+import 'package:uuid/uuid.dart';
 
 /// §5.1 — the doctor's triage list: search, sort, filter, open.
 ///
@@ -594,30 +596,79 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
   final _nameCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
   final _ageCtrl = TextEditingController();
+  final _emergencyContactCtrl = TextEditingController();
   final _diagnosisCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
+  final String _gender = 'male';
 
   bool _addCaregiver = false;
   final _cgNameCtrl = TextEditingController();
+  final _cgUsernameCtrl = TextEditingController();
   final _cgPhoneCtrl = TextEditingController();
   final _cgPasswordCtrl = TextEditingController();
   String _cgRelation = 'أب / ولي أمر';
+
+  bool _usernameEditedManually = false;
+  bool _cgUsernameEditedManually = false;
+  late final String _idempotencyKey = const Uuid().v4();
 
   bool _busy = false;
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    _nameCtrl.addListener(_onPatientNameChanged);
+    _cgNameCtrl.addListener(_onCaregiverNameChanged);
+  }
+
+  void _onPatientNameChanged() {
+    if (_usernameEditedManually || _busy) return;
+    final generated = UsernameGenerator.generate(_nameCtrl.text, prefix: 'pat');
+    if (generated.isNotEmpty) {
+      _usernameCtrl.value = TextEditingValue(
+        text: generated,
+        selection: TextSelection.collapsed(offset: generated.length),
+      );
+      if (!_cgUsernameEditedManually && _cgNameCtrl.text.trim().isEmpty) {
+        final cgGen = 'cg_$generated';
+        _cgUsernameCtrl.value = TextEditingValue(
+          text: cgGen,
+          selection: TextSelection.collapsed(offset: cgGen.length),
+        );
+      }
+    }
+  }
+
+  void _onCaregiverNameChanged() {
+    if (_cgUsernameEditedManually || _busy) return;
+    final generated = UsernameGenerator.generate(_cgNameCtrl.text, prefix: 'cg');
+    if (generated.isNotEmpty) {
+      _cgUsernameCtrl.value = TextEditingValue(
+        text: generated,
+        selection: TextSelection.collapsed(offset: generated.length),
+      );
+    }
+  }
+
+  @override
   void dispose() {
+    _nameCtrl.removeListener(_onPatientNameChanged);
+    _cgNameCtrl.removeListener(_onCaregiverNameChanged);
     _nameCtrl.dispose();
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
+    _emailCtrl.dispose();
     _phoneCtrl.dispose();
     _ageCtrl.dispose();
+    _emergencyContactCtrl.dispose();
     _diagnosisCtrl.dispose();
     _notesCtrl.dispose();
     _cgNameCtrl.dispose();
+    _cgUsernameCtrl.dispose();
     _cgPhoneCtrl.dispose();
     _cgPasswordCtrl.dispose();
     super.dispose();
@@ -651,6 +702,9 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
 
     final app = context.read<AppState>();
     final patUser = _usernameCtrl.text.trim().toLowerCase();
+    final cgUser = _cgUsernameCtrl.text.trim().isNotEmpty
+        ? _cgUsernameCtrl.text.trim().toLowerCase()
+        : 'cg_$patUser';
     final generatedPatientPass = _passwordCtrl.text.trim().isEmpty
         ? _newPassword()
         : _passwordCtrl.text.trim();
@@ -659,6 +713,14 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
         : _cgPasswordCtrl.text.trim();
 
     try {
+      app.setPendingPatientMetadata(
+        email: _emailCtrl.text.trim().isEmpty ? null : _emailCtrl.text.trim(),
+        gender: _gender,
+        emergencyContact: _emergencyContactCtrl.text.trim().isEmpty
+            ? null
+            : _emergencyContactCtrl.text.trim(),
+        idempotencyKey: _idempotencyKey,
+      );
       final profile = await app.createDoctorPatient(
         name: _nameCtrl.text.trim(),
         username: patUser,
@@ -670,7 +732,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
         caregiverName: _addCaregiver && _cgNameCtrl.text.trim().isNotEmpty
             ? _cgNameCtrl.text.trim()
             : null,
-        caregiverUsername: _addCaregiver ? 'cg_$patUser' : null,
+        caregiverUsername: _addCaregiver ? cgUser : null,
         caregiverPhone: _addCaregiver && _cgPhoneCtrl.text.trim().isNotEmpty
             ? _cgPhoneCtrl.text.trim()
             : null,
@@ -718,7 +780,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 4),
-                  Text('اسم المستخدم: cg_$patUser'),
+                  Text('اسم المستخدم: $cgUser'),
                   Text('كلمة المرور: $generatedCgPass'),
                 ],
               ],
@@ -732,7 +794,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
           ],
         ),
       );
-      if (mounted) Navigator.pop(context, true);
+      if (mounted && Navigator.canPop(context)) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -842,15 +904,26 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                   const SizedBox(height: 10),
                   TextFormField(
                     controller: _usernameCtrl,
+                    onChanged: (_) => _usernameEditedManually = true,
                     decoration: const InputDecoration(
                       labelText: 'اسم المستخدم *',
                       prefixIcon: Icon(Icons.badge_outlined),
-                      hintText: 'patient_ahmed',
-                      helperText: 'يستخدمه المريض لتسجيل الدخول.',
+                      hintText: 'pat_ahmed',
+                      helperText:
+                          'يُولّد تلقائياً من الاسم ويمكنك تعديله لتسجيل الدخول.',
                     ),
                     validator: (v) => (v == null || v.trim().length < 3)
                         ? 'اسم المستخدم يجب ألا يقل عن 3 أحرف'
                         : null,
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _emailCtrl,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                      labelText: 'البريد الإلكتروني للمريض (اختياري)',
+                      prefixIcon: Icon(Icons.email_outlined),
+                    ),
                   ),
                   const SizedBox(height: 10),
                   TextFormField(
@@ -978,6 +1051,17 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                             decoration: const InputDecoration(
                               labelText: 'اسم المرافق الكامل',
                               prefixIcon: Icon(Icons.family_restroom_outlined),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          TextFormField(
+                            controller: _cgUsernameCtrl,
+                            onChanged: (_) => _cgUsernameEditedManually = true,
+                            decoration: const InputDecoration(
+                              labelText: 'اسم مستخدم المرافق',
+                              helperText:
+                                  'يُولّد تلقائياً من اسم المرافق ويمكنك تعديله.',
+                              prefixIcon: Icon(Icons.badge_outlined),
                             ),
                           ),
                           const SizedBox(height: 10),

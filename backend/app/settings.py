@@ -73,7 +73,7 @@ def load_settings() -> Settings:
             is_production or os.getenv("REQUIRE_PATIENT_AUTH", "0") == "1"
         ),
         max_request_body_bytes=positive_int(
-            "MAX_REQUEST_BODY_BYTES", 2 * 1024 * 1024
+            "MAX_REQUEST_BODY_BYTES", 8 * 1024 * 1024
         ),
         rate_limit_requests=rate_limit_requests,
         rate_limit_window_seconds=positive_int("RATE_LIMIT_WINDOW_SECONDS", 60),

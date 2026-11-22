@@ -20,7 +20,7 @@ class _CareSyncStatusCardState extends State<CareSyncStatusCard> {
   bool get _ar => Localizations.localeOf(context).languageCode == 'ar';
   bool get _current =>
       mounted &&
-      identical(_owner, _app.auth.currentUser) &&
+      AppUser.sameSessionOwner(_owner, _app.auth.currentUser) &&
       _origin == _app.api.baseUrl &&
       _revision == _app.api.tokens.revision;
   @override

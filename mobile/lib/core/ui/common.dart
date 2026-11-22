@@ -235,6 +235,7 @@ class OfflineBanner extends StatelessWidget {
     required this.visible,
     this.lastUpdateLabel,
     this.pendingCount = 0,
+    this.waking = false,
   });
 
   final bool visible;
@@ -245,12 +246,17 @@ class OfflineBanner extends StatelessWidget {
   /// Items waiting in the outbox, surfaced so a queued action does not look lost.
   final int pendingCount;
 
+  /// True while [ApiClient] is backing off during a Render cold start.
+  final bool waking;
+
   @override
   Widget build(BuildContext context) {
-    if (!visible) return const SizedBox.shrink();
+    if (!visible && !waking) return const SizedBox.shrink();
     final l = AppLocalizations.of(context);
     final tone = AppColors.of(context, RiskView.unknown);
-    final text = lastUpdateLabel == null
+    final text = waking
+        ? l.wakingCloudServer
+        : lastUpdateLabel == null
         ? l.offlineNoData
         : l.offlineSince(lastUpdateLabel!);
     return Material(
@@ -264,7 +270,17 @@ class OfflineBanner extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Icon(Icons.wifi_off_outlined, size: 18, color: tone.foreground),
+              if (waking)
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: tone.foreground,
+                  ),
+                )
+              else
+                Icon(Icons.wifi_off_outlined, size: 18, color: tone.foreground),
               Gap.hSm,
               Expanded(
                 child: Text(

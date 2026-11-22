@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import '../core/enums.dart';
 import '../models/models.dart';
 import 'api_client.dart';
+import 'eeg_hardware_device.dart';
 
 /// Edge-side multimodal inference engine providing offline parity with the
 /// cloud preictal forecasting model. When mobile network is offline, this
@@ -215,4 +216,36 @@ class EdgeModelService {
       processingMs: elapsedMs,
     );
   }
+
+  /// Evaluates a single [EegPacket] emitted by an [IEegHardwareDevice].
+  AnalyzeResult inferPacket(EegPacket packet, {double horizonMin = 15.0}) {
+    if (packet.sampleRateHz <= 0 ||
+        packet.eeg.length != packet.ecg.length ||
+        packet.eeg.length != packet.motion.length) {
+      return AnalyzeResult(
+        label: RiskLabel.watch,
+        confidence: 0,
+        features: {
+          'assessment_valid': false,
+          'signal_quality': 'unusable',
+          'clinically_validated': false,
+          'model_executed': false,
+          'offline': true,
+        },
+        processingMs: 0,
+      );
+    }
+    return infer(
+      packet.toVitalReading(
+        id: 'pkt-${packet.timestamp.microsecondsSinceEpoch}',
+      ),
+      horizonMin: horizonMin,
+    );
+  }
+
+  /// Evaluates a continuous stream of [EegPacket]s from an [IEegHardwareDevice].
+  Stream<AnalyzeResult> evaluateStream(
+    Stream<EegPacket> packets, {
+    double horizonMin = 15.0,
+  }) => packets.map((p) => inferPacket(p, horizonMin: horizonMin));
 }

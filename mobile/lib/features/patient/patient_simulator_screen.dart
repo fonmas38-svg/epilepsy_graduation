@@ -8,7 +8,7 @@ import '../../core/ui/common.dart';
 import '../../core/ui/risk_indicator.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/app_state.dart';
-import '../../services/signal_simulator.dart';
+import '../../services/eeg_hardware_device.dart';
 import '../../widgets/app_drawer.dart';
 
 

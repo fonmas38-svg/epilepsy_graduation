@@ -16,7 +16,9 @@ from app.database import (
     connection,
     dump_json,
     load_json,
+    medication_logs,
     patients,
+    prescriptions,
     readings,
     transaction,
     upsert,
@@ -115,14 +117,21 @@ def _persist_monitoring_row(conn: Connection, table, values: dict) -> tuple[dict
     return saved, inserted.rowcount == 1
 
 
-def _add_reading(conn: Connection, patient_id: str, reading: dict[str, Any]) -> dict:
+def _add_reading(
+    conn: Connection,
+    patient_id: str,
+    reading: dict[str, Any],
+    *,
+    _trim_after: bool = True,
+) -> dict:
     _ensure_patient(conn, patient_id)
     result = {**reading, "id": reading.get("id") or str(uuid4()), "patientId": patient_id}
     result, _ = _persist_monitoring_row(conn, readings, dict(
         id=result["id"], patient_id=patient_id,
         captured_at=result.get("timestamp"), payload_json=dump_json(result),
     ))
-    _trim(conn, readings, patient_id, 500)
+    if _trim_after:
+        _trim(conn, readings, patient_id, 500)
     return result
 
 
@@ -131,8 +140,13 @@ def add_reading(patient_id: str, reading: dict[str, Any]) -> dict:
         return _add_reading(conn, patient_id, reading)
 
 
-def _add_assessment(conn: Connection, patient_id: str,
-                    assessment: dict[str, Any]) -> dict:
+def _add_assessment(
+    conn: Connection,
+    patient_id: str,
+    assessment: dict[str, Any],
+    *,
+    _trim_after: bool = True,
+) -> dict:
     _ensure_patient(conn, patient_id)
     result = {
         **assessment, "id": assessment.get("id") or str(uuid4()),
@@ -169,7 +183,8 @@ def _add_assessment(conn: Connection, patient_id: str,
             conn.execute(update(patients).where(patients.c.patient_id == patient_id).values(
                 current_status=result.get("label"), last_updated=incoming_at.isoformat(), updated_at=_now(),
             ))
-    _trim(conn, assessments, patient_id, 500)
+    if _trim_after:
+        _trim(conn, assessments, patient_id, 500)
     return result
 
 
@@ -178,7 +193,13 @@ def add_assessment(patient_id: str, assessment: dict[str, Any]) -> dict:
         return _add_assessment(conn, patient_id, assessment)
 
 
-def _add_alert(conn: Connection, patient_id: str, alert: dict[str, Any]) -> dict:
+def _add_alert(
+    conn: Connection,
+    patient_id: str,
+    alert: dict[str, Any],
+    *,
+    _trim_after: bool = True,
+) -> dict:
     _ensure_patient(conn, patient_id)
     result = {
         **alert, "id": alert.get("id") or str(uuid4()), "patientId": patient_id,
@@ -196,13 +217,167 @@ def _add_alert(conn: Connection, patient_id: str, alert: dict[str, Any]) -> dict
         from app.alert_outbox import enqueue
 
         enqueue(conn, patient_id, result)
-    _trim(conn, alerts, patient_id, 200)
+    if _trim_after:
+        _trim(conn, alerts, patient_id, 200)
     return result
 
 
 def add_alert(patient_id: str, alert: dict[str, Any]) -> dict:
     with transaction() as conn:
         return _add_alert(conn, patient_id, alert)
+
+
+def _add_medication_log(
+    conn: Connection,
+    patient_id: str,
+    log_item: dict[str, Any],
+    *,
+    recorded_by: str,
+) -> dict[str, Any]:
+    _ensure_patient(conn, patient_id)
+    prescription_id = str(log_item["prescription_id"])
+    scheduled_time = str(log_item["scheduled_time"])
+    status = str(log_item.get("status") or "taken")
+    taken_at = log_item.get("taken_at")
+    log_recorded_by = str(log_item.get("recorded_by") or recorded_by)
+    log_id = str(log_item.get("id") or str(uuid4()))
+
+    rx = conn.execute(
+        select(prescriptions.c.id, prescriptions.c.patient_id).where(
+            prescriptions.c.id == prescription_id
+        )
+    ).first()
+    if rx is None or rx._mapping["patient_id"] != patient_id:
+        raise LookupError("prescription not found for patient")
+
+    existing_by_id = conn.execute(
+        select(medication_logs).where(medication_logs.c.id == log_id)
+    ).first()
+    if existing_by_id is not None:
+        m = existing_by_id._mapping
+        if (
+            m["patient_id"] != patient_id
+            or m["prescription_id"] != prescription_id
+            or m["scheduled_time"] != scheduled_time
+        ):
+            raise ValueError("Medication log id is already in use")
+
+    values = {
+        "id": log_id,
+        "prescription_id": prescription_id,
+        "patient_id": patient_id,
+        "scheduled_time": scheduled_time,
+        "taken_at": taken_at,
+        "status": status,
+        "recorded_by": log_recorded_by,
+        "created_at": _now(),
+    }
+    conn.execute(
+        upsert(medication_logs, values).on_conflict_do_update(
+            index_elements=[
+                medication_logs.c.prescription_id,
+                medication_logs.c.scheduled_time,
+            ],
+            set_={
+                "status": values["status"],
+                "taken_at": values["taken_at"],
+                "recorded_by": values["recorded_by"],
+            },
+        )
+    )
+    row = conn.execute(
+        select(medication_logs).where(
+            medication_logs.c.prescription_id == prescription_id,
+            medication_logs.c.scheduled_time == scheduled_time,
+        )
+    ).one()
+    r = row._mapping
+    return {
+        "id": r["id"],
+        "prescriptionId": r["prescription_id"],
+        "prescription_id": r["prescription_id"],
+        "patientId": r["patient_id"],
+        "patient_id": r["patient_id"],
+        "scheduledTime": r["scheduled_time"],
+        "scheduled_time": r["scheduled_time"],
+        "takenAt": r["taken_at"],
+        "taken_at": r["taken_at"],
+        "status": r["status"],
+        "recordedBy": r["recorded_by"],
+        "recorded_by": r["recorded_by"],
+        "createdAt": r["created_at"],
+        "created_at": r["created_at"],
+    }
+
+
+def add_medication_log(
+    patient_id: str,
+    log_item: dict[str, Any],
+    *,
+    recorded_by: str,
+) -> dict[str, Any]:
+    with transaction() as conn:
+        return _add_medication_log(conn, patient_id, log_item, recorded_by=recorded_by)
+
+
+def list_medication_logs(patient_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(
+            select(medication_logs)
+            .where(medication_logs.c.patient_id == patient_id)
+            .order_by(medication_logs.c.scheduled_time.desc(), medication_logs.c.created_at.desc())
+            .limit(limit)
+        ).all()
+    out = []
+    for row in rows:
+        r = row._mapping
+        out.append({
+            "id": r["id"],
+            "prescriptionId": r["prescription_id"],
+            "prescription_id": r["prescription_id"],
+            "patientId": r["patient_id"],
+            "patient_id": r["patient_id"],
+            "scheduledTime": r["scheduled_time"],
+            "scheduled_time": r["scheduled_time"],
+            "takenAt": r["taken_at"],
+            "taken_at": r["taken_at"],
+            "status": r["status"],
+            "recordedBy": r["recorded_by"],
+            "recorded_by": r["recorded_by"],
+            "createdAt": r["created_at"],
+            "created_at": r["created_at"],
+        })
+    return out
+
+
+def upsert_sql_prescription(rx: dict[str, Any]) -> dict[str, Any]:
+    patient_id = str(rx["patient_id"])
+    now = _now()
+    row = {
+        "id": str(rx["id"]),
+        "patient_id": patient_id,
+        "doctor_id": rx.get("doctor_id"),
+        "name": str(rx["name"]),
+        "dose": str(rx["dose"]),
+        "schedule": str(rx["schedule"]),
+        "notes": rx.get("notes"),
+        "active": bool(rx.get("active", True)),
+        "period_context": rx.get("period_context"),
+        "meal_context": rx.get("meal_context"),
+        "meal_type": rx.get("meal_type"),
+        "times_json": dump_json(rx.get("times") or []) if rx.get("times") is not None else rx.get("times_json"),
+        "created_at": str(rx.get("created_at") or now),
+        "updated_at": str(rx.get("updated_at") or now),
+    }
+    with transaction() as conn:
+        _ensure_patient(conn, patient_id)
+        conn.execute(
+            upsert(prescriptions, row).on_conflict_do_update(
+                index_elements=["id"],
+                set_={k: v for k, v in row.items() if k not in ("id", "patient_id", "created_at")},
+            )
+        )
+    return row
 
 
 def save_monitoring_bundle(
@@ -224,6 +399,80 @@ def save_monitoring_bundle(
             "reading": saved_reading,
             "assessment": saved_assessment,
             "alert": saved_alert,
+        }
+
+
+def save_monitoring_batch(
+    *,
+    bundles: list[tuple[str, dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]] | None = None,
+    readings_items: list[tuple[str, dict[str, Any]]] | None = None,
+    assessments_items: list[tuple[str, dict[str, Any]]] | None = None,
+    alerts_items: list[tuple[str, dict[str, Any]]] | None = None,
+    intake_logs_items: list[tuple[str, dict[str, Any]]] | None = None,
+    recorded_by: str = "system",
+) -> dict[str, Any]:
+    """Atomically persist a batch of monitoring records and medication intake logs."""
+    with transaction() as conn:
+        saved_readings: list[dict[str, Any]] = []
+        saved_assessments: list[dict[str, Any]] = []
+        saved_alerts: list[dict[str, Any]] = []
+        saved_intake_logs: list[dict[str, Any]] = []
+        synced_reading_ids: list[str] = []
+
+        reading_patients: set[str] = set()
+        assessment_patients: set[str] = set()
+        alert_patients: set[str] = set()
+
+        for pid, reading, assessment, alert in bundles or []:
+            saved_reading = _add_reading(conn, pid, reading, _trim_after=False)
+            saved_readings.append(saved_reading)
+            synced_reading_ids.append(str(saved_reading["id"]))
+            reading_patients.add(pid)
+            if assessment is not None:
+                saved_assessments.append(
+                    _add_assessment(conn, pid, assessment, _trim_after=False)
+                )
+                assessment_patients.add(pid)
+            if alert is not None:
+                saved_alerts.append(
+                    _add_alert(conn, pid, alert, _trim_after=False)
+                )
+                alert_patients.add(pid)
+
+        for pid, reading in readings_items or []:
+            saved_reading = _add_reading(conn, pid, reading, _trim_after=False)
+            saved_readings.append(saved_reading)
+            synced_reading_ids.append(str(saved_reading["id"]))
+            reading_patients.add(pid)
+
+        for pid, assessment in assessments_items or []:
+            saved_assessments.append(
+                _add_assessment(conn, pid, assessment, _trim_after=False)
+            )
+            assessment_patients.add(pid)
+
+        for pid, alert in alerts_items or []:
+            saved_alerts.append(_add_alert(conn, pid, alert, _trim_after=False))
+            alert_patients.add(pid)
+
+        for pid, log_item in intake_logs_items or []:
+            saved_intake_logs.append(
+                _add_medication_log(conn, pid, log_item, recorded_by=recorded_by)
+            )
+
+        for pid in reading_patients:
+            _trim(conn, readings, pid, 500)
+        for pid in assessment_patients:
+            _trim(conn, assessments, pid, 500)
+        for pid in alert_patients:
+            _trim(conn, alerts, pid, 200)
+
+        return {
+            "synced_reading_ids": synced_reading_ids,
+            "readings": saved_readings,
+            "assessments": saved_assessments,
+            "alerts": saved_alerts,
+            "intake_logs": saved_intake_logs,
         }
 
 

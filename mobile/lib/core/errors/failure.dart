@@ -19,6 +19,7 @@ enum FailureKind {
   unauthorized,
   forbidden,
   notFound,
+  conflict,
   validation,
   rateLimited,
   tooLarge,
@@ -53,6 +54,7 @@ class Failure implements Exception {
     FailureKind.unauthorized ||
     FailureKind.forbidden ||
     FailureKind.notFound ||
+    FailureKind.conflict ||
     FailureKind.validation ||
     FailureKind.tooLarge => false,
   };
@@ -68,6 +70,10 @@ class Failure implements Exception {
     FailureKind.unauthorized => l.errSessionExpired,
     FailureKind.forbidden => l.errForbidden,
     FailureKind.notFound => l.errNotFound,
+    FailureKind.conflict =>
+      l.isArabic
+          ? 'تعارض في البيانات: قد يكون اسم المستخدم أو السجل موجوداً مسبقاً.'
+          : 'Data conflict: the username or record already exists.',
     FailureKind.validation => l.errValidation,
     FailureKind.rateLimited => l.errTooManyRequests,
     FailureKind.tooLarge => l.errPayloadTooLarge,
@@ -88,6 +94,7 @@ class Failure implements Exception {
     FailureKind.unauthorized => Icons.lock_outline,
     FailureKind.forbidden => Icons.block_outlined,
     FailureKind.notFound => Icons.search_off_outlined,
+    FailureKind.conflict => Icons.warning_amber_outlined,
     FailureKind.validation => Icons.edit_note_outlined,
     FailureKind.rateLimited => Icons.timer_outlined,
     FailureKind.tooLarge => Icons.data_usage_outlined,
@@ -105,7 +112,7 @@ class Failure implements Exception {
         401 => FailureKind.unauthorized,
         403 => FailureKind.forbidden,
         404 => FailureKind.notFound,
-        409 => FailureKind.validation,
+        409 => FailureKind.conflict,
         413 => FailureKind.tooLarge,
         422 => FailureKind.validation,
         429 => FailureKind.rateLimited,

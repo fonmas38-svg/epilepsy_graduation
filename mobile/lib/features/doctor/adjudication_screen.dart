@@ -72,7 +72,7 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
   late final int _revision;
   bool get _current =>
       mounted &&
-      identical(_owner, _app.auth.currentUser) &&
+      AppUser.sameSessionOwner(_owner, _app.auth.currentUser) &&
       _owner?.role == UserRole.doctor &&
       _origin == _app.api.baseUrl &&
       _revision == _app.api.tokens.revision;
@@ -148,11 +148,18 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
     if (draft == null || !_current) return;
     setState(() => _busy = true);
     try {
+      final combinedNotes = [
+        if (draft.semiology != null && draft.semiology!.isNotEmpty)
+          'التصنيف السريري: ${draft.semiology}',
+        if (draft.artifactCause != null && draft.artifactCause!.isNotEmpty)
+          'سبب التنبيه الكاذب: ${draft.artifactCause}',
+        if (draft.notes.trim().isNotEmpty) draft.notes.trim(),
+      ].join(' | ');
       await app.care.adjudicate(
         patientId: item.alert.patientId,
         alertId: item.alert.id,
         verdict: draft.verdict,
-        notes: draft.notes,
+        notes: combinedNotes,
         doctorId: _owner?.uid ?? '',
       );
       if (!_current || !mounted) return;
@@ -247,10 +254,17 @@ class _Pending {
 }
 
 class _Draft {
-  const _Draft({required this.verdict, required this.notes});
+  const _Draft({
+    required this.verdict,
+    required this.notes,
+    this.semiology,
+    this.artifactCause,
+  });
 
   final AdjudicationVerdict verdict;
   final String notes;
+  final String? semiology;
+  final String? artifactCause;
 }
 
 class _PendingTile extends StatelessWidget {
@@ -333,6 +347,8 @@ class _VerdictSheet extends StatefulWidget {
 class _VerdictSheetState extends State<_VerdictSheet> {
   final _notes = TextEditingController();
   AdjudicationVerdict? _verdict;
+  String _semiology = 'نوبة بؤرية (Focal)';
+  String _artifactCause = 'حركة الرأس أو المضغ (Motion/EMG)';
 
   @override
   void dispose() {
@@ -345,6 +361,7 @@ class _VerdictSheetState extends State<_VerdictSheet> {
     final l = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final alert = widget.item.alert;
+    final ar = l.isArabic;
 
     return Padding(
       padding: EdgeInsets.only(
@@ -361,15 +378,27 @@ class _VerdictSheetState extends State<_VerdictSheet> {
             Text(l.verdictLabel, style: theme.textTheme.titleMedium),
             Gap.vXs,
             Text(
-              '${widget.item.patientName} · ${TimeAgo.stamp(alert.timestamp)}',
+              '${widget.item.patientName} · ${TimeAgo.stamp(alert.timestamp, l)}',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
+            Gap.vSm,
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+                borderRadius: Radii.rMd,
+                border: Border.all(color: theme.dividerColor),
+              ),
+              child: Text(
+                ar
+                    ? 'قنوات الإشارة للحدث: EEG (256Hz) · ECG · التسارع الحركي (Motion) · نبض القلب (HR)'
+                    : 'Event telemetry channels: 4-ch EEG/ECG/Motion/HR window (256Hz)',
+                style: theme.textTheme.labelSmall,
+              ),
+            ),
             Gap.vMd,
-            // Three full-width rows of equal height, in a fixed order. Equal
-            // weight is the point: a smaller or greyer «غير محدَّد» would nudge
-            // doctors into a decision they have not made.
             for (final v in AdjudicationVerdict.values) ...[
               _VerdictOption(
                 verdict: v,
@@ -377,6 +406,59 @@ class _VerdictSheetState extends State<_VerdictSheet> {
                 onTap: () => setState(() => _verdict = v),
               ),
               Gap.vXs,
+            ],
+            if (_verdict == AdjudicationVerdict.seizure) ...[
+              Gap.vSm,
+              DropdownButtonFormField<String>(
+                initialValue: _semiology,
+                decoration: InputDecoration(
+                  labelText: ar ? 'نوع النوبة (Semiology)' : 'Seizure semiology',
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'نوبة بؤرية (Focal)',
+                    child: Text('نوبة بؤرية (Focal)'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'نوبة معممة (Generalized)',
+                    child: Text('نوبة معممة (Generalized)'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'نوبة غيابية (Absence)',
+                    child: Text('نوبة غيابية (Absence)'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'أخرى (Other)',
+                    child: Text('أخرى (Other)'),
+                  ),
+                ],
+                onChanged: (v) => setState(() => _semiology = v ?? _semiology),
+              ),
+            ],
+            if (_verdict == AdjudicationVerdict.falseAlarm) ...[
+              Gap.vSm,
+              DropdownButtonFormField<String>(
+                initialValue: _artifactCause,
+                decoration: InputDecoration(
+                  labelText: ar ? 'سبب التشويش / الإنذار الكاذب' : 'Artifact cause',
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'حركة الرأس أو المضغ (Motion/EMG)',
+                    child: Text('حركة الرأس أو المضغ (Motion/EMG)'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'ارتخاء القطب (Electrode pop)',
+                    child: Text('ارتخاء القطب (Electrode pop)'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'نشاط بدني طبيعي (Exercise)',
+                    child: Text('نشاط بدني طبيعي (Exercise)'),
+                  ),
+                ],
+                onChanged: (v) =>
+                    setState(() => _artifactCause = v ?? _artifactCause),
+              ),
             ],
             Gap.vSm,
             TextField(
@@ -403,14 +485,23 @@ class _VerdictSheetState extends State<_VerdictSheet> {
                   child: SizedBox(
                     height: A11y.minTouchTarget,
                     child: FilledButton(
-                      // Disabled until a verdict is picked. There is no sensible
-                      // default here — pre-selecting one would be putting words
-                      // in the doctor's mouth.
                       onPressed: _verdict == null
                           ? null
                           : () => Navigator.pop(
                               context,
-                              _Draft(verdict: _verdict!, notes: _notes.text),
+                              _Draft(
+                                verdict: _verdict!,
+                                notes: _notes.text,
+                                semiology:
+                                    _verdict ==
+                                        AdjudicationVerdict.seizure
+                                    ? _semiology
+                                    : null,
+                                artifactCause:
+                                    _verdict == AdjudicationVerdict.falseAlarm
+                                    ? _artifactCause
+                                    : null,
+                              ),
                             ),
                       child: Text(l.save),
                     ),

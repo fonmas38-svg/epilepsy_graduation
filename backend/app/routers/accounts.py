@@ -130,17 +130,34 @@ class CreateDoctorRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     name: str = Field(..., min_length=1, max_length=120)
     password: str | None = Field(default=None, min_length=6, max_length=128)
+    email: str | None = Field(default=None, max_length=254)
+    phone: str | None = Field(default=None, max_length=32)
+    license_number: str | None = Field(default=None, max_length=64)
+    specialization: str | None = Field(default=None, max_length=120)
+    hospital_affiliation: str | None = Field(default=None, max_length=180)
+    national_id: str | None = Field(default=None, max_length=32)
+    moh_override: bool = False
+    idempotency_key: str | None = Field(default=None, max_length=128)
+
+
+class VerifyMohRequest(BaseModel):
+    license_number: str = Field(..., min_length=2, max_length=64)
+    national_id: str | None = Field(default=None, max_length=32)
+    name: str | None = Field(default=None, max_length=180)
 
 
 class CreatePatientRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     name: str = Field(..., min_length=1, max_length=120)
     password: str | None = Field(default=None, min_length=6, max_length=128)
+    email: str | None = Field(default=None, max_length=254)
     # admin may target any doctor; ignored (forced to self) for doctor callers.
     doctor_id: str | None = None
     # Clinical and contact fields (optional)
     phone: str | None = Field(default=None, max_length=32)
     age: int | None = Field(default=None, ge=0, le=130)
+    gender: str | None = Field(default=None, max_length=24)
+    emergency_contact: str | None = Field(default=None, max_length=120)
     diagnosis: str | None = Field(default=None, max_length=200)
     notes: str | None = Field(default=None, max_length=500)
     # Optional family / caregiver member created with the patient
@@ -149,6 +166,7 @@ class CreatePatientRequest(BaseModel):
     caregiver_phone: str | None = Field(default=None, max_length=32)
     caregiver_relation: str | None = Field(default=None, max_length=64)
     caregiver_password: str | None = Field(default=None, min_length=6, max_length=128)
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class CreateUserRequest(BaseModel):
@@ -156,12 +174,14 @@ class CreateUserRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     role: Role = "patient"
     password: str | None = Field(default=None, min_length=6, max_length=128)
+    email: str | None = Field(default=None, max_length=254)
     doctor_id: str | None = None
 
 
 class UpdateUserRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     username: str | None = Field(default=None, min_length=3, max_length=64)
+    email: str | None = Field(default=None, max_length=254)
 
 
 class PasswordResetRequest(BaseModel):
@@ -495,23 +515,113 @@ def admin_get_user(user_id: str, _: dict = Depends(require_admin)):
     return {"user": out}
 
 
+@router.post("/admin/doctors/verify-moh")
+def admin_verify_doctor_moh(body: VerifyMohRequest, actor: dict = Depends(require_admin)):
+    """Verify a doctor's professional license against the MOH registry (#8)."""
+    result = users_store.verify_moh_license(
+        license_number=body.license_number,
+        national_id=body.national_id,
+        name=body.name,
+    )
+    users_store.log(
+        actor.get("sub"),
+        "admin",
+        "verify_doctor_moh",
+        target=body.license_number.strip(),
+        detail={"verified": result["verified"], "status": result["status"]},
+    )
+    return result
+
+
 @router.post("/admin/doctors", status_code=201)
 def admin_create_doctor(body: CreateDoctorRequest, actor: dict = Depends(require_admin)):
+    actor_id = str(actor.get("sub") or "admin")
+    cached = users_store.get_idempotent_response(
+        body.idempotency_key, actor_id, "/admin/doctors"
+    )
+    if cached is not None:
+        return cached["payload"]
+
     if users_store.username_taken(body.username):
         raise HTTPException(status_code=409, detail="username already exists")
-    password_hash, generated = _issue_password(body.password)
-    try:
-        doctor = users_store.create_user(
-            username=body.username,
+
+    moh_result = None
+    if body.license_number and body.license_number.strip():
+        moh_result = users_store.verify_moh_license(
+            license_number=body.license_number,
+            national_id=body.national_id,
             name=body.name,
-            role="doctor",
-            password_hash=password_hash,
-            created_by=actor.get("sub"),
         )
+        if not moh_result["verified"] and not body.moh_override:
+            raise HTTPException(
+                status_code=422,
+                detail=moh_result["message"],
+            )
+
+    password_hash, generated = _issue_password(body.password)
+    meta: dict = {}
+    if body.phone:
+        meta["phone"] = body.phone.strip()
+    if body.license_number:
+        meta["licenseNumber"] = body.license_number.strip()
+    if body.specialization:
+        meta["specialization"] = body.specialization.strip()
+    if body.hospital_affiliation:
+        meta["hospitalAffiliation"] = body.hospital_affiliation.strip()
+    if body.national_id:
+        meta["nationalId"] = body.national_id.strip()
+
+    try:
+        with transaction():
+            doctor = users_store.create_user(
+                username=body.username,
+                name=body.name,
+                email=body.email,
+                role="doctor",
+                password_hash=password_hash,
+                created_by=actor.get("sub"),
+                meta=meta,
+            )
+            profile_dict = None
+            if body.license_number and body.license_number.strip():
+                profile_dict = users_store.upsert_doctor_profile(
+                    doctor["id"],
+                    license_number=body.license_number.strip(),
+                    specialization=(body.specialization or "طب الأعصاب والصرع").strip(),
+                    hospital_affiliation=(body.hospital_affiliation or "غير محدد").strip(),
+                    national_id=(body.national_id or f"NID-{doctor['id'][:12]}").strip(),
+                    phone=(body.phone or "0000000000").strip(),
+                    moh_verified=bool(moh_result and moh_result["verified"]),
+                    moh_status=(moh_result["status"] if moh_result else "not_checked"),
+                    moh_override_by=(actor_id if body.moh_override and not (moh_result and moh_result["verified"]) else None),
+                )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    users_store.log(actor.get("sub"), "admin", "create_doctor", target=doctor["id"])
-    return {"user": users_store.public_user(doctor), "generatedPassword": generated}
+
+    action_name = (
+        "create_doctor_moh_override"
+        if (body.moh_override and moh_result and not moh_result["verified"])
+        else "create_doctor"
+    )
+    users_store.log(
+        actor.get("sub"),
+        "admin",
+        action_name,
+        target=doctor["id"],
+        detail={
+            "license_number": body.license_number,
+            "moh_verified": bool(moh_result and moh_result["verified"]),
+            "moh_override": bool(body.moh_override),
+        },
+    )
+    pub = users_store.public_user(doctor)
+    if profile_dict:
+        pub["doctorProfile"] = users_store.get_doctor_profile(doctor["id"])
+    response_payload = {"user": pub, "generatedPassword": generated}
+    users_store.save_idempotent_response(
+        body.idempotency_key, actor_id, "/admin/doctors", 201, response_payload
+    )
+    return response_payload
 
 
 @router.post("/admin/patients", status_code=201)
@@ -535,6 +645,7 @@ def admin_create_user(body: CreateUserRequest, actor: dict = Depends(require_adm
         user = users_store.create_user(
             username=body.username,
             name=body.name,
+            email=body.email,
             role=body.role,
             password_hash=password_hash,
             created_by=actor.get("sub"),
@@ -556,7 +667,7 @@ def admin_update_user(user_id: str, body: UpdateUserRequest, actor: dict = Depen
         raise HTTPException(status_code=404, detail="user not found")
     try:
         updated = users_store.update_user(
-            user_id, {"name": body.name, "username": body.username}
+            user_id, {"name": body.name, "username": body.username, "email": body.email}
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -750,6 +861,69 @@ def admin_enable_device(device_id: str, actor: dict = Depends(require_admin)):
 # ---------------------------------------------------------------------------- doctor
 
 
+@router.get("/doctor/dashboard-summary")
+def doctor_dashboard_summary(actor: dict = Depends(require_doctor)):
+    """Aggregated summary for Doctor Home: patient counts by risk status, pending alert reviews, and patient cards (#4)."""
+    from app import outcomes_store
+
+    if actor.get("role") == "admin":
+        patients = users_store.list_users(role="patient")
+    else:
+        ids = set(users_store.patients_for_doctor(actor.get("sub")))
+        patients = [u for u in users_store.list_users(role="patient") if u["id"] in ids]
+
+    views = [_patient_view(p) for p in patients if not p.get("disabled")]
+    high_risk = 0
+    watch_count = 0
+    stable_count = 0
+    pending_reviews = 0
+    critical_alerts = 0
+
+    for v in views:
+        pid = v["id"]
+        status = (v.get("currentStatus") or "stable").lower()
+        if status in ("high_risk", "highrisk", "critical"):
+            high_risk += 1
+        elif status == "watch":
+            watch_count += 1
+        else:
+            stable_count += 1
+
+        try:
+            p_cloud = cloud_store.get_patient(pid) or {}
+            alerts = p_cloud.get("alerts") or []
+            outcomes = outcomes_store.list_for_patient(pid)
+            adjudicated_alert_ids = {
+                o.get("alert_id") for o in outcomes if o.get("alert_id")
+            }
+            p_pending = 0
+            p_critical = 0
+            for a in alerts:
+                aid = a.get("id")
+                sev = (a.get("severity") or "").lower()
+                if sev == "critical" and not a.get("acknowledged"):
+                    p_critical += 1
+                if aid and aid not in adjudicated_alert_ids:
+                    p_pending += 1
+            v["pendingReviewsCount"] = p_pending
+            v["criticalAlertsCount"] = p_critical
+            pending_reviews += p_pending
+            critical_alerts += p_critical
+        except Exception:
+            v["pendingReviewsCount"] = 0
+            v["criticalAlertsCount"] = 0
+
+    return {
+        "totalPatients": len(views),
+        "highRiskCount": high_risk,
+        "watchCount": watch_count,
+        "stableCount": stable_count,
+        "pendingReviewsCount": pending_reviews,
+        "criticalAlertsCount": critical_alerts,
+        "patients": views,
+    }
+
+
 @router.get("/doctor/patients")
 def doctor_patients(actor: dict = Depends(require_doctor)):
     """Patients assigned to the calling doctor (admins see all patients)."""
@@ -769,6 +943,13 @@ def doctor_create_patient(body: CreatePatientRequest, actor: dict = Depends(requ
 
 def _create_patient_account(body: CreatePatientRequest, actor: dict, doctor_id: str | None) -> dict:
     """Account, profile, caregiver and assignment commit together or not at all."""
+    actor_id = str(actor.get("sub") or "doctor")
+    cached = users_store.get_idempotent_response(
+        body.idempotency_key, actor_id, "/patients/create"
+    )
+    if cached is not None:
+        return cached["payload"]
+
     if doctor_id:
         _require_doctor_exists(doctor_id)
     password_hash, generated = _issue_password(body.password)
@@ -788,13 +969,22 @@ def _create_patient_account(body: CreatePatientRequest, actor: dict, doctor_id: 
                         password_hash=cg_hash, created_by=actor.get("sub"),
                         meta={"phone": body.caregiver_phone, "relation": body.caregiver_relation},
                     )
+            pat_meta = {}
+            if body.phone:
+                pat_meta["phone"] = body.phone
+            if body.gender:
+                pat_meta["gender"] = body.gender
+            if body.emergency_contact:
+                pat_meta["emergencyContact"] = body.emergency_contact
             patient = users_store.create_user(
-                username=body.username, name=body.name, role="patient",
+                username=body.username, name=body.name, email=body.email, role="patient",
                 password_hash=password_hash, created_by=actor.get("sub"), primary_doctor_id=doctor_id,
+                meta=pat_meta,
             )
             cloud_store.upsert_patient(patient["id"], {
                 "name": body.name, "diagnosis": body.diagnosis, "phone": body.phone,
                 "notes": body.notes, "age": body.age,
+                "gender": body.gender, "emergencyContact": body.emergency_contact,
             })
             if doctor_id:
                 users_store.assign_patient(patient["id"], doctor_id, by=actor.get("sub"))
@@ -804,11 +994,15 @@ def _create_patient_account(body: CreatePatientRequest, actor: dict, doctor_id: 
             result = _patient_view(patient)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {
+    payload = {
         "user": result, "generatedPassword": generated,
         "caregiver": users_store.public_user(caregiver_user),
         "caregiverGeneratedPassword": cg_generated,
     }
+    users_store.save_idempotent_response(
+        body.idempotency_key, actor_id, "/patients/create", 201, payload
+    )
+    return payload
 
 
 @router.get("/doctor/patients/{patient_id}")

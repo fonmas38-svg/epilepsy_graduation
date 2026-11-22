@@ -19,8 +19,11 @@ from app.database import (
     audit_logs,
     caregiver_links,
     connection,
+    doctor_profiles,
     dump_json,
+    idempotency_keys,
     load_json,
+    moh_registry,
     transaction,
     upsert,
     users,
@@ -39,6 +42,7 @@ def _user(row) -> dict | None:
     r = row._mapping
     return {
         "id": r["id"], "username": r["username"], "name": r["name"],
+        "email": r.get("email"),
         "role": r["role"], "passwordHash": r["password_hash"],
         "disabled": bool(r["disabled"]),
         "sessionVersion": int(r["session_version"]),
@@ -89,10 +93,12 @@ def username_taken(username: str) -> bool:
 
 def create_user(
     *, username: str, name: str, role: str, password_hash: str,
+    email: str | None = None,
     created_by: str | None = None, primary_doctor_id: str | None = None,
     patient_id: str | None = None, meta: dict | None = None,
 ) -> dict:
     username, name = (username or "").strip(), (name or "").strip()
+    clean_email = (email or "").strip().lower() or None
     if role not in ROLES:
         raise ValueError(f"invalid role: {role}")
     if not username:
@@ -104,7 +110,7 @@ def create_user(
     try:
         with transaction() as conn:
             conn.execute(insert(users).values(
-                id=uid, username=username, name=name, role=role,
+                id=uid, username=username, name=name, email=clean_email, role=role,
                 password_hash=password_hash, disabled=False, session_version=0,
                 primary_doctor_id=primary_doctor_id if role == "patient" else None,
                 patient_id=uid if role == "patient" else None,
@@ -112,12 +118,12 @@ def create_user(
                 meta_json=dump_json(dict(meta or {})),
             ))
     except IntegrityError as exc:
-        raise ValueError("username already exists") from exc
+        raise ValueError("username or email already exists") from exc
     return get_user(uid)
 
 
 _MUTABLE_FIELDS = {
-    "name": "name", "username": "username", "primaryDoctorId": "primary_doctor_id"
+    "name": "name", "username": "username", "email": "email", "primaryDoctorId": "primary_doctor_id"
 }
 
 
@@ -400,3 +406,241 @@ def seed_admin() -> dict | None:
     )
     log("system", "system", "seed_admin", target=user["id"], detail={"username": username})
     return {"user": public_user(user), "usedDefaultPassword": used_default}
+
+
+# ------------------------------------------------------------------ Phase 4: Idempotency, MOH Registry & Doctor Profiles
+
+
+def get_idempotent_response(key: str | None, actor_id: str, endpoint: str) -> dict | None:
+    if not key or not key.strip():
+        return None
+    clean_key = key.strip()[:128]
+    with connection() as conn:
+        row = conn.execute(
+            select(idempotency_keys).where(
+                idempotency_keys.c.key == clean_key,
+                idempotency_keys.c.actor_id == str(actor_id),
+                idempotency_keys.c.endpoint == endpoint,
+            )
+        ).first()
+    if not row:
+        return None
+    r = row._mapping
+    return {
+        "status_code": int(r["response_status"]),
+        "payload": load_json(r["response_json"], {}),
+    }
+
+
+def save_idempotent_response(
+    key: str | None, actor_id: str, endpoint: str, status_code: int, payload: dict
+) -> None:
+    if not key or not key.strip():
+        return
+    clean_key = key.strip()[:128]
+    now = _now()
+    values = {
+        "key": clean_key,
+        "actor_id": str(actor_id),
+        "endpoint": endpoint,
+        "response_status": int(status_code),
+        "response_json": dump_json(payload),
+        "created_at": now,
+    }
+    with transaction() as conn:
+        conn.execute(
+            upsert(idempotency_keys, values).on_conflict_do_update(
+                index_elements=["key"],
+                set_={
+                    "response_status": values["response_status"],
+                    "response_json": values["response_json"],
+                },
+            )
+        )
+
+
+_DEFAULT_MOH_RECORDS = (
+    {
+        "license_number": "MOH-100200",
+        "national_id": "1010101010",
+        "full_name_ar": "خالد العمري",
+        "full_name_en": "Khaled Alomari",
+        "specialization": "مخ وأعصاب وصرع",
+        "hospital_affiliation": "مستشفى الملك فيصل التخصصي",
+        "status": "active",
+        "expiration_date": "2029-12-31",
+    },
+    {
+        "license_number": "MOH-2026-8841",
+        "national_id": "1020304050",
+        "full_name_ar": "مطهر الحميدي",
+        "full_name_en": "Mutahar Alhumidi",
+        "specialization": "طب الأعصاب والصرع",
+        "hospital_affiliation": "المستشفى التخصصي الجامعي",
+        "status": "active",
+        "expiration_date": "2028-12-31",
+    },
+    {
+        "license_number": "MOH-999000",
+        "national_id": "1099990000",
+        "full_name_ar": "سامي الموقوف",
+        "full_name_en": "Sami Suspended",
+        "specialization": "أعصاب",
+        "hospital_affiliation": "عيادة خاصة",
+        "status": "suspended",
+        "expiration_date": "2027-06-30",
+    },
+    {
+        "license_number": "MOH-111000",
+        "national_id": "1011110000",
+        "full_name_ar": "نبيل المنتهي",
+        "full_name_en": "Nabil Expired",
+        "specialization": "أعصاب",
+        "hospital_affiliation": "مستشفى المركزي",
+        "status": "expired",
+        "expiration_date": "2023-01-01",
+    },
+)
+
+
+def ensure_default_moh_registry() -> None:
+    with transaction() as conn:
+        count = conn.execute(select(func.count()).select_from(moh_registry)).scalar_one()
+        if count == 0:
+            for rec in _DEFAULT_MOH_RECORDS:
+                conn.execute(
+                    upsert(moh_registry, rec).on_conflict_do_nothing(
+                        index_elements=["license_number"]
+                    )
+                )
+
+
+def seed_moh_record(record: dict) -> dict:
+    with transaction() as conn:
+        conn.execute(
+            upsert(moh_registry, record).on_conflict_do_update(
+                index_elements=["license_number"],
+                set_={k: v for k, v in record.items() if k != "license_number"},
+            )
+        )
+    return record
+
+
+def verify_moh_license(
+    *,
+    license_number: str,
+    national_id: str | None = None,
+    name: str | None = None,
+) -> dict:
+    ensure_default_moh_registry()
+    clean_license = (license_number or "").strip().upper()
+    if not clean_license:
+        return {
+            "verified": False,
+            "status": "not_found",
+            "record": None,
+            "message": "رقم الترخيص المهني مطلوب للتحقق من سجل وزارة الصحة.",
+        }
+    with connection() as conn:
+        row = conn.execute(
+            select(moh_registry).where(func.upper(moh_registry.c.license_number) == clean_license)
+        ).first()
+    if not row:
+        return {
+            "verified": False,
+            "status": "not_found",
+            "record": None,
+            "message": "رقم الترخيص غير مسجل في قاعدة بيانات وزارة الصحة. يمكنك إلغاء العملية أو إكمال الإنشاء على مسؤولية المدير.",
+        }
+    rec = dict(row._mapping)
+    clean_nid = (national_id or "").strip()
+    if clean_nid and rec.get("national_id") and clean_nid != rec["national_id"]:
+        return {
+            "verified": False,
+            "status": "mismatch",
+            "record": rec,
+            "message": "رقم الهوية الوطنية لا يطابق السجل المرتبط بهذا الترخيص في وزارة الصحة.",
+        }
+    status = rec.get("status", "active")
+    if status == "suspended":
+        return {
+            "verified": False,
+            "status": "suspended",
+            "record": rec,
+            "message": "ترخيص الممارس الصحي موقوف حالياً في سجل وزارة الصحة.",
+        }
+    if status == "expired":
+        return {
+            "verified": False,
+            "status": "expired",
+            "record": rec,
+            "message": "ترخيص الممارس الصحي منتهي الصلاحية في سجل وزارة الصحة.",
+        }
+    return {
+        "verified": True,
+        "status": "active",
+        "record": rec,
+        "message": "تم التحقق من ترخيص الممارس الصحي بنجاح في سجل وزارة الصحة (نشط).",
+    }
+
+
+def upsert_doctor_profile(
+    user_id: str,
+    *,
+    license_number: str,
+    specialization: str,
+    hospital_affiliation: str,
+    national_id: str,
+    phone: str,
+    moh_verified: bool,
+    moh_status: str,
+    moh_override_by: str | None = None,
+) -> dict:
+    now = _now()
+    row = {
+        "id": f"dp-{user_id}",
+        "user_id": user_id,
+        "license_number": license_number.strip(),
+        "specialization": specialization.strip(),
+        "hospital_affiliation": hospital_affiliation.strip(),
+        "national_id": national_id.strip(),
+        "phone": phone.strip(),
+        "moh_verified": bool(moh_verified),
+        "moh_status": moh_status,
+        "moh_checked_at": now,
+        "moh_override_by": moh_override_by,
+        "created_at": now,
+        "updated_at": now,
+    }
+    try:
+        with transaction() as conn:
+            conn.execute(
+                upsert(doctor_profiles, row).on_conflict_do_update(
+                    index_elements=["user_id"],
+                    set_={k: v for k, v in row.items() if k not in ("id", "user_id")},
+                )
+            )
+    except IntegrityError as exc:
+        raise ValueError("doctor license_number or national_id already exists") from exc
+    return row
+
+
+def get_doctor_profile(user_id: str) -> dict | None:
+    with connection() as conn:
+        row = conn.execute(
+            select(doctor_profiles).where(doctor_profiles.c.user_id == user_id)
+        ).first()
+    if not row:
+        return None
+    r = row._mapping
+    return {
+        "licenseNumber": r["license_number"],
+        "specialization": r["specialization"],
+        "hospitalAffiliation": r["hospital_affiliation"],
+        "nationalId": r["national_id"],
+        "phone": r["phone"],
+        "mohVerified": bool(r["moh_verified"]),
+        "mohStatus": r["moh_status"],
+        "mohCheckedAt": r["moh_checked_at"],
+        "mohOverrideBy": r["moh_override_by"],
+    }

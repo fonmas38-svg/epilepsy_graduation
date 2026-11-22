@@ -93,7 +93,7 @@ void main() {
         MockClient((request) async {
           requests.add(request.url.path);
           if (request.url.path == '/admin/overview' && fail) {
-            return http.Response('{}', 503);
+            return http.Response('{}', 500);
           }
           return http.Response(
             jsonEncode(dashboardBody(request.url.path)),

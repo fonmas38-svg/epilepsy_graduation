@@ -14,10 +14,24 @@ router = APIRouter(prefix="/patients", tags=["messages"])
 require_messenger = require_role("patient", "doctor", "caregiver", "admin")
 
 
+ChannelTypeLiteral = Literal[
+    "doctor_patient",
+    "patient_caregiver",
+    "doctor_caregiver",
+    "care_team_triage",
+    "family_patient",
+]
+
+
 class SendMessageRequest(BaseModel):
-    channel_type: Literal["doctor_patient", "family_patient"]
+    channel_type: ChannelTypeLiteral
     content: str = Field(..., min_length=1, max_length=5000)
     client_message_id: UUID | None = None
+    peer_user_id: str | None = Field(default=None, max_length=64)
+
+
+class MarkReadRequest(BaseModel):
+    channel_type: ChannelTypeLiteral | None = None
 
 
 class LocationShareRequest(BaseModel):
@@ -27,10 +41,35 @@ class LocationShareRequest(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+def _enforce_channel_rbac(role: str | None, channel_type: str | None, *, is_write: bool) -> str | None:
+    if role == "caregiver":
+        if channel_type == "doctor_patient":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Caregivers are not permitted to access private doctor-patient consultations",
+            )
+        if channel_type is None and not is_write:
+            return "family_patient"
+    elif role == "patient":
+        if channel_type == "doctor_caregiver":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Patients are not permitted to access direct doctor-caregiver consultations",
+            )
+    elif role == "doctor":
+        if channel_type == "patient_caregiver":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Doctors are not permitted to access private patient-caregiver messages",
+            )
+    return channel_type
+
+
 @router.get("/{patient_id}/messages")
 def list_messages(
     patient_id: str,
-    channel_type: Literal["doctor_patient", "family_patient"] | None = None,
+    channel_type: ChannelTypeLiteral | None = None,
+    peer_user_id: str | None = Query(default=None, max_length=64),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     latest: bool = False,
@@ -39,19 +78,12 @@ def list_messages(
     """Retrieve messages for a patient scoped by channel and role permissions."""
     authorize_patient_access(patient_id, principal, enforce=True)
     role = principal.get("role")
-
-    # Strict privacy safeguard: Caregivers can NEVER inspect private doctor-patient consultations.
-    if role == "caregiver":
-        if channel_type == "doctor_patient":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Caregivers are not permitted to access private doctor-patient consultations",
-            )
-        channel_type = "family_patient"
+    channel_type = _enforce_channel_rbac(role, channel_type, is_write=False)
 
     msgs = messages_store.list_messages(
         patient_id=patient_id,
         channel_type=channel_type,
+        peer_user_id=peer_user_id,
         limit=limit,
         offset=offset,
         latest=latest,
@@ -65,17 +97,11 @@ def send_message(
     body: SendMessageRequest,
     principal: dict = Depends(require_messenger),
 ):
-    """Send a message to either doctor-patient or family-patient channel."""
+    """Send a message to any of the care circle or 1-on-1 channels (#10)."""
     authorize_patient_access(patient_id, principal, enforce=True)
     role = principal.get("role", "patient")
     sub = str(principal.get("sub", ""))
-
-    # Privacy constraint: Caregivers cannot post to doctor-patient channel
-    if role == "caregiver" and body.channel_type == "doctor_patient":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Caregivers cannot send messages to doctor-patient private channel",
-        )
+    _enforce_channel_rbac(role, body.channel_type, is_write=True)
 
     user = users_store.get_user(sub)
     sender_name = user.get("name") if user else (principal.get("name") or "مستخدم")
@@ -89,6 +115,7 @@ def send_message(
             channel_type=body.channel_type,
             content=body.content,
             client_message_id=str(body.client_message_id) if body.client_message_id else None,
+            peer_user_id=body.peer_user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -101,6 +128,25 @@ def send_message(
         detail={"channel": body.channel_type, "messageId": msg["id"]},
     )
     return {"message": msg}
+
+
+@router.post("/{patient_id}/messages/read")
+def mark_messages_read(
+    patient_id: str,
+    body: MarkReadRequest,
+    principal: dict = Depends(require_messenger),
+):
+    """Mark messages in a channel as read by the current participant."""
+    authorize_patient_access(patient_id, principal, enforce=True)
+    role = principal.get("role")
+    sub = str(principal.get("sub", ""))
+    channel_type = _enforce_channel_rbac(role, body.channel_type, is_write=False)
+    updated = messages_store.mark_messages_read(
+        patient_id=patient_id,
+        reader_id=sub,
+        channel_type=channel_type,
+    )
+    return {"ok": True, "updated": updated}
 
 
 @router.post("/{patient_id}/location", status_code=200)

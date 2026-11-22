@@ -8,6 +8,7 @@ import '../../core/ui/states.dart';
 import '../../core/utils/time_ago.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
+import '../../models/models.dart';
 import '../../providers/app_state.dart';
 import '../../widgets/patient_location_card.dart';
 
@@ -29,7 +30,7 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
   bool _sending = false;
   bool _allowPop = false;
   bool _initialized = false;
-  Object? _owner;
+  AppUser? _owner;
   String? _origin;
   bool get ar => AppLocalizations.of(context).isArabic;
   String get _draftKey => '${_selected ?? ''}:$_channel';
@@ -39,7 +40,7 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
     super.didChangeDependencies();
     final app = context.read<AppState>();
     if (!_initialized ||
-        !identical(_owner, app.auth.currentUser) ||
+        !AppUser.sameSessionOwner(_owner, app.auth.currentUser) ||
         _origin != app.api.baseUrl) {
       _initialized = true;
       _owner = app.auth.currentUser;
@@ -144,7 +145,7 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
         content: content,
       );
       if (!mounted ||
-          !identical(app.auth.currentUser, owner) ||
+          !AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
           app.api.baseUrl != origin) {
         return;
       }
@@ -301,10 +302,10 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
 
   Widget chat(AppState app, String name, bool patient, bool caregiver) {
     final loaded = app.messages.patientId == _selected;
+    final doctor = app.auth.currentUser?.role == UserRole.doctor;
     final messages = loaded
-        ? (_channel == 'doctor_patient'
-                  ? app.messages.doctorMessages
-                  : app.messages.familyMessages)
+        ? app.messages
+              .messagesFor(_channel)
               .where(
                 (m) => m.patientId == _selected && m.channelType == _channel,
               )
@@ -408,12 +409,37 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                                     : (_) => _select(_selected, 'doctor_patient'),
                               ),
                             ChoiceChip(
+                              tooltip: ar
+                                  ? 'مجموعة مشتركة تضم المريض والطبيب المعالج والمرافق الأسري'
+                                  : 'Shared group for patient, doctor, and family caregiver',
                               label: Text(ar ? 'دائرة الرعاية' : 'Care circle'),
                               selected: _channel == 'family_patient',
                               onSelected: _sending
                                   ? null
                                   : (_) => _select(_selected, 'family_patient'),
                             ),
+                            if (patient || caregiver)
+                              ChoiceChip(
+                                label: Text(
+                                  ar ? 'المريض والمرافق' : 'Patient & caregiver',
+                                ),
+                                selected: _channel == 'patient_caregiver',
+                                onSelected: _sending
+                                    ? null
+                                    : (_) =>
+                                          _select(_selected, 'patient_caregiver'),
+                              ),
+                            if (doctor || caregiver)
+                              ChoiceChip(
+                                label: Text(
+                                  ar ? 'الطبيب والمرافق' : 'Doctor & caregiver',
+                                ),
+                                selected: _channel == 'doctor_caregiver',
+                                onSelected: _sending
+                                    ? null
+                                    : (_) =>
+                                          _select(_selected, 'doctor_caregiver'),
+                              ),
                           ],
                         ),
                         if (loaded && app.messages.loading) ...[

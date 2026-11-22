@@ -12,6 +12,8 @@ class ChatMessage {
     required this.channelType,
     required this.content,
     required this.createdAt,
+    this.peerUserId,
+    this.deliveredAt,
     this.readAt,
     this.synced = true,
     this.serverOrigin = '',
@@ -22,15 +24,22 @@ class ChatMessage {
   final String senderId;
   final String senderName;
   final UserRole senderRole;
-  final String channelType; // 'doctor_patient' or 'family_patient'
+  final String channelType;
+  final String? peerUserId;
   final String content;
   final DateTime createdAt;
+  final DateTime? deliveredAt;
   final DateTime? readAt;
   final bool synced;
   final String serverOrigin;
 
   bool get isDoctorPatient => channelType == 'doctor_patient';
   bool get isFamilyPatient => channelType == 'family_patient';
+  bool get isPatientCaregiver => channelType == 'patient_caregiver';
+  bool get isDoctorCaregiver => channelType == 'doctor_caregiver';
+  bool get isCareTeamTriage =>
+      channelType == 'care_team_triage' || channelType == 'family_patient';
+  bool get isRead => readAt != null;
 
   ChatMessage copyWith({
     String? id,
@@ -39,8 +48,10 @@ class ChatMessage {
     String? senderName,
     UserRole? senderRole,
     String? channelType,
+    String? peerUserId,
     String? content,
     DateTime? createdAt,
+    DateTime? deliveredAt,
     DateTime? readAt,
     bool? synced,
     String? serverOrigin,
@@ -52,8 +63,10 @@ class ChatMessage {
         senderName: senderName ?? this.senderName,
         senderRole: senderRole ?? this.senderRole,
         channelType: channelType ?? this.channelType,
+        peerUserId: peerUserId ?? this.peerUserId,
         content: content ?? this.content,
         createdAt: createdAt ?? this.createdAt,
+        deliveredAt: deliveredAt ?? this.deliveredAt,
         readAt: readAt ?? this.readAt,
         synced: synced ?? this.synced,
         serverOrigin: serverOrigin ?? this.serverOrigin,
@@ -66,8 +79,10 @@ class ChatMessage {
         'senderName': senderName,
         'senderRole': senderRole.name,
         'channelType': channelType,
+        if (peerUserId != null) 'peerUserId': peerUserId,
         'content': content,
         'createdAt': createdAt.toIso8601String(),
+        if (deliveredAt != null) 'deliveredAt': deliveredAt!.toIso8601String(),
         'readAt': readAt?.toIso8601String(),
         'synced': synced ? 1 : 0,
         'serverOrigin': serverOrigin,
@@ -92,6 +107,12 @@ class ChatMessage {
       parsedCreated = DateTime.now();
     }
 
+    DateTime? parsedDelivered;
+    final deliveredRaw = map['deliveredAt'] ?? map['delivered_at'];
+    if (deliveredRaw is String && deliveredRaw.isNotEmpty) {
+      parsedDelivered = DateTime.tryParse(deliveredRaw);
+    }
+
     DateTime? parsedRead;
     final readRaw = map['readAt'] ?? map['read_at'];
     if (readRaw is String && readRaw.isNotEmpty) {
@@ -105,8 +126,10 @@ class ChatMessage {
       senderName: (map['senderName'] ?? map['sender_name'] ?? 'مستخدم') as String,
       senderRole: parsedRole,
       channelType: (map['channelType'] ?? map['channel_type'] ?? 'family_patient') as String,
+      peerUserId: (map['peerUserId'] ?? map['peer_user_id']) as String?,
       content: (map['content'] ?? '') as String,
       createdAt: parsedCreated,
+      deliveredAt: parsedDelivered,
       readAt: parsedRead,
       synced: !map.containsKey('synced') || map['synced'] == 1 || map['synced'] == true,
       serverOrigin: map['serverOrigin'] as String? ?? '',

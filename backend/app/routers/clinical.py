@@ -82,6 +82,9 @@ class OutcomeRequest(BaseModel):
     assessment_id: str | None = None
     alert_id: str | None = None
     notes: str | None = Field(default=None, max_length=2000)
+    expected_version: int | None = Field(default=None, ge=1)
+    seizure_type: str | None = Field(default=None, max_length=64)
+    artifact_cause: str | None = Field(default=None, max_length=120)
     metadata: dict = Field(default_factory=dict)
 
 
@@ -92,7 +95,9 @@ def alert_details(patient_id: str, alert_id: str,
     alert = cloud_store.get_alert(patient_id, alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="alert not found or no longer retained")
-    return {"alert": alert}
+    readings = cloud_store.list_readings(patient_id, 1)
+    latest_reading = readings[0] if readings else None
+    return {"alert": alert, "reading": latest_reading}
 
 
 @router.post("/{patient_id}/alerts/{alert_id}/acknowledgments", status_code=201)
@@ -129,21 +134,27 @@ def create_outcome(
     principal: dict = Depends(get_optional_principal),
 ):
     authorize_patient_access(patient_id, principal)
+    meta = dict(body.metadata or {})
+    if body.seizure_type:
+        meta["seizure_type"] = body.seizure_type
+    if body.artifact_cause:
+        meta["artifact_cause"] = body.artifact_cause
     try:
         validate_utc_timestamp(body.occurred_at, "occurred_at")
         outcome = outcomes_store.add_outcome(
             patient_id=patient_id, outcome=body.outcome,
             occurred_at=body.occurred_at, recorded_by=str(principal.get("sub", "unknown")),
             assessment_id=body.assessment_id, alert_id=body.alert_id,
-            notes=body.notes, metadata=body.metadata,
+            notes=body.notes, metadata=meta,
             client_id=str(body.id) if body.id else None,
+            expected_version=body.expected_version,
         )
     except ValueError as exc:
-        if 'client id is already used' in str(exc):
-            raise HTTPException(status_code=409, detail='record identifier conflict') from exc
+        if "client id is already used" in str(exc) or "outcome version conflict" in str(exc):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         raise HTTPException(status_code=422, detail=str(exc))
-    except IntegrityError:
-        raise HTTPException(status_code=422, detail="linked assessment or alert is invalid")
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="outcome conflict for this alert") from exc
     users_store.log(principal.get("sub"), principal.get("role"), "record_outcome",
                     outcome["id"], {"patientId": patient_id})
     return {"outcome": outcome}

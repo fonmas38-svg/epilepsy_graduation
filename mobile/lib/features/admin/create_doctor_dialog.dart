@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 import '../../core/errors/failure.dart';
+import '../../core/utils/username_generator.dart';
 import '../../l10n/app_localizations.dart';
 
 typedef CreateDoctor =
@@ -10,9 +12,40 @@ typedef CreateDoctor =
       String? phone,
     });
 
+typedef CreateDoctorExtended =
+    Future<void> Function({
+      required String name,
+      required String username,
+      required String password,
+      String? phone,
+      String? email,
+      String? licenseNumber,
+      String? specialization,
+      String? hospitalAffiliation,
+      String? nationalId,
+      bool mohOverride,
+      required String idempotencyKey,
+    });
+
+typedef VerifyDoctorMoh =
+    Future<Map<String, dynamic>> Function({
+      required String licenseNumber,
+      String? nationalId,
+      String? name,
+    });
+
 class CreateDoctorDialog extends StatefulWidget {
-  const CreateDoctorDialog({super.key, required this.create});
+  const CreateDoctorDialog({
+    super.key,
+    required this.create,
+    this.createExtended,
+    this.verifyMoh,
+  });
+
   final CreateDoctor create;
+  final CreateDoctorExtended? createExtended;
+  final VerifyDoctorMoh? verifyMoh;
+
   @override
   State<CreateDoctorDialog> createState() => _CreateDoctorDialogState();
 }
@@ -23,16 +56,119 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
   final _username = TextEditingController();
   final _password = TextEditingController();
   final _phone = TextEditingController();
+  final _email = TextEditingController();
+  final _licenseNumber = TextEditingController();
+  final _specialization = TextEditingController();
+  final _hospital = TextEditingController();
+  final _nationalId = TextEditingController();
+  late final String _idempotencyKey = const Uuid().v4();
+
+  bool _usernameEditedManually = false;
   bool _busy = false;
   String? _error;
+  Map<String, dynamic>? _mohStatus;
   bool get ar => Localizations.localeOf(context).languageCode == 'ar';
 
   @override
+  void initState() {
+    super.initState();
+    _name.addListener(_onNameChanged);
+  }
+
+  void _onNameChanged() {
+    if (_usernameEditedManually || _busy) return;
+    final generated = UsernameGenerator.generate(_name.text, prefix: 'dr');
+    if (generated.isNotEmpty) {
+      _username.value = TextEditingValue(
+        text: generated,
+        selection: TextSelection.collapsed(offset: generated.length),
+      );
+    }
+  }
+
+  @override
   void dispose() {
-    for (final controller in [_name, _username, _password, _phone]) {
+    _name.removeListener(_onNameChanged);
+    for (final controller in [
+      _name,
+      _username,
+      _password,
+      _phone,
+      _email,
+      _licenseNumber,
+      _specialization,
+      _hospital,
+      _nationalId,
+    ]) {
       controller.dispose();
     }
     super.dispose();
+  }
+
+  Future<bool?> _confirmMohOverrideDialog(String message) {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                ar
+                    ? 'نتيجة التحقق من ترخيص وزارة الصحة'
+                    : 'MOH License Verification Result',
+              ),
+            ),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(ar ? 'إلغاء العملية' : 'Cancel operation'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              ar
+                  ? 'إكمال الإنشاء على مسؤولية المدير'
+                  : 'Complete creation under admin responsibility',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _checkMohOnly() async {
+    final lic = _licenseNumber.text.trim();
+    if (_busy || lic.isEmpty || widget.verifyMoh == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final res = await widget.verifyMoh!(
+        licenseNumber: lic,
+        nationalId: _nationalId.text.trim().isEmpty
+            ? null
+            : _nationalId.text.trim(),
+        name: _name.text.trim().isEmpty ? null : _name.text.trim(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _mohStatus = res;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = Failure.from(error).message(AppLocalizations.of(context));
+      });
+    }
   }
 
   Future<void> _save() async {
@@ -43,16 +179,65 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
       _error = null;
     });
     try {
-      await widget.create(
-        name: _name.text.trim(),
-        username: _username.text.trim(),
-        password: _password.text,
-        phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
-      );
+      var mohOverride = false;
+      final lic = _licenseNumber.text.trim();
+      if (widget.verifyMoh != null && lic.isNotEmpty) {
+        final res = await widget.verifyMoh!(
+          licenseNumber: lic,
+          nationalId: _nationalId.text.trim().isEmpty
+              ? null
+              : _nationalId.text.trim(),
+          name: _name.text.trim(),
+        );
+        if (!mounted) return;
+        _mohStatus = res;
+        final verified = res['verified'] == true;
+        if (!verified) {
+          setState(() => _busy = false);
+          final override = await _confirmMohOverrideDialog(
+            (res['message'] as String?) ??
+                (ar
+                    ? 'لم يتم التحقق من الترخيص في وزارة الصحة.'
+                    : 'License could not be verified in MOH registry.'),
+          );
+          if (override != true || !mounted) return;
+          mohOverride = true;
+          setState(() => _busy = true);
+        }
+      }
+
+      if (widget.createExtended != null) {
+        await widget.createExtended!(
+          name: _name.text.trim(),
+          username: _username.text.trim(),
+          password: _password.text,
+          phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
+          email: _email.text.trim().isEmpty ? null : _email.text.trim(),
+          licenseNumber: lic.isEmpty ? null : lic,
+          specialization: _specialization.text.trim().isEmpty
+              ? null
+              : _specialization.text.trim(),
+          hospitalAffiliation: _hospital.text.trim().isEmpty
+              ? null
+              : _hospital.text.trim(),
+          nationalId: _nationalId.text.trim().isEmpty
+              ? null
+              : _nationalId.text.trim(),
+          mohOverride: mohOverride,
+          idempotencyKey: _idempotencyKey,
+        );
+      } else {
+        await widget.create(
+          name: _name.text.trim(),
+          username: _username.text.trim(),
+          password: _password.text,
+          phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
+        );
+      }
       if (!mounted) return;
       setState(() => _busy = false);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) Navigator.pop(context, true);
+        if (mounted && Navigator.canPop(context)) Navigator.pop(context, true);
       });
     } catch (error) {
       if (!mounted) return;
@@ -77,7 +262,7 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
         title: Text(ar ? 'إنشاء حساب طبيب' : 'Create doctor account'),
         scrollable: true,
         content: SizedBox(
-          width: 420,
+          width: 440,
           child: Form(
             key: _form,
             autovalidateMode: AutovalidateMode.onUserInteraction,
@@ -102,6 +287,27 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
                   ),
                   const SizedBox(height: 16),
                 ],
+                if (_mohStatus != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: _mohStatus!['verified'] == true
+                          ? colors.primaryContainer
+                          : colors.tertiaryContainer,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      (_mohStatus!['message'] as String?) ?? '',
+                      style: TextStyle(
+                        color: _mohStatus!['verified'] == true
+                            ? colors.onPrimaryContainer
+                            : colors.onTertiaryContainer,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 TextFormField(
                   controller: _name,
                   readOnly: _busy,
@@ -120,8 +326,12 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
                   readOnly: _busy,
                   maxLength: 64,
                   autocorrect: false,
+                  onChanged: (_) => _usernameEditedManually = true,
                   decoration: InputDecoration(
                     labelText: ar ? 'اسم المستخدم *' : 'Username *',
+                    helperText: ar
+                        ? 'يُولّد تلقائياً من الاسم ويمكنك تعديله'
+                        : 'Auto-generated from name and editable',
                     prefixIcon: const Icon(Icons.badge_outlined),
                   ),
                   validator: (value) => (value?.trim().length ?? 0) < 3
@@ -159,6 +369,85 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
                     labelText: ar ? 'الهاتف (اختياري)' : 'Phone (optional)',
                     prefixIcon: const Icon(Icons.phone_outlined),
                   ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _email,
+                  readOnly: _busy,
+                  maxLength: 254,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: InputDecoration(
+                    labelText: ar
+                        ? 'البريد الإلكتروني (اختياري)'
+                        : 'Email (optional)',
+                    prefixIcon: const Icon(Icons.email_outlined),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: Text(
+                    ar
+                        ? 'بيانات الترخيص المهني ووزارة الصحة (MOH)'
+                        : 'Professional License & MOH Verification',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  children: [
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _licenseNumber,
+                      readOnly: _busy,
+                      maxLength: 64,
+                      decoration: InputDecoration(
+                        labelText: ar
+                            ? 'رقم الترخيص المهني (MOH)'
+                            : 'MOH License Number',
+                        hintText: 'MOH-100200',
+                        prefixIcon: const Icon(Icons.verified_user_outlined),
+                        suffixIcon: widget.verifyMoh == null
+                            ? null
+                            : IconButton(
+                                tooltip: ar
+                                    ? 'تحقق من وزارة الصحة'
+                                    : 'Verify with MOH',
+                                onPressed: _busy ? null : _checkMohOnly,
+                                icon: const Icon(Icons.fact_check_outlined),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _nationalId,
+                      readOnly: _busy,
+                      maxLength: 32,
+                      decoration: InputDecoration(
+                        labelText: ar ? 'رقم الهوية الوطنية' : 'National ID',
+                        prefixIcon: const Icon(Icons.credit_card_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _specialization,
+                      readOnly: _busy,
+                      maxLength: 120,
+                      decoration: InputDecoration(
+                        labelText: ar ? 'التخصص الطبي' : 'Medical Specialization',
+                        prefixIcon: const Icon(Icons.medical_services_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _hospital,
+                      readOnly: _busy,
+                      maxLength: 180,
+                      decoration: InputDecoration(
+                        labelText: ar
+                            ? 'المستشفى / الجهة الطبية'
+                            : 'Hospital Affiliation',
+                        prefixIcon: const Icon(Icons.local_hospital_outlined),
+                      ),
+                    ),
+                  ],
                 ),
                 if (_busy)
                   Padding(

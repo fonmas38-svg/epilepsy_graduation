@@ -13,7 +13,8 @@ class AppUser {
 
   /// Semantic equality helper comparing user identity (uid and role) rather than pointer identity.
   static bool sameSessionOwner(AppUser? a, AppUser? b) =>
-      a != null && b != null && a.uid == b.uid && a.role == b.role;
+      (a == null && b == null) ||
+      (a != null && b != null && a.uid == b.uid && a.role == b.role);
 
   final String uid;
   final String name;
@@ -275,6 +276,7 @@ class Medication {
     this.times = const [],
     this.active = true,
     DateTime? createdAt,
+    this.timezoneOffsetMin,
   }) : createdAt = createdAt ?? DateTime.now();
 
   final String id;
@@ -287,6 +289,7 @@ class Medication {
   final List<String> times;
   final bool active;
   final DateTime createdAt;
+  final int? timezoneOffsetMin;
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -297,6 +300,7 @@ class Medication {
         'times': times,
         'active': active,
         'createdAt': createdAt.toIso8601String(),
+        if (timezoneOffsetMin != null) 'timezoneOffsetMin': timezoneOffsetMin,
       };
 
   factory Medication.fromMap(Map<String, dynamic> map) => Medication(
@@ -308,6 +312,7 @@ class Medication {
         times: List<String>.from(map['times'] ?? const []),
         active: (map['active'] as bool?) ?? true,
         createdAt: DateTime.tryParse(map['createdAt'] as String? ?? '') ?? DateTime.now(),
+        timezoneOffsetMin: (map['timezoneOffsetMin'] as num?)?.toInt(),
       );
 }
 
@@ -320,7 +325,9 @@ class MedicationLog {
     required this.scheduledFor,
     this.takenAt,
     this.status = 'taken',
-  });
+    int? timezoneOffsetMin,
+  }) : timezoneOffsetMin =
+           timezoneOffsetMin ?? scheduledFor.timeZoneOffset.inMinutes;
 
   final String id;
   final String medicationId;
@@ -330,25 +337,28 @@ class MedicationLog {
 
   /// 'taken' | 'missed' | 'skipped'.
   final String status;
+  final int timezoneOffsetMin;
 
   Map<String, dynamic> toMap() => {
         'id': id,
         'medicationId': medicationId,
         'patientId': patientId,
-        'scheduledFor': scheduledFor.toIso8601String(),
-        'takenAt': takenAt?.toIso8601String(),
+        'scheduledFor': scheduledFor.toUtc().toIso8601String(),
+        'takenAt': takenAt?.toUtc().toIso8601String(),
         'status': status,
+        'timezoneOffsetMin': timezoneOffsetMin,
       };
 
   factory MedicationLog.fromMap(Map<String, dynamic> map) => MedicationLog(
         id: map['id'] as String,
         medicationId: map['medicationId'] as String,
         patientId: map['patientId'] as String,
-        scheduledFor: DateTime.parse(map['scheduledFor'] as String),
+        scheduledFor: DateTime.parse(map['scheduledFor'] as String).toLocal(),
         takenAt: (map['takenAt'] as String?) == null
             ? null
-            : DateTime.tryParse(map['takenAt'] as String),
+            : DateTime.tryParse(map['takenAt'] as String)?.toLocal(),
         status: map['status'] as String? ?? 'taken',
+        timezoneOffsetMin: (map['timezoneOffsetMin'] as num?)?.toInt(),
       );
 }
 

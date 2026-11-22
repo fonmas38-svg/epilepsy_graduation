@@ -1,25 +1,238 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart'
-    show debugPrint, defaultTargetPlatform, kIsWeb, TargetPlatform;
+    show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest_all.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
 
 import '../core/config.dart';
 import 'alert_reception_gate.dart';
 
-/// Handles FCM registration and foreground notifications.
-/// In DEMO_MODE this is a no-op stub that logs locally.
+/// Abstraction over OS local notification scheduling so headless tests can run
+/// without invoking Windows FFI DLLs or Android/iOS platform channels.
+abstract class LocalNotificationGateway {
+  Future<bool> initialize();
+  Future<void> requestPermissions();
+  Future<void> show({
+    required int id,
+    required String title,
+    required String body,
+    String? payload,
+  });
+  Future<void> zonedSchedule({
+    required int id,
+    required String title,
+    required String body,
+    required tz.TZDateTime scheduledDate,
+    String? payload,
+    bool repeatDaily = true,
+  });
+  Future<void> cancel(int id);
+  Future<void> cancelAll();
+}
+
+/// Default OS gateway backed by `flutter_local_notifications` and `timezone`.
+class FlutterLocalNotificationsGateway implements LocalNotificationGateway {
+  FlutterLocalNotificationsPlugin? _plugin;
+  bool _osAvailable = false;
+  bool _initialized = false;
+
+  static bool _tzInitialized = false;
+
+  static void ensureTimeZonesInitialized() {
+    if (_tzInitialized) return;
+    tz_data.initializeTimeZones();
+    _tzInitialized = true;
+  }
+
+  static bool get isHeadlessTest {
+    if (kIsWeb) return false;
+    try {
+      return Platform.environment.containsKey('FLUTTER_TEST');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  NotificationDetails _details() => const NotificationDetails(
+    android: AndroidNotificationDetails(
+      'medication_reminders',
+      'Medication Reminders',
+      channelDescription: 'Scheduled anti-epileptic medication reminders',
+      importance: Importance.max,
+      priority: Priority.high,
+    ),
+    iOS: DarwinNotificationDetails(),
+    macOS: DarwinNotificationDetails(),
+    windows: WindowsNotificationDetails(),
+  );
+
+  @override
+  Future<bool> initialize() async {
+    ensureTimeZonesInitialized();
+    if (_initialized) return _osAvailable;
+    _initialized = true;
+    if (kIsWeb || isHeadlessTest) {
+      _osAvailable = false;
+      return false;
+    }
+    try {
+      final plugin = _plugin ??= FlutterLocalNotificationsPlugin();
+      const settings = InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        iOS: DarwinInitializationSettings(),
+        macOS: DarwinInitializationSettings(),
+        windows: WindowsInitializationSettings(
+          appName: 'NeuroShield AI',
+          appUserModelId: 'NeuroShieldHealthTechnologies.NeuroShieldAI.Desktop.1',
+          guid: '9e2f4b8c-7a1d-4c3e-8f5a-2b6d9c1e4a70',
+        ),
+      );
+      await plugin.initialize(settings);
+      _osAvailable = true;
+    } catch (e) {
+      debugPrint('Local notifications init skipped: $e');
+      _osAvailable = false;
+    }
+    return _osAvailable;
+  }
+
+  @override
+  Future<void> requestPermissions() async {
+    if (!_osAvailable || kIsWeb || isHeadlessTest) return;
+    final plugin = _plugin;
+    if (plugin == null) return;
+    try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        final android = plugin
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >();
+        await android?.requestNotificationsPermission();
+        await android?.requestExactAlarmsPermission();
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        await plugin
+            .resolvePlatformSpecificImplementation<
+              IOSFlutterLocalNotificationsPlugin
+            >()
+            ?.requestPermissions(alert: true, badge: true, sound: true);
+      } else if (defaultTargetPlatform == TargetPlatform.macOS) {
+        await plugin
+            .resolvePlatformSpecificImplementation<
+              MacOSFlutterLocalNotificationsPlugin
+            >()
+            ?.requestPermissions(alert: true, badge: true, sound: true);
+      }
+    } catch (e) {
+      debugPrint('Local notification permission request skipped: $e');
+    }
+  }
+
+  @override
+  Future<void> show({
+    required int id,
+    required String title,
+    required String body,
+    String? payload,
+  }) async {
+    if (!_initialized) await initialize();
+    if (!_osAvailable || _plugin == null) return;
+    try {
+      await _plugin!.show(id, title, body, _details(), payload: payload);
+    } catch (e) {
+      debugPrint('Local notification show skipped: $e');
+    }
+  }
+
+  @override
+  Future<void> zonedSchedule({
+    required int id,
+    required String title,
+    required String body,
+    required tz.TZDateTime scheduledDate,
+    String? payload,
+    bool repeatDaily = true,
+  }) async {
+    if (!_initialized) await initialize();
+    if (!_osAvailable || _plugin == null) return;
+    if (!scheduledDate.isAfter(tz.TZDateTime.now(scheduledDate.location))) {
+      return;
+    }
+    final recurrence =
+        repeatDaily && defaultTargetPlatform != TargetPlatform.windows
+        ? DateTimeComponents.time
+        : null;
+    try {
+      await _plugin!.zonedSchedule(
+        id,
+        title,
+        body,
+        scheduledDate,
+        _details(),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        payload: payload,
+        matchDateTimeComponents: recurrence,
+      );
+    } catch (_) {
+      try {
+        await _plugin!.zonedSchedule(
+          id,
+          title,
+          body,
+          scheduledDate,
+          _details(),
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          payload: payload,
+          matchDateTimeComponents: recurrence,
+        );
+      } catch (e) {
+        debugPrint('Local notification schedule skipped: $e');
+      }
+    }
+  }
+
+  @override
+  Future<void> cancel(int id) async {
+    if (!_osAvailable || _plugin == null) return;
+    try {
+      await _plugin!.cancel(id);
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> cancelAll() async {
+    if (!_osAvailable || _plugin == null) return;
+    try {
+      await _plugin!.cancelAll();
+    } catch (_) {}
+  }
+}
+
+/// Handles FCM registration, foreground notifications, and OS local alarms.
 ///
 /// Cross-account isolation: every FCM message carries a `patient_id` field in
-/// its `data` map. the authorized patient set is set by [AppState] on login/switch so
+/// its `data` map. The authorized patient set is set by [AppState] on login/switch so
 /// we can filter out alerts that belong to a different account even when two
 /// accounts share the same physical device (and therefore the same FCM token).
 class NotificationService {
-  NotificationService({this.fallbackTitle = 'Alert'});
+  NotificationService({
+    this.fallbackTitle = 'Alert',
+    LocalNotificationGateway? gateway,
+    DateTime Function()? now,
+  }) : _gateway = gateway ?? FlutterLocalNotificationsGateway(),
+       _now = now ?? DateTime.now;
 
   static String get platformName => defaultTargetPlatform.name;
 
   String fallbackTitle;
   String? token;
+  final LocalNotificationGateway _gateway;
+  final DateTime Function() _now;
+
+  LocalNotificationGateway get gateway => _gateway;
 
   /// The patient whose alerts this session should receive.
   /// Set by AppState immediately after login and cleared on sign-out.
@@ -53,8 +266,7 @@ class NotificationService {
   void Function(String token)? _onToken;
 
   /// In-app banner sink, captured from [init]. Used by [showLocal] so local
-  /// notifications degrade gracefully to the existing banner when no OS
-  /// notification channel (FCM / flutter_local_notifications) is available.
+  /// notifications surface in-app as well as through the OS notification tray.
   void Function(String title, String body)? _sink;
 
   /// Update the patient context so FCM messages are filtered by owner.
@@ -76,14 +288,26 @@ class NotificationService {
     if (fallbackTitle != null) this.fallbackTitle = fallbackTitle;
     _sink = onMessage;
     _onToken = onToken;
+
+    try {
+      final ok = await _gateway.initialize();
+      if (ok && !AppConfig.demoMode) {
+        await _gateway.requestPermissions();
+      }
+    } catch (_) {}
+
     final isMobile = !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS);
-    if (AppConfig.demoMode || !isMobile) {
+    if (AppConfig.demoMode || !isMobile || FlutterLocalNotificationsGateway.isHeadlessTest) {
       if (!AppConfig.demoMode && !isMobile) {
         debugPrint(
           'FCM is disabled on this desktop/web platform; using backend polling',
         );
+        token = null;
+        return;
+      }
+      if (FlutterLocalNotificationsGateway.isHeadlessTest && !AppConfig.demoMode) {
         token = null;
         return;
       }
@@ -117,10 +341,44 @@ class NotificationService {
     _pendingInitial = await messaging.getInitialMessage();
   }
 
-  /// Show a local notification. In demo mode (Firebase not initialized) this
-  /// degrades to the in-app banner captured in [init]. When a real OS
-  /// notification plugin is wired later, prefer it here and fall back to [_sink].
-  Future<void> showLocal(String title, String body) async {
+  /// Show an immediate local notification via the OS gateway and in-app banner sink.
+  Future<void> showLocal(
+    String title,
+    String body, {
+    int id = 0,
+    String? payload,
+  }) async {
+    await _gateway.show(id: id, title: title, body: body, payload: payload);
     _sink?.call(title, body);
   }
+
+  /// Schedule a timezone-safe OS reminder for [scheduledUtc] in [location].
+  Future<void> scheduleDoseReminder({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime scheduledUtc,
+    tz.Location? location,
+    String? payload,
+    bool repeatDaily = true,
+  }) async {
+    FlutterLocalNotificationsGateway.ensureTimeZonesInitialized();
+    final nowUtc = _now().toUtc();
+    final targetUtc = scheduledUtc.toUtc();
+    if (!targetUtc.isAfter(nowUtc)) return;
+    final loc = location ?? tz.UTC;
+    final scheduled = tz.TZDateTime.from(targetUtc, loc);
+    await _gateway.zonedSchedule(
+      id: id,
+      title: title,
+      body: body,
+      scheduledDate: scheduled,
+      payload: payload,
+      repeatDaily: repeatDaily,
+    );
+  }
+
+  Future<void> cancelReminder(int id) => _gateway.cancel(id);
+
+  Future<void> cancelAllReminders() => _gateway.cancelAll();
 }

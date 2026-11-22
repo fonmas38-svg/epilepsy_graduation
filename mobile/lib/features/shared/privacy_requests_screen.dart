@@ -30,7 +30,7 @@ class _PrivacyRequestsScreenState extends State<PrivacyRequestsScreen> {
   bool get _current =>
       mounted &&
       {UserRole.patient, UserRole.admin}.contains(_owner?.role) &&
-      identical(_owner, _app.auth.currentUser) &&
+      AppUser.sameSessionOwner(_owner, _app.auth.currentUser) &&
       _origin == _app.api.baseUrl &&
       _revision == _app.api.tokens.revision;
   @override

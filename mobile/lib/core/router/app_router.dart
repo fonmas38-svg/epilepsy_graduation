@@ -30,6 +30,7 @@ import '../../features/patient/triggers_screen.dart';
 import '../../features/shared/active_alert_screen.dart';
 import '../../features/shared/clinical_messages_screen.dart';
 import '../../features/shared/medical_reports_screen.dart';
+import '../../models/models.dart';
 import '../../providers/app_state.dart';
 import '../enums.dart';
 import 'route_names.dart';
@@ -320,7 +321,7 @@ class AppRouter {
       builder: (_) => Consumer<AppState>(
         builder: (context, state, _) {
           if (resolved != Routes.login &&
-              (!identical(state.auth.currentUser, owner) ||
+              (!AppUser.sameSessionOwner(state.auth.currentUser, owner) ||
                   state.api.baseUrl != origin)) {
             return const SizedBox.shrink();
           }

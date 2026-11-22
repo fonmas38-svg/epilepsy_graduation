@@ -1,7 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart'
-    show debugPrint, defaultTargetPlatform, kIsWeb;
+    show ValueNotifier, debugPrint, defaultTargetPlatform, kIsWeb;
 import 'package:http/http.dart' as http;
 
 import '../core/config.dart';
@@ -70,28 +71,71 @@ class ApiException implements Exception {
 }
 
 class ApiClient {
-  ApiClient({http.Client? client, String? baseUrl, TokenProvider? tokens})
-    : _client = client ?? http.Client(),
-      _baseUrl = (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(
-        RegExp(r'/+$'),
-        '',
-      ),
-      tokens =
-          tokens ??
-          TokenProvider(
-            baseUrl: (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(
-              RegExp(r'/+$'),
-              '',
-            ),
-          );
+  ApiClient({
+    http.Client? client,
+    String? baseUrl,
+    TokenProvider? tokens,
+    this.healthCacheTtl = const Duration(seconds: 15),
+    DateTime Function()? now,
+    Future<void> Function(Duration)? sleep,
+  }) : _client = client ?? http.Client(),
+       _now = now ?? DateTime.now,
+       _sleep = sleep ?? Future.delayed,
+       _baseUrl = (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(
+         RegExp(r'/+$'),
+         '',
+       ),
+       tokens =
+           tokens ??
+           TokenProvider(
+             baseUrl: (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(
+               RegExp(r'/+$'),
+               '',
+             ),
+           );
 
   final http.Client _client;
+  final Duration healthCacheTtl;
+  final DateTime Function() _now;
+  final Future<void> Function(Duration) _sleep;
   String _baseUrl;
   String get baseUrl => _baseUrl;
+
+  static const List<Duration> _coldStartBackoff = [
+    Duration(seconds: 2),
+    Duration(seconds: 5),
+    Duration(seconds: 12),
+    Duration(seconds: 25),
+  ];
+  static const Duration _coldStartCeiling = Duration(seconds: 90);
+
+  /// Emits `true` while any request is sleeping/retrying during a server cold start.
+  final ValueNotifier<bool> wakingNotifier = ValueNotifier<bool>(false);
+  bool get isWakingServer => wakingNotifier.value;
+  int _wakingOps = 0;
+
+  void _enterWaking() {
+    _wakingOps++;
+    if (!wakingNotifier.value) {
+      wakingNotifier.value = true;
+    }
+  }
+
+  void _exitWaking() {
+    if (_wakingOps > 0) _wakingOps--;
+    if (_wakingOps == 0 && wakingNotifier.value) {
+      wakingNotifier.value = false;
+    }
+  }
 
   void updateBaseUrl(String newUrl) {
     _baseUrl = newUrl.trim().replaceAll(RegExp(r'/+$'), '');
     tokens.updateBaseUrl(_baseUrl);
+    _healthCache.remove(_baseUrl);
+  }
+
+  void dispose() {
+    wakingNotifier.dispose();
   }
 
   /// Issues/refreshes the JWT attached to authenticated requests.
@@ -123,8 +167,15 @@ class ApiClient {
     String path,
     Object body, {
     Duration timeout = const Duration(seconds: 15),
+    bool allowColdStartRetry = false,
   }) async {
-    return _requestAuthed('POST', path, body: body, timeout: timeout);
+    return _requestAuthed(
+      'POST',
+      path,
+      body: body,
+      timeout: timeout,
+      allowColdStartRetry: allowColdStartRetry,
+    );
   }
 
   String _detail(http.Response response, String fallback) {
@@ -188,6 +239,7 @@ class ApiClient {
       'GET',
       '/auth/me',
       timeout: const Duration(seconds: 8),
+      allowColdStartRetry: true,
     );
     if (r.statusCode != 200) {
       throw ApiException(
@@ -254,16 +306,27 @@ class ApiClient {
   }
 
   final _healthRequests = <String, Future<bool>>{};
+  final Map<String, ({bool ok, DateTime at})> _healthCache = {};
 
   Future<bool> health([
     String? overrideUrl,
     Duration timeout = const Duration(seconds: 10),
+    bool forceRefresh = false,
   ]) async {
     final target = (overrideUrl ?? baseUrl).replaceAll(RegExp(r'/+$'), '');
+    if (!forceRefresh) {
+      final cached = _healthCache[target];
+      if (cached != null && _now().difference(cached.at) < healthCacheTtl) {
+        return cached.ok;
+      }
+    }
     final key = '$target:${timeout.inMicroseconds}';
     final pending = _healthRequests[key];
     if (pending != null) return pending;
-    final request = _probeHealth(target, timeout);
+    final request = _probeHealth(target, timeout).then((ok) {
+      _healthCache[target] = (ok: ok, at: _now());
+      return ok;
+    });
     _healthRequests[key] = request;
     try {
       return await request;
@@ -371,13 +434,37 @@ class ApiClient {
     }
   }
 
+  Future<Map<String, dynamic>> simulateStream({
+    String pattern = 'stable',
+    int samples = 262,
+    int? seed,
+  }) async {
+    final r = await _postAuthed(
+      '/simulate/stream',
+      {
+        'pattern': pattern,
+        'samples': samples,
+        'seed': ?seed,
+      },
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: false,
+    );
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر جلب إشارة المحاكاة'),
+        statusCode: r.statusCode,
+      );
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
   Future<AlertItem> alertDetails(String patientId, String alertId) async {
-    final response = await _client
-        .get(
-          _u('/patients/$patientId/alerts/$alertId'),
-          headers: await _headers(),
-        )
-        .timeout(const Duration(seconds: 8));
+    final response = await _requestAuthed(
+      'GET',
+      '/patients/$patientId/alerts/$alertId',
+      timeout: const Duration(seconds: 8),
+      allowColdStartRetry: true,
+    );
     if (response.statusCode != 200) {
       throw ApiException(
         'Alert details unavailable',
@@ -389,9 +476,12 @@ class ApiClient {
   }
 
   Future<DeviceStatusResult> deviceStatus(String patientId) async {
-    final r = await _client
-        .get(_u('/device/status/$patientId'), headers: await _headers())
-        .timeout(const Duration(seconds: 8));
+    final r = await _requestAuthed(
+      'GET',
+      '/device/status/$patientId',
+      timeout: const Duration(seconds: 8),
+      allowColdStartRetry: false,
+    );
     if (r.statusCode != 200) {
       throw Exception('device status failed');
     }
@@ -464,9 +554,12 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> cloudPatient(String patientId) async {
-    final r = await _client
-        .get(_u('/cloud/patients/$patientId'), headers: await _headers())
-        .timeout(const Duration(seconds: 8));
+    final r = await _requestAuthed(
+      'GET',
+      '/cloud/patients/$patientId',
+      timeout: const Duration(seconds: 8),
+      allowColdStartRetry: true,
+    );
     if (r.statusCode != 200) {
       throw Exception('cloud patient failed');
     }
@@ -496,6 +589,36 @@ class ApiClient {
     }
   }
 
+  Future<Map<String, dynamic>> cloudSyncBatch({
+    required String patientId,
+    required List<Map<String, dynamic>> items,
+    required String idempotencyKey,
+  }) async {
+    final payload = {
+      'patient_id': patientId,
+      'idempotency_key': idempotencyKey,
+      'bundles': items,
+    };
+    final r = await _requestAuthed(
+      'POST',
+      '/cloud/sync-batch',
+      body: payload,
+      timeout: const Duration(seconds: 30),
+      allowColdStartRetry: true,
+    );
+    if (r.statusCode < 200 || r.statusCode >= 300) {
+      throw ApiException(
+        _detail(r, 'تعذّرت مزامنة حزمة بيانات المريض'),
+        statusCode: r.statusCode,
+      );
+    }
+    if (r.body.isEmpty) return const {'ok': true};
+    final decoded = jsonDecode(r.body);
+    return decoded is Map
+        ? Map<String, dynamic>.from(decoded)
+        : const {'ok': true};
+  }
+
   // ------------------------------------------------------------------ care (§10)
   //
   // The care resources (medications, triggers, emergency contacts, consents,
@@ -510,13 +633,30 @@ class ApiClient {
   //   deployed yet it answers 404, [Failure] maps that to «notFound», and the
   //   caller keeps its locally-stored copy. Nothing crashes.
 
-  /// Authenticated JSON request with a single 401 retry, mirroring [_postAuthed]
-  /// for the verbs it does not cover.
+  bool _isTransientStatus(int statusCode) =>
+      statusCode == 502 || statusCode == 503 || statusCode == 504;
+
+  bool _isConnectivityError(Object error) {
+    if (error is TimeoutException) return true;
+    final typeName = error.runtimeType.toString();
+    const connectivityTypes = [
+      'SocketException',
+      'ClientException',
+      'HandshakeException',
+      'HttpException',
+      'TlsException',
+    ];
+    return connectivityTypes.any(typeName.contains);
+  }
+
+  /// Authenticated JSON request with a single 401 retry and optional bounded
+  /// cold-start exponential backoff for idempotent operations.
   Future<http.Response> _requestAuthed(
     String method,
     String path, {
     Object? body,
     Duration timeout = const Duration(seconds: 15),
+    bool allowColdStartRetry = false,
   }) async {
     final revision = tokens.revision;
     final origin = _baseUrl;
@@ -526,35 +666,105 @@ class ApiClient {
       }
     }
 
+    final upper = method.toUpperCase();
+    final hasIdempotencyKey =
+        body is Map &&
+        body['idempotency_key'] is String &&
+        (body['idempotency_key'] as String).isNotEmpty;
+    final canColdStartRetry =
+        allowColdStartRetry &&
+        (upper == 'GET' || (upper == 'POST' && hasIdempotencyKey));
     final payload = body == null ? null : jsonEncode(body);
 
-    Future<http.Response> attempt() async {
+    Future<http.Response> attempt(Duration attemptTimeout) async {
       checkSession();
       final headers = await _headers();
       checkSession();
       final uri = _u(path);
-      return switch (method.toUpperCase()) {
-        'GET' => _client.get(uri, headers: headers).timeout(timeout),
-        'PUT' =>
-          _client.put(uri, headers: headers, body: payload).timeout(timeout),
-        'PATCH' =>
-          _client.patch(uri, headers: headers, body: payload).timeout(timeout),
-        'DELETE' =>
-          _client.delete(uri, headers: headers, body: payload).timeout(timeout),
-        _ =>
-          _client.post(uri, headers: headers, body: payload).timeout(timeout),
+      return switch (upper) {
+        'GET' => _client.get(uri, headers: headers).timeout(attemptTimeout),
+        'PUT' => _client
+            .put(uri, headers: headers, body: payload)
+            .timeout(attemptTimeout),
+        'PATCH' => _client
+            .patch(uri, headers: headers, body: payload)
+            .timeout(attemptTimeout),
+        'DELETE' => _client
+            .delete(uri, headers: headers, body: payload)
+            .timeout(attemptTimeout),
+        _ => _client
+            .post(uri, headers: headers, body: payload)
+            .timeout(attemptTimeout),
       };
     }
 
-    var r = await attempt();
-    checkSession();
-    if (r.statusCode == 401) {
-      final token = await tokens.bearer(forceRefresh: true);
+    Future<http.Response> runWith401Refresh(Duration attemptTimeout) async {
+      var r = await attempt(attemptTimeout);
       checkSession();
-      if (token != null && token.isNotEmpty) r = await attempt();
+      if (r.statusCode == 401) {
+        final token = await tokens.bearer(forceRefresh: true);
+        checkSession();
+        if (token != null && token.isNotEmpty) {
+          r = await attempt(attemptTimeout);
+        }
+      }
+      checkSession();
+      return r;
     }
-    checkSession();
-    return r;
+
+    if (!canColdStartRetry) {
+      return runWith401Refresh(timeout);
+    }
+
+    final startedAt = _now();
+    var enteredWaking = false;
+    http.Response? lastResponse;
+    Object? lastError;
+
+    try {
+      try {
+        final r = await runWith401Refresh(timeout);
+        if (!_isTransientStatus(r.statusCode)) return r;
+        lastResponse = r;
+      } catch (e) {
+        if (e is ApiException || !_isConnectivityError(e)) rethrow;
+        lastError = e;
+      }
+
+      for (final delay in _coldStartBackoff) {
+        checkSession();
+        final remaining = _coldStartCeiling - _now().difference(startedAt);
+        if (remaining <= Duration.zero) break;
+        final wait = delay < remaining ? delay : remaining;
+        if (!enteredWaking) {
+          enteredWaking = true;
+          _enterWaking();
+        }
+        await _sleep(wait);
+        checkSession();
+        final remainingAfterSleep =
+            _coldStartCeiling - _now().difference(startedAt);
+        if (remainingAfterSleep <= Duration.zero) break;
+        final nextTimeout =
+            timeout < remainingAfterSleep ? timeout : remainingAfterSleep;
+        try {
+          final r = await runWith401Refresh(nextTimeout);
+          if (!_isTransientStatus(r.statusCode)) return r;
+          lastResponse = r;
+          lastError = null;
+        } catch (e) {
+          if (e is ApiException || !_isConnectivityError(e)) rethrow;
+          lastError = e;
+          lastResponse = null;
+        }
+      }
+
+      if (lastResponse != null) return lastResponse;
+      if (lastError != null) Error.throwWithStackTrace(lastError, StackTrace.current);
+      throw TimeoutException('Cold-start retry ceiling exceeded');
+    } finally {
+      if (enteredWaking) _exitWaking();
+    }
   }
 
   /// Send one care write. Returns the decoded body when there is one.
@@ -567,10 +777,16 @@ class ApiClient {
     required String path,
     Map<String, Object?> body = const {},
   }) async {
+    final upper = method.toUpperCase();
+    final hasIdempotencyKey =
+        body['idempotency_key'] is String &&
+        (body['idempotency_key'] as String).isNotEmpty;
     final r = await _requestAuthed(
       method,
       path,
-      body: method.toUpperCase() == 'GET' ? null : body,
+      body: upper == 'GET' ? null : body,
+      allowColdStartRetry:
+          upper == 'GET' || (upper == 'POST' && hasIdempotencyKey),
     );
     if (r.statusCode < 200 || r.statusCode >= 300) {
       throw ApiException(
@@ -595,6 +811,7 @@ class ApiClient {
       'GET',
       path,
       timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
     );
     if (r.statusCode < 200 || r.statusCode >= 300) {
       throw ApiException(
@@ -624,6 +841,7 @@ class ApiClient {
       'GET',
       path,
       timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
     );
     if (r.statusCode < 200 || r.statusCode >= 300) {
       throw ApiException(
@@ -671,8 +889,11 @@ class ApiClient {
     required String username,
     required String name,
     String? password,
+    String? email,
     String? phone,
     int? age,
+    String? gender,
+    String? emergencyContact,
     String? diagnosis,
     String? notes,
     String? caregiverName,
@@ -680,13 +901,18 @@ class ApiClient {
     String? caregiverPhone,
     String? caregiverRelation,
     String? caregiverPassword,
+    String? idempotencyKey,
   }) async {
     final payload = <String, dynamic>{
       'username': username,
       'name': name,
       if (password != null && password.isNotEmpty) 'password': password,
+      if (email != null && email.isNotEmpty) 'email': email,
       if (phone != null && phone.isNotEmpty) 'phone': phone,
       'age': ?age,
+      if (gender != null && gender.isNotEmpty) 'gender': gender,
+      if (emergencyContact != null && emergencyContact.isNotEmpty)
+        'emergency_contact': emergencyContact,
       if (diagnosis != null && diagnosis.isNotEmpty) 'diagnosis': diagnosis,
       if (notes != null && notes.isNotEmpty) 'notes': notes,
       if (caregiverName != null && caregiverName.isNotEmpty)
@@ -699,9 +925,11 @@ class ApiClient {
         'caregiver_relation': caregiverRelation,
       if (caregiverPassword != null && caregiverPassword.isNotEmpty)
         'caregiver_password': caregiverPassword,
+      if (idempotencyKey != null && idempotencyKey.isNotEmpty)
+        'idempotency_key': idempotencyKey,
     };
     final r = await _postAuthed('/doctor/patients', payload);
-    if (r.statusCode != 201) {
+    if (r.statusCode != 201 && r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر إنشاء حساب المريض'),
         statusCode: r.statusCode,
@@ -710,10 +938,29 @@ class ApiClient {
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
+  Future<Map<String, dynamic>> getDoctorDashboardSummary() async {
+    final r = await _requestAuthed(
+      'GET',
+      '/doctor/dashboard-summary',
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل ملخص لوحة الطبيب'),
+        statusCode: r.statusCode,
+      );
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> getAdminOverview() async {
-    final r = await _client
-        .get(_u('/admin/overview'), headers: await _headers())
-        .timeout(const Duration(seconds: 10));
+    final r = await _requestAuthed(
+      'GET',
+      '/admin/overview',
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
     if (r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر تحميل بيانات لوحة الإدارة'),
@@ -730,12 +977,16 @@ class ApiClient {
     final params = <String, String>{};
     if (role != null) params['role'] = role;
     if (query != null && query.isNotEmpty) params['q'] = query;
-    final uri = _u(
-      '/admin/users',
-    ).replace(queryParameters: params.isEmpty ? null : params);
-    final r = await _client
-        .get(uri, headers: await _headers())
-        .timeout(const Duration(seconds: 10));
+    final pathWithQuery = Uri(
+      path: '/admin/users',
+      queryParameters: params.isEmpty ? null : params,
+    ).toString();
+    final r = await _requestAuthed(
+      'GET',
+      pathWithQuery,
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
     if (r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر تحميل قائمة المستخدمين'),
@@ -747,12 +998,39 @@ class ApiClient {
     return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  Future<Map<String, dynamic>> verifyAdminDoctorMoh({
+    required String licenseNumber,
+    String? nationalId,
+    String? name,
+  }) async {
+    final payload = <String, dynamic>{
+      'license_number': licenseNumber,
+      if (nationalId != null && nationalId.isNotEmpty)
+        'national_id': nationalId,
+      if (name != null && name.isNotEmpty) 'name': name,
+    };
+    final r = await _postAuthed('/admin/doctors/verify-moh', payload);
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر التحقق من سجل وزارة الصحة'),
+        statusCode: r.statusCode,
+      );
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> createAdminDoctor({
     required String username,
     required String name,
     required String password,
     String? phone,
     String? email,
+    String? licenseNumber,
+    String? specialization,
+    String? hospitalAffiliation,
+    String? nationalId,
+    bool? mohOverride,
+    String? idempotencyKey,
   }) async {
     final payload = <String, dynamic>{
       'username': username,
@@ -760,9 +1038,20 @@ class ApiClient {
       'password': password,
       if (phone != null && phone.isNotEmpty) 'phone': phone,
       if (email != null && email.isNotEmpty) 'email': email,
+      if (licenseNumber != null && licenseNumber.isNotEmpty)
+        'license_number': licenseNumber,
+      if (specialization != null && specialization.isNotEmpty)
+        'specialization': specialization,
+      if (hospitalAffiliation != null && hospitalAffiliation.isNotEmpty)
+        'hospital_affiliation': hospitalAffiliation,
+      if (nationalId != null && nationalId.isNotEmpty)
+        'national_id': nationalId,
+      'moh_override': ?mohOverride,
+      if (idempotencyKey != null && idempotencyKey.isNotEmpty)
+        'idempotency_key': idempotencyKey,
     };
     final r = await _postAuthed('/admin/doctors', payload);
-    if (r.statusCode != 201) {
+    if (r.statusCode != 201 && r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر إنشاء حساب الطبيب'),
         statusCode: r.statusCode,
@@ -809,9 +1098,12 @@ class ApiClient {
   }
 
   Future<List<Map<String, dynamic>>> getAdminAudit({int limit = 20}) async {
-    final r = await _client
-        .get(_u('/admin/audit?limit=$limit'), headers: await _headers())
-        .timeout(const Duration(seconds: 10));
+    final r = await _requestAuthed(
+      'GET',
+      '/admin/audit?limit=$limit',
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
     if (r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر تحميل سجل التدقيق الأمني'),
@@ -826,9 +1118,12 @@ class ApiClient {
   // ─────────────────────────────────────── Patient caregiver self-management
 
   Future<List<Map<String, dynamic>>> patientGetCaregivers() async {
-    final r = await _client
-        .get(_u('/patient/caregivers'), headers: await _headers())
-        .timeout(const Duration(seconds: 10));
+    final r = await _requestAuthed(
+      'GET',
+      '/patient/caregivers',
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
     if (r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر تحميل قائمة الأسرة'),
@@ -922,9 +1217,12 @@ class ApiClient {
   Future<List<Map<String, dynamic>>> getDoctorPatientTriggers(
     String patientId,
   ) async {
-    final r = await _client
-        .get(_u('/patients/$patientId/triggers'), headers: await _headers())
-        .timeout(const Duration(seconds: 10));
+    final r = await _requestAuthed(
+      'GET',
+      '/patients/$patientId/triggers',
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
     if (r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر تحميل محفزات المريض'),
@@ -970,12 +1268,12 @@ class ApiClient {
   Future<List<Map<String, dynamic>>> getDoctorPrescriptions(
     String patientId,
   ) async {
-    final r = await _client
-        .get(
-          _u('/doctor/patients/$patientId/prescriptions'),
-          headers: await _headers(),
-        )
-        .timeout(const Duration(seconds: 10));
+    final r = await _requestAuthed(
+      'GET',
+      '/doctor/patients/$patientId/prescriptions',
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
     if (r.statusCode != 200) return [];
     final data = jsonDecode(r.body) as Map<String, dynamic>;
     return (data['prescriptions'] as List? ?? [])
@@ -987,9 +1285,12 @@ class ApiClient {
     String? patientId,
   }) async {
     final query = patientId != null ? '?patient_id=$patientId' : '';
-    final r = await _client
-        .get(_u('/patient/prescriptions$query'), headers: await _headers())
-        .timeout(const Duration(seconds: 10));
+    final r = await _requestAuthed(
+      'GET',
+      '/patient/prescriptions$query',
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
     if (r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر تحميل الوصفات الطبية'),

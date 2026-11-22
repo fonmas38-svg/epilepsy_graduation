@@ -112,6 +112,7 @@ class AppLocalizations {
   String get offlineNoData => _s('offlineNoData');
   String get savedLocallyWillSync => _s('savedLocallyWillSync');
   String get pendingSync => _s('pendingSync');
+  String get wakingCloudServer => _s('wakingCloudServer');
 
   // ------------------------------------------------------ risk states (§3.1)
   String get riskSafeTitle => _s('riskSafeTitle');
@@ -708,6 +709,7 @@ const Map<String, String> _ar = {
   'offlineNoData': 'غير متصل ولا توجد بيانات محفوظة.',
   'savedLocallyWillSync': 'حُفظ على الجهاز، وسيُرسل عند عودة الاتصال.',
   'pendingSync': 'بانتظار المزامنة',
+  'wakingCloudServer': 'جاري إيقاظ الخادم السحابي...',
 
   'riskSafeTitle': 'الوضع مستقر',
   'riskSafeBody':
@@ -1298,6 +1300,7 @@ const Map<String, String> _en = {
   'savedLocallyWillSync':
       'Saved on this device; it will sync when back online.',
   'pendingSync': 'Pending sync',
+  'wakingCloudServer': 'Waking up cloud server...',
 
   'riskSafeTitle': 'Stable',
   'riskSafeBody':

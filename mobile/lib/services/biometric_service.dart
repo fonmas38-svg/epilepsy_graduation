@@ -184,13 +184,19 @@ class BiometricService {
     }
   }
 
+  String? lastErrorMessage;
+
   Future<bool> authenticate({
     required String localizedReason,
     bool biometricOnly = true,
   }) async {
     _verifiedAt = null;
+    lastErrorMessage = null;
     try {
-      if (!await isAvailable) return false;
+      if (!await isAvailable) {
+        lastErrorMessage = 'مستشعر البصمة غير متاح أو غير مفعّل على هذا الجهاز';
+        return false;
+      }
       final ok = await _auth.authenticate(
         localizedReason: localizedReason,
         biometricOnly: biometricOnly,
@@ -198,8 +204,16 @@ class BiometricService {
       );
       if (ok) _verifiedAt = DateTime.now();
       return ok;
-    } catch (_) {
+    } catch (e) {
       // Never silently downgrade a requested biometric-only challenge to PIN.
+      final text = e.toString().toLowerCase();
+      if (text.contains('notenrolled') || text.contains('not_enrolled')) {
+        lastErrorMessage = 'يرجى تسجيل بصمة في إعدادات الجهاز أولاً';
+      } else if (text.contains('lockedout') || text.contains('locked_out')) {
+        lastErrorMessage = 'تم قفل مستشعر البصمة مؤقتاً؛ حاول لاحقاً';
+      } else if (text.contains('no_fragment_activity')) {
+        lastErrorMessage = 'يتطلب المستشعر تهيئة FlutterFragmentActivity على أندرويد';
+      }
       return false;
     }
   }

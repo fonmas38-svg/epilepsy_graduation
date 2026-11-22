@@ -8,6 +8,7 @@ import '../../core/ui/common.dart';
 import '../../core/ui/session_actions.dart';
 import '../../core/ui/workspace_scaffold.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/models.dart';
 import '../../providers/app_state.dart';
 import 'create_doctor_dialog.dart';
 
@@ -24,7 +25,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   final _errors = <String, Failure>{};
   final _revisions = <String, int>{};
   final _filter = TextEditingController();
-  Object? _owner;
+  AppUser? _owner;
   String? _origin;
   int _auditLimit = 20;
   bool _launching = false;
@@ -48,7 +49,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   bool _current() {
     final app = context.read<AppState>();
     return mounted &&
-        identical(app.auth.currentUser, _owner) &&
+        AppUser.sameSessionOwner(app.auth.currentUser, _owner) &&
         app.api.baseUrl == _origin &&
         app.auth.currentUser?.role == UserRole.admin;
   }
@@ -155,11 +156,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       );
       return mounted &&
           accepted &&
-          identical(app.auth.currentUser, owner) &&
+          AppUser.sameSessionOwner(app.auth.currentUser, owner) &&
           app.api.baseUrl == origin;
     }
     if (!mounted ||
-        !identical(app.auth.currentUser, owner) ||
+        !AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
         app.api.baseUrl != origin) {
       return false;
     }
@@ -184,7 +185,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     );
     return mounted &&
         confirmed == true &&
-        identical(app.auth.currentUser, owner) &&
+        AppUser.sameSessionOwner(app.auth.currentUser, owner) &&
         app.api.baseUrl == origin;
   }
 
@@ -201,6 +202,58 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       context: context,
       barrierDismissible: false,
       builder: (_) => CreateDoctorDialog(
+        verifyMoh:
+            ({
+              required licenseNumber,
+              nationalId,
+              name,
+            }) async {
+              if (!AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
+                  app.api.baseUrl != origin) {
+                throw const Failure(FailureKind.unauthorized);
+              }
+              return app.api.verifyAdminDoctorMoh(
+                licenseNumber: licenseNumber,
+                nationalId: nationalId,
+                name: name,
+              );
+            },
+        createExtended:
+            ({
+              required name,
+              required username,
+              required password,
+              phone,
+              email,
+              licenseNumber,
+              specialization,
+              hospitalAffiliation,
+              nationalId,
+              mohOverride = false,
+              required idempotencyKey,
+            }) async {
+              if (!AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
+                  app.api.baseUrl != origin) {
+                throw const Failure(FailureKind.unauthorized);
+              }
+              await app.api.createAdminDoctor(
+                name: name,
+                username: username,
+                password: password,
+                phone: phone,
+                email: email,
+                licenseNumber: licenseNumber,
+                specialization: specialization,
+                hospitalAffiliation: hospitalAffiliation,
+                nationalId: nationalId,
+                mohOverride: mohOverride,
+                idempotencyKey: idempotencyKey,
+              );
+              if (!AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
+                  app.api.baseUrl != origin) {
+                throw const Failure(FailureKind.unauthorized);
+              }
+            },
         create:
             ({
               required name,
@@ -208,7 +261,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               required password,
               phone,
             }) async {
-              if (!identical(app.auth.currentUser, owner) ||
+              if (!AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
                   app.api.baseUrl != origin) {
                 throw const Failure(FailureKind.unauthorized);
               }
@@ -218,7 +271,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                 password: password,
                 phone: phone,
               );
-              if (!identical(app.auth.currentUser, owner) ||
+              if (!AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
                   app.api.baseUrl != origin) {
                 throw const Failure(FailureKind.unauthorized);
               }
@@ -227,7 +280,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     );
     if (!mounted ||
         created != true ||
-        !identical(app.auth.currentUser, owner) ||
+        !AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
         app.api.baseUrl != origin) {
       return;
     }

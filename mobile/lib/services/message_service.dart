@@ -16,6 +16,7 @@ class MessageService extends ChangeNotifier {
   final _uuid = const Uuid();
   List<ChatMessage> doctorMessages = [];
   List<ChatMessage> familyMessages = [];
+  final Map<String, List<ChatMessage>> channelMessages = {};
   Map<String, dynamic>? lastSharedLocation;
   bool loading = false;
   Failure? failure;
@@ -25,14 +26,33 @@ class MessageService extends ChangeNotifier {
   int _loadRevision = 0;
   String? get patientId => _patientId;
 
+  static const Set<String> supportedChannels = {
+    'doctor_patient',
+    'family_patient',
+    'patient_caregiver',
+    'doctor_caregiver',
+    'care_team_triage',
+  };
+
+  List<ChatMessage> messagesFor(String channelType) => switch (channelType) {
+    'doctor_patient' => doctorMessages,
+    'family_patient' => familyMessages,
+    _ => channelMessages[channelType] ?? const [],
+  };
+
   bool canAccess(String patientId, {String? channel}) {
     final user = auth.currentUser;
     if (user == null || user.role == UserRole.admin) return false;
-    if (channel != null &&
-        !['doctor_patient', 'family_patient'].contains(channel)) {
+    if (channel != null && !supportedChannels.contains(channel)) {
       return false;
     }
     if (user.role == UserRole.caregiver && channel == 'doctor_patient') {
+      return false;
+    }
+    if (user.role == UserRole.patient && channel == 'doctor_caregiver') {
+      return false;
+    }
+    if (user.role == UserRole.doctor && channel == 'patient_caregiver') {
       return false;
     }
     return user.role == UserRole.patient
@@ -48,7 +68,7 @@ class MessageService extends ChangeNotifier {
     String? channel,
   ]) =>
       generation == _session &&
-      identical(auth.currentUser, user) &&
+      AppUser.sameSessionOwner(auth.currentUser, user) &&
       api.baseUrl == origin &&
       canAccess(pid, channel: channel);
 
@@ -58,6 +78,7 @@ class MessageService extends ChangeNotifier {
     _patientId = null;
     doctorMessages = [];
     familyMessages = [];
+    channelMessages.clear();
     lastSharedLocation = null;
     failure = null;
     loading = false;
@@ -80,6 +101,7 @@ class MessageService extends ChangeNotifier {
     if (_patientId != patientId) {
       doctorMessages = [];
       familyMessages = [];
+      channelMessages.clear();
       lastSharedLocation = null;
     }
     _patientId = patientId;
@@ -87,25 +109,39 @@ class MessageService extends ChangeNotifier {
     failure = null;
     notifyListeners();
     try {
-      final doctor = user!.role == UserRole.caregiver
-          ? <ChatMessage>[]
-          : await db.messagesForChannel(patientId, 'doctor_patient');
-      if (!valid()) return;
-      final family = await db.messagesForChannel(patientId, 'family_patient');
-      if (!valid()) return;
-      doctorMessages = doctor;
-      familyMessages = family;
-      notifyListeners();
-      if (api.tokens.hasSession) {
-        if (user.role != UserRole.caregiver &&
-            (channel == null || channel == 'doctor_patient')) {
-          await _pull(patientId, 'doctor_patient', valid);
-        }
+      final isExtraChannel =
+          channel != null &&
+          channel != 'doctor_patient' &&
+          channel != 'family_patient';
+      if (isExtraChannel) {
+        final rows = await db.messagesForChannel(patientId, channel);
         if (!valid()) return;
-        if (channel == null || channel == 'family_patient') {
-          await _pull(patientId, 'family_patient', valid);
+        channelMessages[channel] = rows;
+        notifyListeners();
+        if (api.tokens.hasSession) {
+          await _pull(patientId, channel, valid);
         }
-        if (valid()) await fetchLatestLocation(patientId);
+      } else {
+        final doctor = user!.role == UserRole.caregiver
+            ? <ChatMessage>[]
+            : await db.messagesForChannel(patientId, 'doctor_patient');
+        if (!valid()) return;
+        final family = await db.messagesForChannel(patientId, 'family_patient');
+        if (!valid()) return;
+        doctorMessages = doctor;
+        familyMessages = family;
+        notifyListeners();
+        if (api.tokens.hasSession) {
+          if (user.role != UserRole.caregiver &&
+              (channel == null || channel == 'doctor_patient')) {
+            await _pull(patientId, 'doctor_patient', valid);
+          }
+          if (!valid()) return;
+          if (channel == null || channel == 'family_patient') {
+            await _pull(patientId, 'family_patient', valid);
+          }
+          if (valid()) await fetchLatestLocation(patientId);
+        }
       }
     } catch (error) {
       if (valid()) failure = Failure.from(error);
@@ -139,8 +175,10 @@ class MessageService extends ChangeNotifier {
     if (!valid()) return;
     if (channel == 'doctor_patient') {
       doctorMessages = rows;
-    } else {
+    } else if (channel == 'family_patient') {
       familyMessages = rows;
+    } else {
+      channelMessages[channel] = rows;
     }
     notifyListeners();
   }
@@ -176,9 +214,13 @@ class MessageService extends ChangeNotifier {
     await db.insertMessage(local);
     if (!valid()) return local;
     if (_patientId == patientId) {
-      (channelType == 'doctor_patient' ? doctorMessages : familyMessages).add(
-        local,
-      );
+      if (channelType == 'doctor_patient') {
+        doctorMessages.add(local);
+      } else if (channelType == 'family_patient') {
+        familyMessages.add(local);
+      } else {
+        channelMessages.putIfAbsent(channelType, () => []).add(local);
+      }
       failure = null;
       notifyListeners();
     }
@@ -228,7 +270,11 @@ class MessageService extends ChangeNotifier {
   }
 
   void _replaceMessage(String oldId, ChatMessage message) {
-    final list = message.isDoctorPatient ? doctorMessages : familyMessages;
+    final list = switch (message.channelType) {
+      'doctor_patient' => doctorMessages,
+      'family_patient' => familyMessages,
+      _ => channelMessages.putIfAbsent(message.channelType, () => []),
+    };
     final index = list.indexWhere((row) => row.id == oldId);
     if (index >= 0) list[index] = message;
   }
@@ -261,7 +307,7 @@ class MessageService extends ChangeNotifier {
       _flushing = false;
     }
     if (count > 0 &&
-        identical(auth.currentUser, user) &&
+        AppUser.sameSessionOwner(auth.currentUser, user) &&
         generation == _session) {
       notifyListeners();
     }

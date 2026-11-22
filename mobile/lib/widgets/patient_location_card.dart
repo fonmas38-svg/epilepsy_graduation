@@ -4,6 +4,7 @@ import '../core/ui/common.dart';
 import '../core/utils/external_actions.dart';
 import '../core/utils/time_ago.dart';
 import '../l10n/app_localizations.dart';
+import '../models/models.dart';
 import '../providers/app_state.dart';
 
 /// Every location is explicitly bound to a patient and timestamp, never "live".
@@ -21,14 +22,14 @@ class PatientLocationCard extends StatefulWidget {
 
 class _PatientLocationCardState extends State<PatientLocationCard> {
   Future<Map<String, dynamic>?>? _location;
-  Object? _owner;
+  AppUser? _owner;
   String? _origin;
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final app = context.read<AppState>();
     if (_location == null ||
-        !identical(_owner, app.auth.currentUser) ||
+        !AppUser.sameSessionOwner(_owner, app.auth.currentUser) ||
         _origin != app.api.baseUrl) {
       _owner = app.auth.currentUser;
       _origin = app.api.baseUrl;

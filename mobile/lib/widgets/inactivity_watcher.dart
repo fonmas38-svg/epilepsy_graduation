@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../features/shared/first_aid_view.dart';
 import '../l10n/app_localizations.dart';
+import '../models/models.dart';
 import '../providers/app_state.dart';
 import '../services/biometric_service.dart';
 
@@ -26,7 +27,7 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
   late final BiometricService _verifier;
   bool _locked = false, _busy = false, _supported = false;
   bool _confirmLogout = false, _logoutFailed = false;
-  Object? _owner;
+  AppUser? _owner;
   String? _origin;
   int? _revision;
 
@@ -72,7 +73,7 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
     setState(() => _busy = true);
     final accepted = await _verifier.unlockDevice(reason: reason);
     if (!mounted ||
-        !identical(owner, app.auth.currentUser) ||
+        !AppUser.sameSessionOwner(owner, app.auth.currentUser) ||
         origin != app.api.baseUrl ||
         revision != app.api.tokens.revision) {
       return;
@@ -98,7 +99,7 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
     try {
       await app.signOut();
     } catch (_) {
-      if (mounted && identical(owner, app.auth.currentUser)) {
+      if (mounted && AppUser.sameSessionOwner(owner, app.auth.currentUser)) {
         setState(() {
           _busy = false;
           _logoutFailed = true;
@@ -110,7 +111,7 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
-    if (!identical(_owner, app.auth.currentUser) ||
+    if (!AppUser.sameSessionOwner(_owner, app.auth.currentUser) ||
         _origin != app.api.baseUrl ||
         _revision != app.api.tokens.revision) {
       _owner = app.auth.currentUser;

@@ -779,11 +779,14 @@ class LocalDatabase {
 
   Future<void> insertMedicationLog(MedicationLog log) async {
     final db = await database;
-    await db.insert(
-      'medication_logs',
-      log.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('medication_logs', {
+      'id': log.id,
+      'medicationId': log.medicationId,
+      'patientId': log.patientId,
+      'scheduledFor': log.scheduledFor.toUtc().toIso8601String(),
+      'takenAt': log.takenAt?.toUtc().toIso8601String(),
+      'status': log.status,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<List<MedicationLog>> medicationLogsFor(
@@ -798,7 +801,7 @@ class LocalDatabase {
           : 'patientId = ? AND scheduledFor >= ?',
       whereArgs: since == null
           ? [patientId]
-          : [patientId, since.toIso8601String()],
+          : [patientId, since.toUtc().toIso8601String()],
       orderBy: 'scheduledFor DESC',
     );
     return rows

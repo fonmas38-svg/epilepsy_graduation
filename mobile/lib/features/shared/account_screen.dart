@@ -4,6 +4,7 @@ import '../../core/enums.dart';
 import '../../core/router/route_names.dart';
 import '../../core/ui/common.dart';
 import '../../core/ui/session_actions.dart';
+import '../../core/utils/doctor_title_formatter.dart';
 import '../../providers/app_state.dart';
 
 class AccountScreen extends StatelessWidget {
@@ -123,7 +124,13 @@ class AccountScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 14),
                   Text(
-                    user?.name ?? '',
+                    user == null
+                        ? ''
+                        : DoctorTitleFormatter.format(
+                            user.name,
+                            role: user.role,
+                            isArabic: ar,
+                          ),
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 20,

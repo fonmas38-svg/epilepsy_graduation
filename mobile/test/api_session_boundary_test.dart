@@ -86,12 +86,14 @@ void main() {
     );
   });
   test(
-    'concurrent health probes share one request and later calls probe again',
+    'concurrent health probes share one request and TTL cache avoids immediate re-probe',
     () async {
       var calls = 0;
+      var fakeNow = DateTime.utc(2026, 11, 22, 12, 0, 0);
       final response = Completer<http.Response>();
       final api = ApiClient(
         baseUrl: 'https://one.invalid',
+        now: () => fakeNow,
         client: MockClient((_) async {
           calls++;
           return calls == 1 ? response.future : http.Response('{}', 200);
@@ -103,8 +105,20 @@ void main() {
       expect(await first, isTrue);
       expect(await second, isTrue);
       expect(calls, 1);
+
+      // Within 15s TTL: cached hit without network call.
+      fakeNow = fakeNow.add(const Duration(seconds: 10));
+      expect(await api.health(), isTrue);
+      expect(calls, 1);
+
+      // After 15s TTL expires: probes again.
+      fakeNow = fakeNow.add(const Duration(seconds: 6));
       expect(await api.health(), isTrue);
       expect(calls, 2);
+
+      // Explicit forceRefresh bypasses TTL immediately.
+      expect(await api.health(null, const Duration(seconds: 10), true), isTrue);
+      expect(calls, 3);
     },
   );
   test(

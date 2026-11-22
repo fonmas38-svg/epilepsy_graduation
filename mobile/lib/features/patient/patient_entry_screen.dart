@@ -6,6 +6,7 @@ import '../../core/ui/common.dart';
 import '../../core/utils/time_ago.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/care_models.dart';
+import '../../models/models.dart';
 import '../../providers/app_state.dart';
 
 class PatientEntryScreen extends StatelessWidget {
@@ -266,7 +267,9 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
       if (app.care.patientId != user.uid) {
         await app.care.loadFor(user.uid, remote: false);
       }
-      if (!mounted || !identical(app.auth.currentUser, user)) return;
+      if (!mounted || !AppUser.sameSessionOwner(app.auth.currentUser, user)) {
+        return;
+      }
       await app.care.logSeizure(
         occurredAt: _occurredAt.toUtc(),
         durationSeconds: int.tryParse(_duration.text.trim()),
@@ -274,7 +277,9 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
         notes: _notes.text.trim(),
         reportedBy: user.uid,
       );
-      if (!mounted || !identical(app.auth.currentUser, user)) return;
+      if (!mounted || !AppUser.sameSessionOwner(app.auth.currentUser, user)) {
+        return;
+      }
       setState(() {
         _leaveAllowed = true;
         _dirty = false;

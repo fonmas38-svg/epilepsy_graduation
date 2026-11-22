@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/errors/failure.dart';
+import '../../core/enums.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/risk_view.dart';
@@ -263,12 +264,17 @@ class _MedicationScreenState extends State<MedicationScreen> {
     final profile = app.auth.patientById(pid);
     final isOtherPatient = widget.patientId != null &&
         widget.patientId != app.auth.currentUser?.uid;
+    final role = app.auth.currentUser?.role ?? UserRole.patient;
+    final canManageMeds = role == UserRole.doctor || role == UserRole.admin;
+    final canTakeDose = role == UserRole.patient;
+    final canShareAdherence = role == UserRole.patient;
+    final theme = Theme.of(context);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F9FD),
+      backgroundColor: theme.scaffoldBackgroundColor,
       drawer: const AppDrawer(),
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: theme.appBarTheme.backgroundColor,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
         title: Column(
@@ -277,8 +283,8 @@ class _MedicationScreenState extends State<MedicationScreen> {
           children: [
             Text(
               l.medsTitle,
-              style: const TextStyle(
-                color: Color(0xFF0D253C),
+              style: TextStyle(
+                color: theme.colorScheme.onSurface,
                 fontWeight: FontWeight.w800,
                 fontSize: 18,
               ),
@@ -286,8 +292,8 @@ class _MedicationScreenState extends State<MedicationScreen> {
             if (isOtherPatient && profile != null)
               Text(
                 'المريض: ${profile.name}',
-                style: const TextStyle(
-                  color: Color(0xFF1976D2),
+                style: TextStyle(
+                  color: theme.colorScheme.primary,
                   fontWeight: FontWeight.w600,
                   fontSize: 12,
                 ),
@@ -295,52 +301,69 @@ class _MedicationScreenState extends State<MedicationScreen> {
           ],
         ),
         leading: canPop
-            ? const BackButton(color: Color(0xFF0D253C))
+            ? BackButton(color: theme.colorScheme.onSurface)
             : Builder(
                 builder: (ctx) => IconButton(
                   tooltip: 'القائمة الجانبية',
-                  icon: const Icon(Icons.menu_rounded, color: Color(0xFF0D253C)),
+                  icon: Icon(
+                    Icons.menu_rounded,
+                    color: theme.colorScheme.onSurface,
+                  ),
                   onPressed: () => Scaffold.of(ctx).openDrawer(),
                 ),
               ),
         actions: [
-          IconButton(
-            tooltip: l.addMedication,
-            onPressed: _busy ? null : () => _addOrEdit(),
-            icon: const Icon(Icons.add_circle_outline, color: Color(0xFF0066FF)),
-          ),
+          if (canManageMeds)
+            IconButton(
+              tooltip: l.addMedication,
+              onPressed: _busy ? null : () => _addOrEdit(),
+              icon: Icon(
+                Icons.add_circle_outline,
+                color: theme.colorScheme.primary,
+              ),
+            ),
           IconButton(
             tooltip: l.refresh,
             onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF6B7A99)),
+            icon: Icon(
+              Icons.refresh_rounded,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        heroTag: null,
-        elevation: 4,
-        backgroundColor: const Color(0xFF0066FF),
-        foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        onPressed: _busy ? null : () => _addOrEdit(),
-        icon: const Icon(Icons.add),
-        label: Text(l.addMedication, style: const TextStyle(fontWeight: FontWeight.bold)),
-      ),
+      floatingActionButton: canManageMeds
+          ? FloatingActionButton.extended(
+              heroTag: null,
+              elevation: 4,
+              backgroundColor: theme.colorScheme.primary,
+              foregroundColor: theme.colorScheme.onPrimary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              onPressed: _busy ? null : () => _addOrEdit(),
+              icon: const Icon(Icons.add),
+              label: Text(
+                l.addMedication,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            )
+          : null,
       body: AsyncView<_MedData>(
         loading: _loading,
         failure: _failure,
         value: _data,
         onRetry: _load,
-        // Deliberately not `isEmpty`: a patient with no medications still needs
-        // the «إضافة دواء» button and the adherence card's explanation, and the
-        // full-page empty state would hide both.
         builder: (context, d) => RefreshIndicator(
           onRefresh: _load,
           child: ListView(
             padding: Insets.pageBottomSafe,
             children: [
               OfflineBanner(visible: !app.apiOnline),
-              _AdherenceSection(data: d, onShare: () => _share(d)),
+              _AdherenceSection(
+                data: d,
+                onShare: canShareAdherence ? () => _share(d) : null,
+              ),
               Gap.vMd,
               if (d.doctorPrescriptions.isNotEmpty) ...[
                 _DoctorPrescriptionsSection(
@@ -355,13 +378,15 @@ class _MedicationScreenState extends State<MedicationScreen> {
               ],
               _TodaySection(
                 schedule: d.schedule,
-                enabled: !_busy,
+                enabled: !_busy && canTakeDose,
+                canTakeDose: canTakeDose,
                 onTaken: _markTaken,
               ),
               Gap.vMd,
               _MedListSection(
                 meds: d.meds,
-                enabled: !_busy,
+                enabled: !_busy && canManageMeds,
+                canManage: canManageMeds,
                 onEdit: (m) => _addOrEdit(existing: m),
                 onTogglePause: _togglePause,
                 onRemove: _remove,
@@ -411,10 +436,10 @@ class _MedDraft {
 // ------------------------------------------------------------------ adherence
 
 class _AdherenceSection extends StatelessWidget {
-  const _AdherenceSection({required this.data, required this.onShare});
+  const _AdherenceSection({required this.data, this.onShare});
 
   final _MedData data;
-  final VoidCallback onShare;
+  final VoidCallback? onShare;
 
   /// §3.4's own boundary: 80 % is the line a doctor acts on, 50 % is the line
   /// where the model's own accuracy figures stop meaning much.
@@ -467,15 +492,17 @@ class _AdherenceSection extends StatelessWidget {
             icon: Icons.info_outline,
             view: RiskView.unknown,
           ),
-          Gap.vSm,
-          SizedBox(
-            height: A11y.minTouchTarget,
-            child: OutlinedButton.icon(
-              onPressed: onShare,
-              icon: const Icon(Icons.ios_share_outlined),
-              label: Text(l.shareWithDoctor),
+          if (onShare != null) ...[
+            Gap.vSm,
+            SizedBox(
+              height: A11y.minTouchTarget,
+              child: OutlinedButton.icon(
+                onPressed: onShare,
+                icon: const Icon(Icons.ios_share_outlined),
+                label: Text(l.shareWithDoctor),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -550,11 +577,13 @@ class _TodaySection extends StatelessWidget {
   const _TodaySection({
     required this.schedule,
     required this.enabled,
+    this.canTakeDose = true,
     required this.onTaken,
   });
 
   final List<ScheduleEntry> schedule;
   final bool enabled;
+  final bool canTakeDose;
   final ValueChanged<ScheduleEntry> onTaken;
 
   @override
@@ -584,11 +613,9 @@ class _TodaySection extends StatelessWidget {
                 for (final e in schedule)
                   _DoseTile(
                     entry: e,
-                    // A dose is «فائتة» only once its minute has passed. Before
-                    // that it is simply next, and colouring it red would have the
-                    // patient taking it early to make a warning go away.
                     overdue: !e.taken && e.time.compareTo(nowHhmm) < 0,
                     enabled: enabled,
+                    canTakeDose: canTakeDose,
                     onTaken: () => onTaken(e),
                   ),
               ],
@@ -602,12 +629,14 @@ class _DoseTile extends StatelessWidget {
     required this.entry,
     required this.overdue,
     required this.enabled,
+    this.canTakeDose = true,
     required this.onTaken,
   });
 
   final ScheduleEntry entry;
   final bool overdue;
   final bool enabled;
+  final bool canTakeDose;
   final VoidCallback onTaken;
 
   @override
@@ -676,8 +705,8 @@ class _DoseTile extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     taken
-                        ? '${l.takenAt} ${TimeAgo.clock(entry.log?.takenAt ?? DateTime.now())}'
-                        : '${l.dueAt} ${entry.time}',
+                        ? '${l.takenAt} ${TimeAgo.clock(entry.log?.takenAt ?? DateTime.now(), l)}'
+                        : '${l.dueAt} ${TimeAgo.formatHhmm12h(entry.time, isArabic: l.isArabic)}',
                     style: TextStyle(
                       color: taken ? const Color(0xFF2E7D32) : const Color(0xFF6B7A99),
                       fontSize: 12.5,
@@ -704,7 +733,7 @@ class _DoseTile extends StatelessWidget {
                   ),
                 ),
               )
-            else
+            else if (canTakeDose)
               SizedBox(
                 height: 38,
                 child: FilledButton.icon(
@@ -740,6 +769,7 @@ class _MedListSection extends StatelessWidget {
   const _MedListSection({
     required this.meds,
     required this.enabled,
+    this.canManage = false,
     required this.onEdit,
     required this.onTogglePause,
     required this.onRemove,
@@ -747,6 +777,7 @@ class _MedListSection extends StatelessWidget {
 
   final List<Medication> meds;
   final bool enabled;
+  final bool canManage;
   final ValueChanged<Medication> onEdit;
   final ValueChanged<Medication> onTogglePause;
   final ValueChanged<Medication> onRemove;
@@ -775,6 +806,7 @@ class _MedListSection extends StatelessWidget {
                   _MedTile(
                     med: m,
                     enabled: enabled,
+                    canManage: canManage,
                     onEdit: () => onEdit(m),
                     onTogglePause: () => onTogglePause(m),
                     onRemove: () => onRemove(m),
@@ -789,6 +821,7 @@ class _MedTile extends StatelessWidget {
   const _MedTile({
     required this.med,
     required this.enabled,
+    this.canManage = false,
     required this.onEdit,
     required this.onTogglePause,
     required this.onRemove,
@@ -796,6 +829,7 @@ class _MedTile extends StatelessWidget {
 
   final Medication med;
   final bool enabled;
+  final bool canManage;
   final VoidCallback onEdit;
   final VoidCallback onTogglePause;
   final VoidCallback onRemove;
@@ -807,7 +841,10 @@ class _MedTile extends StatelessWidget {
     final subtitle = [
       if (med.dosage.isNotEmpty) med.dosage,
       scheduleLabel(med.schedule, l),
-      if (med.times.isNotEmpty) med.times.join(' · '),
+      if (med.times.isNotEmpty)
+        med.times
+            .map((t) => TimeAgo.formatHhmm12h(t, isArabic: l.isArabic))
+            .join(' · '),
     ].join(' · ');
 
     return Padding(
@@ -852,25 +889,27 @@ class _MedTile extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: l.edit,
-                onPressed: enabled ? onEdit : null,
-                icon: const Icon(Icons.edit_outlined),
-              ),
-              IconButton(
-                tooltip: med.active ? l.pauseMed : l.resumeMed,
-                onPressed: enabled ? onTogglePause : null,
-                icon: Icon(
-                  med.active
-                      ? Icons.pause_circle_outline
-                      : Icons.play_circle_outline,
+              if (canManage) ...[
+                IconButton(
+                  tooltip: l.edit,
+                  onPressed: enabled ? onEdit : null,
+                  icon: const Icon(Icons.edit_outlined),
                 ),
-              ),
-              IconButton(
-                tooltip: l.delete,
-                onPressed: enabled ? onRemove : null,
-                icon: const Icon(Icons.delete_outline),
-              ),
+                IconButton(
+                  tooltip: med.active ? l.pauseMed : l.resumeMed,
+                  onPressed: enabled ? onTogglePause : null,
+                  icon: Icon(
+                    med.active
+                        ? Icons.pause_circle_outline
+                        : Icons.play_circle_outline,
+                  ),
+                ),
+                IconButton(
+                  tooltip: l.delete,
+                  onPressed: enabled ? onRemove : null,
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ],
             ],
           ),
           const Divider(height: Gap.md),

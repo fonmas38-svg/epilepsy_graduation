@@ -698,7 +698,21 @@ class _LoginScreenState extends State<LoginScreen> {
                             alignment: WrapAlignment.center,
                             crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              if (app.isCheckingServer) ...[
+                              if (app.isWakingServer) ...[
+                                const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  l.wakingCloudServer,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: const Color(0xFF0066FF),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ] else if (app.isCheckingServer) ...[
                                 const SizedBox(
                                   width: 14,
                                   height: 14,

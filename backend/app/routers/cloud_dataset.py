@@ -2,22 +2,29 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy.exc import IntegrityError
 
 from app import cloud_store
 from app.device_hub import DeviceSample
 from app.schemas import VitalWindow
-from app.auth import authorize_patient_access, get_optional_principal
+from app.auth import (
+    authorize_patient_access,
+    get_current_principal,
+    get_optional_principal,
+)
 from app.settings import settings
 
 router = APIRouter(tags=["cloud-dataset"])
 
 DATA_CSV = Path(__file__).resolve().parents[2] / "data" / "epilepsy_signal_dataset.csv"
 SAMPLES = 128
+MAX_SYNC_BATCH_ITEMS = 500
 _dataset_cursor: dict[str, int] = {}
 
 
@@ -26,6 +33,97 @@ class CloudReadingIn(BaseModel):
     reading: dict
     assessment: dict | None = None
     alert: dict | None = None
+
+
+class IntakeLogIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str | None = Field(default=None, min_length=1, max_length=64)
+    patient_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("patient_id", "patientId"),
+    )
+    prescription_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        validation_alias=AliasChoices("prescription_id", "medicationId"),
+    )
+    scheduled_time: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        validation_alias=AliasChoices("scheduled_time", "scheduledFor"),
+    )
+    taken_at: str | None = Field(
+        default=None,
+        max_length=64,
+        validation_alias=AliasChoices("taken_at", "takenAt"),
+    )
+    status: Literal["taken", "missed", "skipped"] = "taken"
+    recorded_by: str | None = Field(
+        default=None,
+        max_length=64,
+        validation_alias=AliasChoices("recorded_by", "recordedBy"),
+    )
+
+
+class CloudSyncBundleIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    patient_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("patient_id", "patientId"),
+    )
+    reading: dict[str, Any]
+    assessment: dict[str, Any] | None = None
+    alert: dict[str, Any] | None = None
+
+
+class CloudSyncBatchIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    patient_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("patient_id", "patientId"),
+    )
+    bundles: list[CloudSyncBundleIn] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("bundles", "items"),
+    )
+    readings: list[dict[str, Any]] = Field(default_factory=list)
+    assessments: list[dict[str, Any]] = Field(default_factory=list)
+    alerts: list[dict[str, Any]] = Field(default_factory=list)
+    intake_logs: list[IntakeLogIn] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("intake_logs", "medication_logs"),
+    )
+    idempotency_key: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_batch_limits(self):
+        total = (
+            len(self.bundles)
+            + len(self.readings)
+            + len(self.assessments)
+            + len(self.alerts)
+            + len(self.intake_logs)
+        )
+        if total > MAX_SYNC_BATCH_ITEMS:
+            raise ValueError(
+                f"batch cannot exceed {MAX_SYNC_BATCH_ITEMS} items (got {total})"
+            )
+        return self
+
+
+class CloudSyncBatchResponse(BaseModel):
+    ok: bool = True
+    processed: dict[str, int]
+    synced_reading_ids: list[str]
+    readings: list[dict[str, Any]]
+    assessments: list[dict[str, Any]]
+    alerts: list[dict[str, Any]]
+    intake_logs: list[dict[str, Any]]
 
 
 class DatasetNextRequest(BaseModel):
@@ -118,6 +216,145 @@ def cloud_sync(body: CloudReadingIn, principal: dict = Depends(get_optional_prin
         "assessment": saved["assessment"],
         "alert": saved["alert"],
     }
+
+
+def _str_or_none(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _resolve_patient_id(explicit: str | None, fallback: str | None) -> str:
+    pid = (explicit or fallback or "").strip()
+    if not pid:
+        raise HTTPException(status_code=422, detail="patient_id is required")
+    return pid
+
+
+@router.post("/cloud/sync-batch", response_model=CloudSyncBatchResponse)
+def cloud_sync_batch(
+    body: CloudSyncBatchIn,
+    principal: dict = Depends(get_current_principal),
+):
+    distinct_patients: list[str] = []
+    seen_patients: set[str] = set()
+
+    def _track_patient(pid: str) -> str:
+        if pid not in seen_patients:
+            seen_patients.add(pid)
+            distinct_patients.append(pid)
+        return pid
+
+    bundle_items: list[
+        tuple[str, dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]
+    ] = []
+    for bundle in body.bundles:
+        pid = _track_patient(
+            _resolve_patient_id(
+                bundle.patient_id
+                or _str_or_none(bundle.reading.get("patient_id"))
+                or _str_or_none(bundle.reading.get("patientId")),
+                body.patient_id,
+            )
+        )
+        for nested in (bundle.assessment, bundle.alert):
+            if nested is not None:
+                nested_pid = _str_or_none(nested.get("patient_id")) or _str_or_none(
+                    nested.get("patientId")
+                )
+                if nested_pid and nested_pid.strip() != pid:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="nested bundle item patient_id does not match bundle patient_id",
+                    )
+        bundle_items.append((pid, bundle.reading, bundle.assessment, bundle.alert))
+
+    readings_items: list[tuple[str, dict[str, Any]]] = []
+    for reading in body.readings:
+        pid = _track_patient(
+            _resolve_patient_id(
+                _str_or_none(reading.get("patient_id"))
+                or _str_or_none(reading.get("patientId")),
+                body.patient_id,
+            )
+        )
+        readings_items.append((pid, reading))
+
+    assessments_items: list[tuple[str, dict[str, Any]]] = []
+    for assessment in body.assessments:
+        pid = _track_patient(
+            _resolve_patient_id(
+                _str_or_none(assessment.get("patient_id"))
+                or _str_or_none(assessment.get("patientId")),
+                body.patient_id,
+            )
+        )
+        assessments_items.append((pid, assessment))
+
+    alerts_items: list[tuple[str, dict[str, Any]]] = []
+    for alert in body.alerts:
+        pid = _track_patient(
+            _resolve_patient_id(
+                _str_or_none(alert.get("patient_id"))
+                or _str_or_none(alert.get("patientId")),
+                body.patient_id,
+            )
+        )
+        alerts_items.append((pid, alert))
+
+    intake_logs_items: list[tuple[str, dict[str, Any]]] = []
+    for log_entry in body.intake_logs:
+        pid = _track_patient(_resolve_patient_id(log_entry.patient_id, body.patient_id))
+        intake_logs_items.append(
+            (
+                pid,
+                {
+                    "id": log_entry.id,
+                    "prescription_id": log_entry.prescription_id,
+                    "scheduled_time": log_entry.scheduled_time,
+                    "taken_at": log_entry.taken_at,
+                    "status": log_entry.status,
+                    "recorded_by": log_entry.recorded_by,
+                },
+            )
+        )
+
+    for pid in distinct_patients:
+        authorize_patient_access(pid, principal, enforce=True)
+
+    try:
+        saved = cloud_store.save_monitoring_batch(
+            bundles=bundle_items,
+            readings_items=readings_items,
+            assessments_items=assessments_items,
+            alerts_items=alerts_items,
+            intake_logs_items=intake_logs_items,
+            recorded_by=str(principal.get("sub") or "system"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=422, detail="Batch persistence constraint violation"
+        ) from exc
+
+    return CloudSyncBatchResponse(
+        ok=True,
+        processed={
+            "bundles": len(body.bundles),
+            "readings": len(body.readings),
+            "assessments": len(body.assessments),
+            "alerts": len(body.alerts),
+            "intake_logs": len(body.intake_logs),
+        },
+        synced_reading_ids=saved["synced_reading_ids"],
+        readings=saved["readings"],
+        assessments=saved["assessments"],
+        alerts=saved["alerts"],
+        intake_logs=saved["intake_logs"],
+    )
 
 
 @router.post("/cloud/alerts/{patient_id}/{alert_id}/ack")

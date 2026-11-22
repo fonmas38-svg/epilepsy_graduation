@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../core/enums.dart';
 import '../../core/errors/failure.dart';
 import '../../core/router/route_names.dart';
@@ -28,7 +27,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   AppUser? _owner;
   String? _origin;
   int _auditLimit = 20;
-  bool _launching = false;
   bool get ar => AppLocalizations.of(context).isArabic;
 
   @override

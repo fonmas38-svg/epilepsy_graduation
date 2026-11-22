@@ -120,30 +120,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
   }
 
-  Future<void> _launchPortal() async {
-    if (_launching || !_current()) return;
-    setState(() => _launching = true);
-    try {
-      final uri = Uri.parse('${_origin!}/admin');
-      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (mounted && _current() && !opened) {
-        AppSnack.error(
-          context,
-          ar ? 'تعذر فتح البوابة' : 'Could not open portal',
-        );
-      }
-    } catch (error) {
-      if (mounted && _current()) {
-        AppSnack.error(
-          context,
-          ar ? 'تعذر فتح البوابة' : 'Could not open portal',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _launching = false);
-    }
-  }
-
   // Confirmation is not password reauthentication; the API enforces admin access.
   Future<bool> _requireAdminSecurityVerification(String actionTitle) async {
     final app = context.read<AppState>();

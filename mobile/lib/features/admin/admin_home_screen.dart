@@ -506,17 +506,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         ar ? 'إدارة الأجهزة' : 'Manage devices',
         Routes.adminDevices,
       ),
-      const SizedBox(height: 16),
-      OutlinedButton.icon(
-        onPressed: _launching ? null : _launchPortal,
-        icon: const Icon(Icons.open_in_new),
-        label: Text(ar ? 'فتح بوابة الويب' : 'Open web portal'),
-      ),
-      Text(
-        ar
-            ? 'تحتاج بوابة الويب تسجيل دخول منفصلًا. لا تُرسل بيانات الجلسة في الرابط.'
-            : 'The web portal requires separate sign-in. Session credentials are not sent in the URL.',
-      ),
     ],
   );
 

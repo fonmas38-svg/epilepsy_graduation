@@ -31,6 +31,7 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _boundBiometricUser;
   bool _rememberMe = false;
   UserRole _selectedRole = UserRole.doctor;
+  int _secretTapCount = 0;
 
   static const _rememberMeKey = 'remember_me_pref';
   static const _rememberedUsernameKey = 'remembered_username_pref';
@@ -521,25 +522,34 @@ class _LoginScreenState extends State<LoginScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Center(
-                    child: Container(
-                      width: 76,
-                      height: 76,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFEFF6FF),
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(color: const Color(0xFFDBEAFE), width: 1.5),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x080066FF),
-                            blurRadius: 12,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.monitor_heart_rounded,
-                        size: 42,
-                        color: Color(0xFF0066FF),
+                    child: GestureDetector(
+                      onTap: () {
+                        _secretTapCount++;
+                        if (_secretTapCount >= 5) {
+                          _secretTapCount = 0;
+                          _showServerSettingsModal(context);
+                        }
+                      },
+                      child: Container(
+                        width: 76,
+                        height: 76,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEFF6FF),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: const Color(0xFFDBEAFE), width: 1.5),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x080066FF),
+                              blurRadius: 12,
+                              offset: Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.monitor_heart_rounded,
+                          size: 42,
+                          color: Color(0xFF0066FF),
+                        ),
                       ),
                     ),
                   ),
@@ -686,84 +696,31 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ],
                   ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8, bottom: 8),
-                    child: Center(
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () => _showServerSettingsModal(context),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          child: Wrap(
-                            alignment: WrapAlignment.center,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              if (app.isWakingServer) ...[
-                                const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  l.wakingCloudServer,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: const Color(0xFF0066FF),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ] else if (app.isCheckingServer) ...[
-                                const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  ar ? 'جارٍ فحص الاتصال بالخادم...' : 'Checking server...',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: const Color(0xFF0066FF),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ] else if (!app.apiOnline) ...[
-                                const Icon(
-                                  Icons.cloud_off_rounded,
-                                  size: 16,
-                                  color: Color(0xFFD97706),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  ar
-                                      ? 'الخادم غير متصل (اضغط لتغيير الخادم أو إعادة الفحص)'
-                                      : 'Server offline (tap to retry or configure)',
-                                  textAlign: TextAlign.center,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: const Color(0xFFD97706),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ] else ...[
-                                const Icon(
-                                  Icons.cloud_done_rounded,
-                                  size: 16,
-                                  color: Color(0xFF059669),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  ar ? 'متصل بالخادم السحابي' : 'Connected to cloud server',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: const Color(0xFF059669),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
+                  if (app.isWakingServer)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8, bottom: 8),
+                      child: Center(
+                        child: Wrap(
+                          alignment: WrapAlignment.center,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              l.wakingCloudServer,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: const Color(0xFF0066FF),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                  ),
                   if (AppConfig.demoMode)
                     Wrap(
                       spacing: 8,

@@ -1,8 +1,8 @@
+// ignore_for_file: depend_on_referenced_packages
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:connectivity_plus_platform_interface/connectivity_plus_platform_interface.dart';
-import 'package:epilepsy_monitor/core/enums.dart';
 import 'package:epilepsy_monitor/core/ui/common.dart';
 import 'package:epilepsy_monitor/models/models.dart';
 import 'package:epilepsy_monitor/providers/app_state.dart';

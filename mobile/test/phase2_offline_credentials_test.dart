@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-import 'package:epilepsy_monitor/core/enums.dart';
 import 'package:epilepsy_monitor/core/errors/failure.dart';
 import 'package:epilepsy_monitor/core/security/password_hasher.dart';
 import 'package:epilepsy_monitor/providers/app_state.dart';

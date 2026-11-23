@@ -33,3 +33,11 @@ Per official Render documentation and `render.yaml`:
 - **Inaccuracy Filtering & Fallback**: Implement accuracy thresholds (>1000m coarse, >3000m suspicious IP guess). If fresh fix has poor accuracy, check recent high-accuracy (`< 500m`, `< 30min`) satellite fixes from `Geolocator.getLastKnownPosition()`. Surface visual warning banners when Android 12+ approximate location permission is granted.
 - **Automatic Dispatch on Seizure Likelihood**: Wire `_shareLocationOnAlert` and `_shareLocationOnPreAlert` into `AppState`. Immediately upon detecting early pre-ictal forecasts or confirmed seizures, the patient's coordinates and Google Maps navigation URL are automatically published to the `family_patient` channel and `ActiveAlertScreen` without requiring manual patient taps.
 - **Security & Diagnostics Secrecy**: Completely remove web portal launcher from Flutter admin screens. Conceal cloud server URLs, ping status, and connectivity diagnostics behind a secret 5-tap gesture on the app logo in `login_screen.dart`.
+
+## Android Distribution & APK Build Standard (`arm64-v8a` Priority)
+
+- **Explicit User Command Only**: Only execute build/export commands when explicitly instructed by the user (Rule 0).
+- **Architecture Priority (`arm64-v8a`)**: Always build with `flutter build apk --split-per-abi` instead of a fat universal APK:
+  - Deliver `app-arm64-v8a-release.apk` (typically ~25–35 MB, compared to ~85 MB universal), targeting 99% of modern 64-bit Android smartphones for optimal performance and smaller download footprints.
+- **Version Code Incrementation Rule**: Before building, inspect `mobile/pubspec.yaml` `version: x.y.z+buildNumber`. Increment the build number (+N) so Android's Package Manager recognizes the update and avoids `INSTALL_FAILED_UPDATE_INCOMPATIBLE` ("الحزمة تبدو غير صالحة").
+- **Signature Mismatch Resolution**: If a user encounters "الحزمة تبدو غير صالحة" when installing an updated APK over a previous testing copy, it indicates a signing certificate mismatch (e.g. earlier debug vs release keystore). The standard protocol is to uninstall the existing app copy first, then install the new release APK.

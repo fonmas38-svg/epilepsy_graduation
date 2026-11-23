@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -11,7 +13,6 @@ import '../../providers/app_state.dart';
 import '../../services/eeg_hardware_device.dart';
 import '../../widgets/app_drawer.dart';
 
-
 /// Flagship Real-time Vital Telemetry Simulator & Interactive Alert Escalation Screen.
 class PatientSimulatorScreen extends StatefulWidget {
   const PatientSimulatorScreen({super.key});
@@ -21,9 +22,11 @@ class PatientSimulatorScreen extends StatefulWidget {
 }
 
 class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _pulseController;
   late final Animation<double> _pulseScale;
+  late final AnimationController _waveController;
+  int _currentCyclePhaseIndex = -1;
 
   @override
   void initState() {
@@ -37,6 +40,11 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
+    _waveController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    )..repeat();
+
     // Disable automatic pre-alerts while the user is on this screen.
     // The user has full manual control here; automatic alerts would be annoying.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -49,6 +57,7 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
   @override
   void dispose() {
     _pulseController.dispose();
+    _waveController.dispose();
     // Re-enable automatic alerts when the user leaves the simulator screen.
     // Use a post-frame callback because dispose() is called after the widget
     // is removed from the tree but the context may still be accessible.
@@ -63,48 +72,84 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
     final beatsPerSec = hr / 60.0;
     final ms = (1000 / beatsPerSec).clamp(300, 1200).toInt();
     _pulseController.duration = Duration(milliseconds: ms ~/ 2);
+    // Speed up wave sweep proportionally when heart rate rises (simulating tachycardia)
+    final waveSec = hr > 115 ? 1.5 : (hr > 90 ? 2.2 : 3.0);
+    _waveController.duration = Duration(milliseconds: (waveSec * 1000).toInt());
   }
 
   Future<void> _escalate(AppState app, RiskLabel level) async {
     await app.monitoring.tick(forcePattern: level);
     if (!mounted) return;
     final msg = switch (level) {
-      RiskLabel.stable => 'تم ضبط الحالة: مستقر / طبيعي',
-      RiskLabel.watch => 'تم رفع الحالة: تنبيه خفيف / مراقبة',
-      RiskLabel.highRisk => 'تم تصعيد الحالة: إنذار حرج / خطر مرتفع',
+      RiskLabel.stable => 'تم ضبط الحالة: مستقر / طبيعي (إشارات هادئة)',
+      RiskLabel.watch => 'تم رفع الحالة: تنبيه خفيف / متابعة نشاط الدماغ',
+      RiskLabel.highRisk => 'تم تصعيد الحالة: إنذار حرج وتحديد الموقع للمرافقين',
     };
     AppSnack.success(context, msg);
   }
 
-  /// Run a complete seizure cycle automatically:
-  /// Interictal → Pre-Ictal (with pre-alert) → Ictal → Post-Ictal
-  /// Each phase takes [phaseDuration] seconds so the demo is fast.
+  /// Run a complete seizure cycle automatically using clinical EEG dataset & CNN-LSTM model:
+  /// Interictal → Pre-Ictal (with forecast & countdown) → Ictal (with alert & location) → Post-Ictal (recovery)
   bool _cycleRunning = false;
   Future<void> _runFullCycle(AppState app) async {
     if (_cycleRunning) return;
-    setState(() => _cycleRunning = true);
-    // Re-enable alerts just for the cycle so pre-ictal fires properly,
-    // then restore the suppressed state afterward.
+    setState(() {
+      _cycleRunning = true;
+      _currentCyclePhaseIndex = 0;
+    });
+
     app.monitoring.enableAutoAlerts();
-    // Reset the cooldown for a clean demo by forcing forcePhase.
-    const phaseDuration = Duration(seconds: 4);
+
     final phases = [
-      (SeizurePhase.interictal, RiskLabel.stable, 'بين النوبات — الحالة هادئة'),
-      (SeizurePhase.preIctal,   RiskLabel.watch,   'ما قبل النوبة — تنبيه مبكر'),
-      (SeizurePhase.ictal,      RiskLabel.highRisk, 'أثناء النوبة — إنذار حرج'),
-      (SeizurePhase.postIctal,  RiskLabel.stable,   'ما بعد النوبة — تعافٍ'),
+      (
+        SeizurePhase.interictal,
+        RiskLabel.stable,
+        '1. مرحلة بين النوبات (Interictal) — إشارات طبيعية وهدوء سريري',
+        const Duration(seconds: 4),
+      ),
+      (
+        SeizurePhase.preIctal,
+        RiskLabel.watch,
+        '2. مرحلة ما قبل النوبة (Pre-Ictal) — توقع حدوث نوبة بالذكاء الاصطناعي وبدء الإنذار المبكر',
+        const Duration(seconds: 5),
+      ),
+      (
+        SeizurePhase.ictal,
+        RiskLabel.highRisk,
+        '3. مرحلة النوبة النشطة (Ictal) — شحنات صرعية حادة وتصعيد فوري وإرسال الموقع',
+        const Duration(seconds: 6),
+      ),
+      (
+        SeizurePhase.postIctal,
+        RiskLabel.stable,
+        '4. مرحلة ما بعد النوبة (Post-Ictal) — هدوء الشحنات وتعافي المريض التلقائي',
+        const Duration(seconds: 4),
+      ),
     ];
-    for (final (phase, label, msg) in phases) {
+
+    for (var i = 0; i < phases.length; i++) {
       if (!mounted) break;
+      setState(() => _currentCyclePhaseIndex = i);
+      final (phase, label, msg, duration) = phases[i];
       app.monitoring.cycleController.forcePhase(phase);
-      await app.monitoring.tick(forcePattern: label);
+
+      if (phase == SeizurePhase.preIctal) {
+        await app.simulatePreIctalForecast();
+      } else {
+        await app.monitoring.tick(forcePattern: label);
+      }
+
       if (mounted) AppSnack.info(context, msg);
-      await Future<void>.delayed(phaseDuration);
+      await Future<void>.delayed(duration);
     }
+
     if (mounted) {
       app.monitoring.disableAutoAlerts();
-      setState(() => _cycleRunning = false);
-      AppSnack.success(context, 'اكتملت محاكاة دورة النوبة الكاملة ✓');
+      setState(() {
+        _cycleRunning = false;
+        _currentCyclePhaseIndex = -1;
+      });
+      AppSnack.success(context, 'اكتملت محاكاة دورة النوبة السريرية بالكامل ✓');
     }
   }
 
@@ -340,20 +385,15 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
                   ],
                 ),
                 Gap.vSm,
-                // Waveform graph
-                Container(
-                  height: 70,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    borderRadius: BorderRadius.circular(Radii.sm),
-                    border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
-                  ),
-                  child: CustomPaint(
-                    painter: _SignalWavePainter(
-                      data: reading?.ecg ?? const [],
-                      lineColor: Colors.redAccent,
-                    ),
+                // Live moving ECG waveform graph
+                AnimatedBuilder(
+                  animation: _waveController,
+                  builder: (context, _) => _LiveOscilloscopeWave(
+                    data: reading?.ecg ?? const [],
+                    lineColor: Colors.redAccent,
+                    progress: _waveController.value,
+                    height: 75,
+                    label: 'ECG LEAD II (mV)',
                   ),
                 ),
               ],
@@ -369,19 +409,15 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  height: 90,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    borderRadius: BorderRadius.circular(Radii.sm),
-                    border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
-                  ),
-                  child: CustomPaint(
-                    painter: _SignalWavePainter(
-                      data: reading?.eeg ?? const [],
-                      lineColor: Colors.blueAccent,
-                    ),
+                // Live moving EEG waveform graph
+                AnimatedBuilder(
+                  animation: _waveController,
+                  builder: (context, _) => _LiveOscilloscopeWave(
+                    data: reading?.eeg ?? const [],
+                    lineColor: const Color(0xFF00E5FF),
+                    progress: _waveController.value,
+                    height: 95,
+                    label: 'EEG FP1-F3 (µV)',
                   ),
                 ),
                 Gap.vSm,
@@ -424,19 +460,15 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
             accentColor: Colors.teal,
             child: Column(
               children: [
-                Container(
-                  height: 50,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    borderRadius: BorderRadius.circular(Radii.sm),
-                    border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
-                  ),
-                  child: CustomPaint(
-                    painter: _SignalWavePainter(
-                      data: reading?.motion ?? const [],
-                      lineColor: Colors.teal,
-                    ),
+                // Live moving Motion waveform graph
+                AnimatedBuilder(
+                  animation: _waveController,
+                  builder: (context, _) => _LiveOscilloscopeWave(
+                    data: reading?.motion ?? const [],
+                    lineColor: const Color(0xFF00E676),
+                    progress: _waveController.value,
+                    height: 60,
+                    label: 'ACCELEROMETER (g)',
                   ),
                 ),
                 Gap.vXs,
@@ -520,7 +552,10 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
           // ── Full Seizure Cycle ─────────────────────────────────────────
           const Divider(),
           Gap.vSm,
-          _SeizurePhaseIndicator(phase: app.monitoring.cycleController.currentPhase),
+          _SeizurePhaseIndicator(
+            phase: app.monitoring.cycleController.currentPhase,
+            activeCycleIndex: _currentCyclePhaseIndex,
+          ),
           Gap.vMd,
 
           SizedBox(
@@ -538,14 +573,18 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
               ),
               icon: _cycleRunning
                   ? const SizedBox(
-                      width: 18, height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : const Icon(Icons.auto_mode_rounded),
               label: Text(
                 _cycleRunning
-                    ? 'جاري محاكاة الدورة الكاملة...'
-                    : 'محاكاة دورة نوبة كاملة (4 مراحل)',
+                    ? 'جاري محاكاة الدورة السريرية بالذكاء الاصطناعي...'
+                    : 'محاكاة دورة نوبة كاملة (4 مراحل سريرية)',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               onPressed: _cycleRunning ? null : () => _runFullCycle(app),
@@ -553,7 +592,7 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
           ),
           Gap.vXs,
           Text(
-            'بين النوبات ← ما قبل النوبة ← أثناء النوبة ← ما بعد النوبة',
+            'بين النوبات ← ما قبل النوبة (إنذار مبكر) ← أثناء النوبة (تحديد الموقع) ← التعافي',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -566,41 +605,124 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
 }
 
 class _SeizurePhaseIndicator extends StatelessWidget {
-  const _SeizurePhaseIndicator({required this.phase});
+  const _SeizurePhaseIndicator({
+    required this.phase,
+    this.activeCycleIndex = -1,
+  });
+
   final SeizurePhase phase;
+  final int activeCycleIndex;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final (color, icon, label) = switch (phase) {
-      SeizurePhase.interictal => (Colors.green, Icons.check_circle_outline, 'المرحلة: بين النوبات'),
-      SeizurePhase.preIctal   => (Colors.orange, Icons.warning_amber_rounded, 'المرحلة: ما قبل النوبة'),
-      SeizurePhase.ictal      => (Colors.red, Icons.notification_important, 'المرحلة: أثناء النوبة'),
-      SeizurePhase.postIctal  => (Colors.blue, Icons.bedtime_rounded, 'المرحلة: ما بعد النوبة (تعافٍ)'),
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(Radii.md),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
+      SeizurePhase.interictal => (
+        Colors.green,
+        Icons.check_circle_outline,
+        'المرحلة: بين النوبات (Interictal — إشارات مستقرة)',
       ),
-      child: Row(
+      SeizurePhase.preIctal => (
+        Colors.orange,
+        Icons.warning_amber_rounded,
+        'المرحلة: ما قبل النوبة (Pre-Ictal — تنبؤ الذكاء الاصطناعي)',
+      ),
+      SeizurePhase.ictal => (
+        Colors.red,
+        Icons.notification_important,
+        'المرحلة: أثناء النوبة (Ictal — شحنات صرعية وتنبيه طوارئ)',
+      ),
+      SeizurePhase.postIctal => (
+        Colors.blue,
+        Icons.bedtime_rounded,
+        'المرحلة: ما بعد النوبة (Post-Ictal — تعافٍ فسيولوجي)',
+      ),
+    };
+
+    final stages = [
+      ('1. هدوء', Colors.green),
+      ('2. ما قبل النوبة', Colors.orange),
+      ('3. نوبة نشطة', Colors.red),
+      ('4. تعافٍ', Colors.blue),
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: color.withValues(alpha: 0.4), width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(icon, color: color, size: 22),
-          Gap.hMd,
-          Expanded(
-            child: Text(
-              label,
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: color,
-                fontWeight: FontWeight.bold,
+          Row(
+            children: [
+              Icon(icon, color: color, size: 22),
+              Gap.hMd,
+              Expanded(
+                child: Text(
+                  label,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
-            ),
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+            ],
           ),
-          Container(
-            width: 10, height: 10,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          Gap.vSm,
+          // 4-Phase Stepper Tracker
+          Row(
+            children: [
+              for (var i = 0; i < stages.length; i++) ...[
+                if (i > 0)
+                  Expanded(
+                    child: Container(
+                      height: 2,
+                      color: activeCycleIndex >= i
+                          ? stages[i].$2
+                          : theme.colorScheme.outlineVariant,
+                    ),
+                  ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: activeCycleIndex == i
+                        ? stages[i].$2
+                        : (activeCycleIndex > i
+                            ? stages[i].$2.withValues(alpha: 0.25)
+                            : theme.colorScheme.surface),
+                    borderRadius: BorderRadius.circular(Radii.pill),
+                    border: Border.all(
+                      color: activeCycleIndex >= i
+                          ? stages[i].$2
+                          : theme.colorScheme.outlineVariant,
+                      width: activeCycleIndex == i ? 1.5 : 1,
+                    ),
+                  ),
+                  child: Text(
+                    stages[i].$1,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: activeCycleIndex == i
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                      color: activeCycleIndex == i
+                          ? Colors.white
+                          : (activeCycleIndex > i
+                              ? stages[i].$2
+                              : theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
         ],
       ),
@@ -765,43 +887,233 @@ class _EscalateButton extends StatelessWidget {
   }
 }
 
-class _SignalWavePainter extends CustomPainter {
-  const _SignalWavePainter({
+class _LiveOscilloscopeWave extends StatelessWidget {
+  const _LiveOscilloscopeWave({
     required this.data,
     required this.lineColor,
+    required this.progress,
+    required this.height,
+    this.label,
   });
 
   final List<double> data;
   final Color lineColor;
+  final double progress;
+  final double height;
+  final String? label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: height,
+      width: double.infinity,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D1520), // Clinical dark monitor display
+        borderRadius: BorderRadius.circular(Radii.sm),
+        border: Border.all(
+          color: lineColor.withValues(alpha: 0.35),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          // 1. Grid Background & Moving Oscilloscope Waveform
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _OscilloscopeWavePainter(
+                data: data,
+                lineColor: lineColor,
+                progress: progress,
+              ),
+            ),
+          ),
+          // 2. Clinical Monitor Overlay Tag
+          if (label != null)
+            Positioned(
+              top: 5,
+              left: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(
+                  label!,
+                  style: TextStyle(
+                    color: lineColor.withValues(alpha: 0.85),
+                    fontSize: 9.0,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ),
+          // 3. Live 256Hz Pill Indicator
+          Positioned(
+            top: 5,
+            right: 8,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: lineColor,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: lineColor,
+                        blurRadius: 4,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'LIVE 256Hz',
+                  style: TextStyle(
+                    color: lineColor.withValues(alpha: 0.75),
+                    fontSize: 8.5,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OscilloscopeWavePainter extends CustomPainter {
+  _OscilloscopeWavePainter({
+    required this.data,
+    required this.lineColor,
+    required this.progress,
+  });
+
+  final List<double> data;
+  final Color lineColor;
+  final double progress; // 0.0 to 1.0 (continuous sweep)
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (data.isEmpty) return;
+    final width = size.width;
+    final height = size.height;
+    final midY = height / 2;
 
-    final paint = Paint()
-      ..color = lineColor
-      ..strokeWidth = 2.0
+    // 1. Draw subtle clinical grid lines (16px spacing)
+    final gridPaint = Paint()
+      ..color = const Color(0xFF1E2D40).withValues(alpha: 0.45)
+      ..strokeWidth = 0.5;
+
+    const gridSize = 16.0;
+    for (double x = 0; x < width; x += gridSize) {
+      canvas.drawLine(Offset(x, 0), Offset(x, height), gridPaint);
+    }
+    for (double y = 0; y < height; y += gridSize) {
+      canvas.drawLine(Offset(0, y), Offset(width, y), gridPaint);
+    }
+
+    // Baseline center axis
+    final centerAxisPaint = Paint()
+      ..color = lineColor.withValues(alpha: 0.15)
+      ..strokeWidth = 0.8;
+    canvas.drawLine(Offset(0, midY), Offset(width, midY), centerAxisPaint);
+
+    // If data is empty, synthesize a baseline waveform
+    final samples = data.isNotEmpty
+        ? data
+        : List<double>.generate(128, (i) => 0.1 * math.sin(i * 0.1));
+
+    final count = samples.length;
+    final sweepX = progress * width;
+
+    // 2. Prepare glowing & solid trace paints
+    final glowPaint = Paint()
+      ..color = lineColor.withValues(alpha: 0.35)
+      ..strokeWidth = 3.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
-    final path = Path();
-    final dx = size.width / (data.length - 1);
-    final midY = size.height / 2;
+    final tracePaint = Paint()
+      ..color = lineColor
+      ..strokeWidth = 1.8
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
 
-    for (var i = 0; i < data.length; i++) {
-      final val = data[i];
-      final y = (midY - val * (size.height * 0.35)).clamp(2.0, size.height - 2.0);
+    // Sample cyclically based on progress so the waveform fluidly flows horizontally:
+    final int offset = (progress * count).floor();
+    final path = Path();
+    final dx = width / (count - 1);
+
+    double? lastY;
+    double? headY;
+
+    for (var i = 0; i < count; i++) {
+      final sampleIdx = (i + offset) % count;
+      final rawVal = samples[sampleIdx];
+      final y = (midY - rawVal * (height * 0.38)).clamp(3.0, height - 3.0);
+      final x = i * dx;
+
       if (i == 0) {
-        path.moveTo(0, y);
+        path.moveTo(x, y);
       } else {
-        path.lineTo(i * dx, y);
+        path.lineTo(x, y);
+      }
+      lastY = y;
+      if (headY == null && x >= sweepX) {
+        headY = y;
       }
     }
 
-    canvas.drawPath(path, paint);
+    // Draw glow and primary trace
+    canvas.drawPath(path, glowPaint);
+    canvas.drawPath(path, tracePaint);
+
+    // 3. Draw moving oscilloscope scan beam & glowing leading head
+    headY ??= lastY ?? midY;
+
+    // Vertical sweeping scan bar (faint vertical beam)
+    final scanBarPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          lineColor.withValues(alpha: 0.0),
+          lineColor.withValues(alpha: 0.22),
+          lineColor.withValues(alpha: 0.0),
+        ],
+      ).createShader(Rect.fromLTWH(sweepX - 8, 0, 16, height));
+    canvas.drawRect(Rect.fromLTWH(sweepX - 8, 0, 16, height), scanBarPaint);
+
+    // Glowing leading head dot
+    final dotGlow = Paint()
+      ..color = Colors.white
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+    canvas.drawCircle(Offset(sweepX, headY), 4.0, dotGlow);
+
+    final dotSolid = Paint()..color = Colors.white;
+    canvas.drawCircle(Offset(sweepX, headY), 2.2, dotSolid);
   }
 
   @override
-  bool shouldRepaint(covariant _SignalWavePainter oldDelegate) => true;
+  bool shouldRepaint(covariant _OscilloscopeWavePainter oldDelegate) =>
+      oldDelegate.progress != progress || oldDelegate.data != data;
 }

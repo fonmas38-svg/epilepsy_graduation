@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/errors/failure.dart';
+import '../../core/router/route_names.dart';
 import '../../core/ui/common.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/app_state.dart';
@@ -240,62 +241,33 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
             ),
             const SizedBox(height: 20),
             SectionCard(
-              title: ar ? 'محاكاة الإشارات والاختبار' : 'Signal Simulation & Testing',
+              title: ar ? 'محرك الإشارات واختبار التنبؤ' : 'Signal Engine & Prediction Testing',
               icon: Icons.science_outlined,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
                     ar
-                        ? 'توليد إشارات EEG حيوية واختبار استجابة النظام وتصعيد التنبيهات في غياب جهاز طبي مقترن.'
-                        : 'Generate vital EEG signals and test system alert response when no physical device is paired.',
+                        ? 'يعمل النظام افتراضياً بنمط تدفق البيانات السريرية المعتمدة (CHB-MIT) مع نموذج الذكاء الاصطناعي، مع التحول التلقائي للمحاكاة المحلية السريعة عند انقطاع الاتصال.'
+                        : 'System operates via clinical EEG dataset replay with deep learning, automatically falling back to local simulation when disconnected.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _busy
-                              ? null
-                              : () => _select(SignalSource.simulator),
-                          icon: Icon(
-                            monitor.source == SignalSource.simulator
-                                ? Icons.check_circle
-                                : Icons.play_arrow,
-                            color: monitor.source == SignalSource.simulator
-                                ? const Color(0xFF0F7A4D)
-                                : null,
-                          ),
-                          label: Text(
-                            monitor.source == SignalSource.simulator
-                                ? (ar ? 'المحاكي نشط' : 'Simulator Active')
-                                : (ar ? 'تشغيل المحاكي' : 'Start Simulator'),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _busy
-                              ? null
-                              : () => _select(SignalSource.dataset),
-                          icon: Icon(
-                            monitor.source == SignalSource.dataset
-                                ? Icons.check_circle
-                                : Icons.dataset_outlined,
-                            color: monitor.source == SignalSource.dataset
-                                ? const Color(0xFF0F7A4D)
-                                : null,
-                          ),
-                          label: Text(
-                            monitor.source == SignalSource.dataset
-                                ? (ar ? 'البيانات نشطة' : 'Dataset Active')
-                                : (ar ? 'بيانات مسجلة' : 'Recorded Dataset'),
-                          ),
-                        ),
-                      ),
-                    ],
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF0F7A4D),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    onPressed: () =>
+                        Navigator.pushNamed(context, Routes.patientSimulator),
+                    icon: const Icon(Icons.tune, size: 20),
+                    label: Text(
+                      ar
+                          ? 'فتح محاكي الإشارات واختبار النوبات (4 مراحل)'
+                          : 'Open Signal Simulator (4 Phases)',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                   ),
                 ],
               ),

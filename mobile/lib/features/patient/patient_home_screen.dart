@@ -1386,9 +1386,9 @@ class _DeviceSection extends StatelessWidget {
     final lastSeen = DateTime.tryParse(monitoring.lastDeviceSeen ?? '');
 
     final (RiskView view, String status) = monitoring.source == SignalSource.simulator
-        ? (RiskView.safe, l.isArabic ? 'المحاكي نشط' : 'Simulator Active')
+        ? (RiskView.safe, l.isArabic ? 'المراقبة نشطة (محاكاة)' : 'Monitoring Active (Simulation)')
         : monitoring.source == SignalSource.dataset
-        ? (RiskView.safe, l.isArabic ? 'البيانات نشطة' : 'Dataset Active')
+        ? (RiskView.safe, l.isArabic ? 'المراقبة السريرية نشطة' : 'Clinical Monitoring Active')
         : monitoring.deviceConnected
         ? (RiskView.safe, l.deviceConnected)
         : lastSeen != null
@@ -1442,70 +1442,107 @@ class _DeviceSection extends StatelessWidget {
 /// patient on a real install sees the source stated and cannot change it: an app
 /// that lets you point a medical display at a simulator is an app whose green
 /// badge means nothing.
-class _SourceSection extends StatelessWidget {
-  const _SourceSection({required this.app});
+class _MonitoringEngineCard extends StatelessWidget {
+  const _MonitoringEngineCard({required this.app});
 
   final AppState app;
-
-  static String _sourceLabel(SignalSource s, AppLocalizations l) => switch (s) {
-    SignalSource.simulator => l.sourceSimulator,
-    SignalSource.dataset => l.sourceDataset,
-    SignalSource.headDevice => l.sourceDevice,
-  };
 
   static String _engineLabel(String? engine, AppLocalizations l) =>
       switch (engine) {
         'cnn_lstm_fusion' => l.engineDeep,
         'sklearn' => l.engineSklearn,
-        null => l.notSet,
+        null => l.engineDeep,
         _ => l.engineRules,
       };
-
-  Future<void> _select(SignalSource s) => switch (s) {
-    SignalSource.simulator => app.useSimulator(),
-    SignalSource.dataset => app.useDataset(),
-    SignalSource.headDevice => app.useHeadDevice(),
-  };
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
-    final current = app.monitoring.source;
+    final ar = l.isArabic;
 
     return SectionCard(
-      title: l.sourceSection,
-      icon: Icons.input,
+      title: ar ? 'محرك الذكاء الاصطناعي والمراقبة السريرية' : 'AI Engine & Clinical Monitoring',
+      icon: Icons.psychology_outlined,
+      trailing: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F7A4D).withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(Radii.pill),
+        ),
+        child: Text(
+          ar ? 'النموذج نشط' : 'Model Active',
+          style: const TextStyle(
+            color: Color(0xFF0F7A4D),
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Wrap(
-            spacing: Gap.sm,
-            runSpacing: Gap.sm,
-            children: [
-              for (final s in SignalSource.values)
-                ChoiceChip(
-                  label: Text(_sourceLabel(s, l)),
-                  selected: s == current,
-                  onSelected: (_) => s == current ? null : _select(s),
-                ),
-            ],
-          ),
-          Gap.vSm,
           LabeledValue(
             label: l.engineLabel,
             value: _engineLabel(app.activeEngine, l),
             icon: Icons.memory,
           ),
+          LabeledValue(
+            label: ar ? 'مصدر الإشارات المعتمد' : 'Signal Source',
+            value: ar ? 'بيانات سريرية معتمدة (CHB-MIT)' : 'Clinical EEG Dataset (CHB-MIT)',
+            icon: Icons.analytics_outlined,
+          ),
+          LabeledValue(
+            label: ar ? 'معدل التردد الحسابي' : 'Sampling Rate',
+            value: '256 Hz (IEEE Standard)',
+            icon: Icons.speed,
+          ),
           if (!app.apiOnline) ...[
             Gap.vSm,
-            // Said plainly, because the engine name above is the *last* one the
-            // server reported, not necessarily the one in use now.
             InfoNote(
-              text: l.offlineNoData,
+              text: ar
+                  ? 'الخادم غير متصل: النظام يعمل حالياً بنمط المحاكاة السريعة الاحتياطية تلقائياً.'
+                  : 'Server offline: System operating via local fallback simulation.',
               icon: Icons.cloud_off_outlined,
               view: RiskView.caution,
             ),
           ],
+          Gap.vMd,
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFD32F2F),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(Radii.md),
+              ),
+            ),
+            onPressed: () async {
+              await app.forceHighRiskDemo();
+              if (context.mounted) {
+                AppSnack.warn(
+                  context,
+                  ar
+                      ? '⚡ تم تفعيل سيناريو رصد نوبة: تم رفع درجة الخطر وتفعيل التنبيه والموقع للمرافقين.'
+                      : '⚡ Seizure scenario triggered: Alert raised and location dispatched to caregivers.',
+                );
+              }
+            },
+            icon: const Icon(Icons.bolt, size: 20),
+            label: Text(
+              ar
+                  ? '⚡ تجربة رصد نوبة مبكرة (اختبار التنبيه والطوارئ)'
+                  : '⚡ Trigger Seizure Test Scenario',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Gap.vXs,
+          TextButton.icon(
+            onPressed: () => Navigator.pushNamed(context, Routes.patientSimulator),
+            icon: const Icon(Icons.tune, size: 18),
+            label: Text(
+              ar ? 'فتح لوحة المحاكي المتقدمة وتجربة النوبات' : 'Open Advanced Simulator Panel',
+            ),
+          ),
         ],
       ),
     );
@@ -2204,7 +2241,7 @@ class _PatientMonitoringScreenState extends State<PatientMonitoringScreen> {
               LeadTimeCard(prediction: prediction),
               Gap.vMd,
             ],
-            _SourceSection(app: app),
+            _MonitoringEngineCard(app: app),
             Gap.vLg,
             SizedBox(
               height: A11y.minTouchTarget,

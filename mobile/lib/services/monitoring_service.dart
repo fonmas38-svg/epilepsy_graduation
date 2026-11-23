@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:uuid/uuid.dart';
 
-import '../core/config.dart';
 import '../core/enums.dart';
 import '../models/models.dart';
 import '../models/prediction_state.dart';
@@ -68,9 +67,7 @@ class MonitoringService {
   List<AlertItem> alerts = [];
   bool running = false;
   String? activePatientId;
-  SignalSource source = AppConfig.demoMode
-      ? SignalSource.simulator
-      : SignalSource.headDevice;
+  SignalSource source = SignalSource.dataset;
   bool deviceConnected = false;
   bool _deviceAssessmentValid = false;
   String? deviceId;

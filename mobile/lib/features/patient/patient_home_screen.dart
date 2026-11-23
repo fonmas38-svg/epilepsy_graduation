@@ -1846,6 +1846,7 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final app = context.watch<AppState>();
     final lastLoc = app.messages.lastSharedLocation;
 
@@ -1855,7 +1856,7 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
         color: theme.colorScheme.surface,
         borderRadius: Radii.rMd,
         border: Border.all(
-          color: Colors.teal.withValues(alpha: 0.5),
+          color: Colors.teal.withValues(alpha: isDark ? 0.7 : 0.5),
           width: 1.5,
         ),
         boxShadow: [
@@ -1874,7 +1875,7 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
               Container(
                 padding: const EdgeInsets.all(Gap.sm),
                 decoration: BoxDecoration(
-                  color: Colors.teal.withValues(alpha: 0.12),
+                  color: Colors.teal.withValues(alpha: isDark ? 0.22 : 0.12),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
@@ -1912,7 +1913,7 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
               width: double.infinity,
               padding: const EdgeInsets.all(Gap.sm),
               decoration: BoxDecoration(
-                color: Colors.teal.withValues(alpha: 0.06),
+                color: Colors.teal.withValues(alpha: isDark ? 0.16 : 0.06),
                 borderRadius: BorderRadius.circular(Radii.sm),
               ),
               child: Row(
@@ -1925,7 +1926,7 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
                       style: theme.textTheme.bodySmall?.copyWith(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color: Colors.teal.shade800,
+                        color: isDark ? Colors.teal.shade200 : Colors.teal.shade800,
                       ),
                     ),
                   ),
@@ -1939,9 +1940,13 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(Gap.sm),
                 decoration: BoxDecoration(
-                  color: Colors.amber.shade50,
+                  color: isDark
+                      ? Colors.amber.shade900.withValues(alpha: 0.25)
+                      : Colors.amber.shade50,
                   borderRadius: BorderRadius.circular(Radii.sm),
-                  border: Border.all(color: Colors.amber.shade300),
+                  border: Border.all(
+                    color: isDark ? Colors.amber.shade700 : Colors.amber.shade300,
+                  ),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1949,7 +1954,7 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
                     Icon(
                       Icons.warning_amber_rounded,
                       size: 16,
-                      color: Colors.amber.shade900,
+                      color: isDark ? Colors.amber.shade300 : Colors.amber.shade900,
                     ),
                     Gap.hXs,
                     Expanded(
@@ -1957,7 +1962,7 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
                         'تنبيه: تم رصد الموقع بدقة تقريبية عبر شبكة الإنترنت وليس عبر الأقمار الصناعية (GPS) مباشرة. للحصول على إحداثيات دقيقة وتفادي الخطأ، يرجى تفعيل الموقع الدقيق والاقتراب من نافذة أو مكان مكشوف.',
                         style: TextStyle(
                           fontSize: 10.5,
-                          color: Colors.amber.shade900,
+                          color: isDark ? Colors.amber.shade200 : Colors.amber.shade900,
                           height: 1.3,
                         ),
                       ),

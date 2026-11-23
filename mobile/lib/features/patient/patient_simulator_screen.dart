@@ -156,6 +156,7 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
     final reading = app.monitoring.latestReading;
@@ -186,12 +187,17 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
             Container(
               padding: Insets.card,
               decoration: BoxDecoration(
-                color: Colors.amber.shade50,
+                color: isDark
+                    ? Colors.amber.shade900.withValues(alpha: 0.25)
+                    : Colors.amber.shade50,
                 borderRadius: Radii.rMd,
-                border: Border.all(color: Colors.amber.shade600, width: 2),
+                border: Border.all(
+                  color: isDark ? Colors.amber.shade700 : Colors.amber.shade600,
+                  width: 2,
+                ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.amber.withValues(alpha: 0.15),
+                    color: Colors.amber.withValues(alpha: isDark ? 0.3 : 0.15),
                     blurRadius: 10,
                     offset: const Offset(0, 4),
                   ),
@@ -223,19 +229,30 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
                       children: [
                         const Text(
                           'إنذار ما قبل النوبة نشط (Pre-Ictal)',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
                         ),
                         Gap.vXs,
                         Text(
                           'سيتم التصعيد التلقائي للأسرة والطبيب خلال ${app.preAlertSecondsLeft} ثانية إذا لم يتم الإلغاء',
-                          style: theme.textTheme.bodySmall?.copyWith(color: Colors.amber.shade900),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: isDark
+                                ? Colors.amber.shade200
+                                : Colors.amber.shade900,
+                          ),
                         ),
                       ],
                     ),
                   ),
                   Gap.hSm,
                   FilledButton.tonal(
-                    style: FilledButton.styleFrom(backgroundColor: Colors.amber.shade200),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: isDark
+                          ? Colors.amber.shade800
+                          : Colors.amber.shade200,
+                    ),
                     onPressed: () => app.cancelPreAlert(),
                     child: const Text('إلغاء التنبيه'),
                   ),

@@ -157,4 +157,49 @@ void main() {
       app.dispose();
     },
   );
+
+  testWidgets(
+    'disabling auto-lock prevents inactivity timeout from locking the screen',
+    (tester) async {
+      final app = AppState()..auth.currentUser = user('first');
+      final verifier = DeviceVerifier();
+      await tester.pumpWidget(
+        harness(
+          app,
+          InactivityWatcher(
+            timeout: const Duration(seconds: 1),
+            enabled: false,
+            verifier: verifier,
+            child: const Scaffold(body: Text('Unlocked presentation view')),
+          ),
+          locale: 'en',
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('Unlock with device security'), findsNothing);
+      expect(find.text('Unlocked presentation view'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
+
+  test('SettingsService persists and clamps autoLock settings', () async {
+    final s = AppState().settings;
+    expect(s.autoLockEnabled, isTrue);
+    expect(s.autoLockMinutes, 5);
+    expect(s.autoLockTimeout, const Duration(minutes: 5));
+
+    await s.setAutoLockMinutes(15);
+    expect(s.autoLockMinutes, 15);
+    expect(s.autoLockTimeout, const Duration(minutes: 15));
+
+    // Clamps invalid minutes to default 5
+    await s.setAutoLockMinutes(99);
+    expect(s.autoLockMinutes, 5);
+
+    await s.setAutoLockEnabled(false);
+    expect(s.autoLockEnabled, isFalse);
+  });
 }

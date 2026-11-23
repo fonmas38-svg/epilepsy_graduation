@@ -8,6 +8,7 @@ existing local workflows and `SQLITE_DB_PATH` isolation keep working unchanged.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -630,10 +631,12 @@ def _configure_sqlite(dbapi_connection, _connection_record) -> None:
 
 def _create_engine() -> Engine:
     url = database_url()
+    logger = logging.getLogger("epilepsy.database")
     if is_sqlite_url(url):
         # Only SQLite needs a writable parent directory, thread-check opt-out,
         # and the PRAGMA tuning applied on every new file handle.
         database_path().parent.mkdir(parents=True, exist_ok=True)
+        logger.info("Active database storage engine: SQLite (%s)", database_path())
         engine = create_engine(
             url,
             future=True,
@@ -642,6 +645,14 @@ def _create_engine() -> Engine:
         )
         event.listen(engine, "connect", _configure_sqlite)
         return engine
+    parsed = urlsplit(url)
+    logger.info(
+        "Active database storage engine: PostgreSQL (%s:%s/%s, user=%s)",
+        parsed.hostname,
+        parsed.port or 5432,
+        parsed.path.lstrip("/"),
+        parsed.username or "default",
+    )
     # Supavisor Transaction Mode (port 6543) handles pooling externally and
     # disallows server-side prepared statements across pooled transactions.
     if is_supabase_transaction_pooler_url(url):

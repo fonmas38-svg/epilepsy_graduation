@@ -32,6 +32,18 @@ Treat the declared /device/contract and actual hardware requirements as evidence
   - Structured clinical classification (e.g., Generalized Tonic-Clonic, Focal with Impaired Awareness, Absence, Atonic, Non-epileptic Artifact) plus artifact root-cause tags (muscle activity, electrode impedance drop, head motion).
 - Enforce `CONSTRAINT uq_outcomes_alert UNIQUE(patient_id, alert_id)` and an optimistic concurrency `version` column on `outcomes` (`WHERE version = :expected`) so concurrent mobile/web reviews cannot silently overwrite each other.
 
+## Unified Clinical Signal Engine & Live Oscilloscope (Latest Updates)
+
+- **Default Signal Source to Dataset**: Unified `monitoring.source = SignalSource.dataset` as the system default. The application feeds real recorded clinical EEG windows (CHB-MIT) into the CNN-LSTM deep learning model on `/dataset/next`, producing authentic prediction probabilities, lead times, and risk assessments.
+- **Seamless Local Fallback**: When offline or if the cloud server is unreachable, `SoftwareEmulatorEegDevice` automatically falls back to local `SignalSimulator` rhythms to ensure continuous, zero-freeze telemetry without disrupting patient monitoring.
+- **Live Moving Oscilloscope Visualizer**: Replaced static window redraws with `_LiveOscilloscopeWave` and `_OscilloscopeWavePainter` running at 60 FPS. Features clinical dark monitor styling (`#0D1520`), 16px grid lines, continuous cyclical waveform advancement, channel headers (`ECG LEAD II`, `EEG FP1-F3`, `ACCELEROMETER`), a live pulsating `256Hz` badge, and a glowing oscilloscope scan beam. Sweep speed dynamically scales with heart rate to visually depict tachycardia during seizures.
+- **4-Phase Clinical Seizure Stepper**: `PatientSimulatorScreen` features an interactive visual pipeline stepper:
+  1. *Interictal*: Calm baseline rhythm.
+  2. *Pre-Ictal*: AI forecast prediction, lead-time countdown banner, and patient cancel button.
+  3. *Ictal*: Active seizure spikes, critical emergency alert, automatic GPS location dispatch to family.
+  4. *Post-Ictal*: Calming recovery phase.
+- **UI Streamlining**: Removed confusing `[محاكي / بيانات / جهاز]` choice chips from the patient screen in favor of an elegant `_MonitoringEngineCard` with a 1-tap `[ ⚡ تجربة رصد نوبة مبكرة ]` demo button.
+
 Simulator scenarios: baseline, gradual synthetic transition, ictal-like pattern, recovery, noise/mains, flatline, clipping, missing packets, reordered/duplicated packets and restart. Use deterministic seeds and acquisition-time scheduling independent of packet size. Distinguish test waveform from model decision, and test missed-prediction recording against an independent onset annotation. Simulation must not send real emergency messages or mix with clinical records without explicit authorized test routing.
 
 Before proposing real-patient testing, report missing external validation, hardware and clinical supervision requirements; engineering tests alone do not provide clinical authorization.

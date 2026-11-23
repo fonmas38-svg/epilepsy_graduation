@@ -32,6 +32,8 @@ class SettingsService extends ChangeNotifier {
   static const _quietEndKey = 'quiet_hours_end_min';
   static const _notifyCautionKey = 'notify_family_on_caution';
   static const _shareLocationKey = 'share_location_on_alert';
+  static const _autoLockEnabledKey = 'auto_lock_enabled';
+  static const _autoLockMinutesKey = 'auto_lock_minutes';
 
   double _horizonMin = AppConfig.defaultHorizonMin;
   ThemeMode _themeMode = ThemeMode.system;
@@ -42,6 +44,8 @@ class SettingsService extends ChangeNotifier {
   int _quietEndMinutes = 7 * 60;
   bool _notifyFamilyOnCaution = false;
   bool _shareLocationOnAlert = true;
+  bool _autoLockEnabled = true;
+  int _autoLockMinutes = 5;
 
   /// The currently-loaded horizon (minutes). Read synchronously after [load];
   /// clamped to the spec range.
@@ -67,6 +71,9 @@ class SettingsService extends ChangeNotifier {
 
   bool get notifyFamilyOnCaution => _notifyFamilyOnCaution;
   bool get shareLocationOnAlert => _shareLocationOnAlert;
+  bool get autoLockEnabled => _autoLockEnabled;
+  int get autoLockMinutes => _autoLockMinutes;
+  Duration get autoLockTimeout => Duration(minutes: _autoLockMinutes);
 
   /// Load persisted settings once at startup. Any failure leaves the defaults.
   Future<void> load() async {
@@ -97,6 +104,11 @@ class SettingsService extends ChangeNotifier {
       );
       _notifyFamilyOnCaution = prefs.getBool(_notifyCautionKey) ?? false;
       _shareLocationOnAlert = prefs.getBool(_shareLocationKey) ?? true;
+      _autoLockEnabled = prefs.getBool(_autoLockEnabledKey) ?? true;
+      final lockM = prefs.getInt(_autoLockMinutesKey);
+      if (lockM != null) {
+        _autoLockMinutes = _clampAutoLockMinutes(lockM);
+      }
     } catch (_) {
       // keep defaults
     }
@@ -153,6 +165,21 @@ class SettingsService extends ChangeNotifier {
   Future<void> setShareLocationOnAlert(bool value) async {
     _shareLocationOnAlert = value;
     await _write((p) => p.setBool(_shareLocationKey, value));
+  }
+
+  Future<void> setAutoLockEnabled(bool value) async {
+    _autoLockEnabled = value;
+    await _write((p) => p.setBool(_autoLockEnabledKey, value));
+  }
+
+  Future<void> setAutoLockMinutes(int minutes) async {
+    _autoLockMinutes = _clampAutoLockMinutes(minutes);
+    await _write((p) => p.setInt(_autoLockMinutesKey, _autoLockMinutes));
+  }
+
+  int _clampAutoLockMinutes(int v) {
+    if ([5, 10, 15, 30].contains(v)) return v;
+    return 5;
   }
 
   /// True when [at] falls inside the quiet window, wrap-around handled (22:00 →

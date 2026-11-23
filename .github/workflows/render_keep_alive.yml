@@ -1,0 +1,29 @@
+name: Render Backend 24/7 Keep-Alive
+
+on:
+  schedule:
+    # Runs every 14 minutes to prevent Render free instance spin-down (inactivity timeout is 15 minutes)
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping-render:
+    name: Ping Cloud Backend Health Endpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Ping FastAPI /health
+        run: |
+          URL="https://epilepsy-graduation.onrender.com/health"
+          echo "Pinging cloud backend at $URL..."
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL" || true)
+          echo "HTTP response status code: $RESPONSE"
+          if [ "$RESPONSE" = "200" ]; then
+            echo "Render cloud backend is alive and responding normally."
+          else
+            echo "Cold start or awakening in progress (status: $RESPONSE), retrying once..."
+            sleep 10
+            RETRY=$(curl -s -o /dev/null -w "%{http_code}" --max-time 45 "$URL" || true)
+            echo "Retry HTTP status: $RETRY"
+          fi

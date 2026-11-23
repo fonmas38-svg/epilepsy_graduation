@@ -26,3 +26,10 @@ Per official Render documentation and `render.yaml`:
 - Schedule reminders via `flutter_local_notifications` / OS alarm schedulers independent of EEG streaming:
   - Store intervals with UTC/timezone-change recalculation so anti-epileptic drug (AED) pharmacokinetic windows do not drift across DST or timezone changes.
   - On Android 13+/14+ (`pub.dev` `flutter_local_notifications`), configure `POST_NOTIFICATIONS` and handle `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM` permissions (`requestExactAlarmsPermission()`) gracefully; on Windows, ensure desktop AUMID setup for Action Center notifications.
+
+## Hardware Satellite GNSS & Automatic Location Dispatch (Latest Updates)
+
+- **Hardware GNSS Priority**: Enforce `AndroidSettings(forceLocationManager: true, accuracy: LocationAccuracy.best)` on Android in `location_service.dart`. This bypasses Google Play Services Fused Location Provider's cellular/IP geolocation fallback, eliminating international IP transit routing bugs (such as YemenNet/regional traffic resolving to Telecom Egypt gateways in Cairo/Alexandria).
+- **Inaccuracy Filtering & Fallback**: Implement accuracy thresholds (>1000m coarse, >3000m suspicious IP guess). If fresh fix has poor accuracy, check recent high-accuracy (`< 500m`, `< 30min`) satellite fixes from `Geolocator.getLastKnownPosition()`. Surface visual warning banners when Android 12+ approximate location permission is granted.
+- **Automatic Dispatch on Seizure Likelihood**: Wire `_shareLocationOnAlert` and `_shareLocationOnPreAlert` into `AppState`. Immediately upon detecting early pre-ictal forecasts or confirmed seizures, the patient's coordinates and Google Maps navigation URL are automatically published to the `family_patient` channel and `ActiveAlertScreen` without requiring manual patient taps.
+- **Security & Diagnostics Secrecy**: Completely remove web portal launcher from Flutter admin screens. Conceal cloud server URLs, ping status, and connectivity diagnostics behind a secret 5-tap gesture on the app logo in `login_screen.dart`.

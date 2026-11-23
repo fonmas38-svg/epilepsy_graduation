@@ -13,10 +13,12 @@ class InactivityWatcher extends StatefulWidget {
     super.key,
     required this.child,
     this.timeout = const Duration(minutes: 5),
+    this.enabled = true,
     this.verifier,
   });
   final Widget child;
   final Duration timeout;
+  final bool enabled;
   final BiometricService? verifier;
   @override
   State<InactivityWatcher> createState() => _InactivityWatcherState();
@@ -36,6 +38,20 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
     super.initState();
     _verifier = widget.verifier ?? BiometricService();
     unawaited(_checkSupport());
+    if (widget.enabled) {
+      _resetTimer();
+    }
+  }
+
+  @override
+  void didUpdateWidget(InactivityWatcher oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.timeout != widget.timeout || oldWidget.enabled != widget.enabled) {
+      if (!widget.enabled && _locked) {
+        setState(() => _locked = false);
+      }
+      _resetTimer();
+    }
   }
 
   Future<void> _checkSupport() async {
@@ -51,9 +67,9 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
 
   void _resetTimer() {
     _timer?.cancel();
-    if (_locked) return;
+    if (_locked || !widget.enabled) return;
     _timer = Timer(widget.timeout, () {
-      if (!mounted) return;
+      if (!mounted || !widget.enabled) return;
       final app = context.read<AppState>();
       if (app.auth.currentUser == null) return;
       if (app.lastAlert?.severity == 'critical' || app.preAlert != null) {
@@ -134,13 +150,13 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
       child: Listener(
         behavior: HitTestBehavior.translucent,
         onPointerDown: (_) {
-          if (!_locked) _resetTimer();
+          if (!_locked && widget.enabled) _resetTimer();
         },
         onPointerMove: (_) {
-          if (!_locked) _resetTimer();
+          if (!_locked && widget.enabled) _resetTimer();
         },
         onPointerHover: (_) {
-          if (!_locked) _resetTimer();
+          if (!_locked && widget.enabled) _resetTimer();
         },
         child: Stack(
           children: [

@@ -199,6 +199,8 @@ class _AppOverlayState extends State<_AppOverlay> with WidgetsBindingObserver {
               builder: (context, state, _) {
                 final l = AppLocalizations.of(context);
                 return InactivityWatcher(
+                  enabled: state.settings.autoLockEnabled,
+                  timeout: state.settings.autoLockTimeout,
                   child: Stack(
                     children: [
                       widget.child ?? const SizedBox.shrink(),

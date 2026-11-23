@@ -8,6 +8,7 @@ from app import care_store, cloud_store, users_store
 from app.auth import authorize_patient_access, require_role
 from app.database import transaction
 from app.schemas import validate_utc_timestamp
+from app.supabase_storage import upload_clinical_report
 
 router = APIRouter(prefix='/patients', tags=['care'])
 read_access = require_role('patient', 'doctor', 'caregiver', 'admin')
@@ -194,3 +195,35 @@ def add_alert_response(patient_id: str, alert_id: str, body: AlertResponse,
             else responder['name']
         )
         return save(patient_id, 'alert-response', str(body.id), payload, actor)
+
+
+class ReportUploadRequest(BaseModel):
+    filename: str = Field(min_length=3, max_length=200)
+    file_base64: str = Field(min_length=10)
+    content_type: str = Field(default='application/pdf')
+
+
+@router.post('/{patient_id}/reports/upload', status_code=201)
+def upload_report(
+    patient_id: str,
+    body: ReportUploadRequest,
+    actor: dict = Depends(read_access),
+):
+    """Upload a medical or EEG report file to Supabase Cloud Storage."""
+    import base64
+
+    authorize(patient_id, actor)
+    try:
+        data = base64.b64decode(body.file_base64)
+    except Exception as exc:
+        raise HTTPException(422, 'Invalid base64 payload') from exc
+
+    timestamp_prefix = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    clean_name = body.filename.replace('/', '_').replace('\\', '_')
+    safe_name = f"{patient_id}/{timestamp_prefix}_{clean_name}"
+
+    res = upload_clinical_report(data, safe_name, content_type=body.content_type)
+    if not res.get('success'):
+        raise HTTPException(502, f"Storage upload failed: {res.get('error', 'Unknown')}")
+    return res
+

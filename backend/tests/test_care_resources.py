@@ -79,3 +79,53 @@ def test_role_and_patient_boundaries_and_note_author():
         assert len(client.get(f'{root}/clinical-notes', headers=patient).json()) == 1
         users_store.set_caregiver_link_disabled(pid, cid, True)
         assert client.get(f'{root}/medical-card', headers=caregiver).status_code == 403
+
+
+def test_upload_clinical_report_endpoint(monkeypatch):
+    import base64
+    from app.routers import care
+
+    # Mock upload_clinical_report to avoid external network dependency in unit tests
+    monkeypatch.setattr(
+        care,
+        'upload_clinical_report',
+        lambda data, name, content_type='application/pdf': {
+            'success': True,
+            'bucket': 'clinical-reports',
+            'path': name,
+            'url': f'https://mock.supabase.co/storage/v1/object/public/clinical-reports/{name}',
+        },
+    )
+
+    with TestClient(app) as client:
+        pid, patient_headers = account('patient', 'upload-patient')
+        _, other_headers = account('patient', 'upload-other')
+
+        # Invalid base64
+        res = client.post(
+            f'/patients/{pid}/reports/upload',
+            headers=patient_headers,
+            json={'filename': 'report.pdf', 'file_base64': 'invalid!!!', 'content_type': 'application/pdf'},
+        )
+        assert res.status_code == 422
+
+        # Valid upload
+        valid_b64 = base64.b64encode(b'%PDF-1.4 mock content').decode('ascii')
+        res = client.post(
+            f'/patients/{pid}/reports/upload',
+            headers=patient_headers,
+            json={'filename': 'report.pdf', 'file_base64': valid_b64, 'content_type': 'application/pdf'},
+        )
+        assert res.status_code == 201
+        data = res.json()
+        assert data['success'] is True
+        assert 'clinical-reports' in data['url']
+
+        # Unauthorized access by another patient
+        res = client.post(
+            f'/patients/{pid}/reports/upload',
+            headers=other_headers,
+            json={'filename': 'report.pdf', 'file_base64': valid_b64, 'content_type': 'application/pdf'},
+        )
+        assert res.status_code == 403
+

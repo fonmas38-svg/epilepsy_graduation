@@ -1,3 +1,4 @@
+import 'dart:async';
 import '../../core/router/route_names.dart';
 import '../../core/ui/session_actions.dart';
 import '../shared/change_password_dialog.dart';
@@ -641,9 +642,27 @@ class _PrivacySectionState extends State<_PrivacySection> {
         assessments: await app.db.assessmentsFor(pid, limit: 500),
         alerts: await app.db.alertsFor(pid, limit: 200),
       );
+      final pdfBytes = await doc.save();
+      // Automatic backup to Supabase Cloud Storage (best-effort)
+      unawaited(
+        app.api
+            .uploadReport(
+              patientId: pid,
+              filename: 'clinical_report_${profile.name.isNotEmpty ? profile.name : pid}.pdf',
+              bytes: pdfBytes,
+            )
+            .then((res) {
+              if (res['url'] != null) {
+                debugPrint('[Supabase Storage] Report synced: ${res['url']}');
+              }
+            })
+            .catchError((e) {
+              debugPrint('[Supabase Storage] Report sync deferred: $e');
+            }),
+      );
       // The OS print sheet *is* the export: it offers «حفظ بصيغة PDF» and share
       // targets without the app needing storage permission or a file picker.
-      await Printing.layoutPdf(onLayout: (_) => doc.save());
+      await Printing.layoutPdf(onLayout: (_) => Future.value(pdfBytes));
       // Recorded like any other read of this patient's data, so the access log
       // in §4.3 stays complete — including the patient's own exports.
       await app.care.recordAccess('exported');
@@ -663,8 +682,9 @@ class _PrivacySectionState extends State<_PrivacySection> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    final isPatient =
-        context.read<AppState>().auth.currentUser?.role == UserRole.patient;
+    final app = context.watch<AppState>();
+    final s = app.settings;
+    final isPatient = app.auth.currentUser?.role == UserRole.patient;
     return SectionCard(
       title: l.privacySection,
       icon: Icons.shield_outlined,
@@ -681,6 +701,68 @@ class _PrivacySectionState extends State<_PrivacySection> {
               secondary: const Icon(Icons.fingerprint),
             ),
             Gap.vXs,
+          ],
+          SwitchListTile(
+            value: s.autoLockEnabled,
+            contentPadding: EdgeInsets.zero,
+            onChanged: (val) => s.setAutoLockEnabled(val),
+            title: Text(
+              l.isArabic ? 'القفل التلقائي عند الخمول' : 'Auto-Lock on Inactivity',
+            ),
+            subtitle: Text(
+              l.isArabic
+                  ? 'قفل شاشة التطبيق لحماية خصوصية البيانات الطبية'
+                  : 'Lock app screen after inactivity to protect clinical privacy',
+            ),
+            secondary: const Icon(Icons.lock_clock_outlined),
+          ),
+          if (s.autoLockEnabled) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    l.isArabic ? 'مهلة الخمول قبل القفل:' : 'Inactivity timeout:',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      for (final m in [5, 10, 15, 30])
+                        ChoiceChip(
+                          label: Text(
+                            l.isArabic ? '$m دقائق' : '$m min',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: s.autoLockMinutes == m
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          selected: s.autoLockMinutes == m,
+                          onSelected: (_) => s.setAutoLockMinutes(m),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    l.isArabic
+                        ? 'تلميح لمناقشة التخرج: يمكنك اختيار 15-30 دقيقة أو إيقاف القفل مؤقتاً لتجنب المقاطعة أثناء الشرح.'
+                        : 'Tip for presentations: You can choose 15-30 min or disable lock temporarily to avoid interruptions.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
           Gap.vSm,
           SizedBox(

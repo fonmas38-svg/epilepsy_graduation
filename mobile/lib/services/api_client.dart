@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart'
     show ValueNotifier, debugPrint, defaultTargetPlatform, kIsWeb;
@@ -846,6 +847,34 @@ class ApiClient {
     if (r.statusCode < 200 || r.statusCode >= 300) {
       throw ApiException(
         _detail(r, 'تعذّر تحميل البيانات'),
+        statusCode: r.statusCode,
+      );
+    }
+    final decoded = jsonDecode(r.body);
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    return const {};
+  }
+
+  /// Upload a clinical PDF or EEG report to Supabase Cloud Storage.
+  Future<Map<String, dynamic>> uploadReport({
+    required String patientId,
+    required String filename,
+    required Uint8List bytes,
+  }) async {
+    final base64Payload = base64Encode(bytes);
+    final r = await _postAuthed(
+      '/patients/$patientId/reports/upload',
+      {
+        'filename': filename,
+        'file_base64': base64Payload,
+        'content_type': 'application/pdf',
+      },
+      timeout: const Duration(seconds: 20),
+      allowColdStartRetry: true,
+    );
+    if (r.statusCode != 201) {
+      throw ApiException(
+        _detail(r, 'تعذّر رفع التقرير إلى السحابة'),
         statusCode: r.statusCode,
       );
     }

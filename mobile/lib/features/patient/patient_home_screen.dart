@@ -1684,16 +1684,37 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
       return;
     }
 
-    // 3. Acquire GPS fix and publish to family
+    // 3. Check for approximate permission on Android 12+
+    try {
+      final accStatus = await Geolocator.getLocationAccuracy();
+      if (accStatus == LocationAccuracyStatus.reduced) {
+        if (mounted) {
+          AppSnack.warn(
+            context,
+            'تنبيه: تم منح إذن «الموقع التقريبي» فقط. للحصول على موقع دقيق عبر الأقمار الصناعية (GPS)، يُفضل منح «الموقع الدقيق» في إعدادات التطبيق.',
+          );
+        }
+      }
+    } catch (_) {}
+
+    // 4. Acquire GPS fix and publish to family
     final ok = await app.shareMyLocationWithFamily();
     if (!mounted) return;
     setState(() => _sharing = false);
 
     if (ok) {
-      AppSnack.success(
-        context,
-        'تم إرسال وتحديث موقعك الجغرافي لأفراد أسرتك بنجاح.',
-      );
+      final fix = app.location.lastResult?.fix;
+      if (fix != null && fix.isCoarse) {
+        AppSnack.warn(
+          context,
+          'تم إرسال الموقع بدقة تقريبية (±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم). يرجى التواجد في مكان مكشوف لتحديث الـ GPS بالأقمار الصناعية.',
+        );
+      } else {
+        AppSnack.success(
+          context,
+          'تم إرسال وتحديث موقعك الجغرافي لأفراد أسرتك بنجاح.',
+        );
+      }
     } else {
       final status = app.location.lastResult?.status;
       if (status == LocationStatus.serviceDisabled) {
@@ -1863,7 +1884,7 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
                   Gap.hXs,
                   Expanded(
                     child: Text(
-                      'آخر موقع مسجل: ${(lastLoc['latitude'] as num).toStringAsFixed(4)}, ${(lastLoc['longitude'] as num).toStringAsFixed(4)}',
+                      'آخر موقع مسجل: ${(lastLoc['latitude'] as num).toStringAsFixed(4)}, ${(lastLoc['longitude'] as num).toStringAsFixed(4)}${lastLoc['accuracy'] != null ? ' (دقة: ±${(lastLoc['accuracy'] as num) > 1000 ? '${((lastLoc['accuracy'] as num) / 1000).toStringAsFixed(1)} كم' : '${(lastLoc['accuracy'] as num).round()} م'})' : ''}',
                       style: theme.textTheme.bodySmall?.copyWith(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -1874,6 +1895,40 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
                 ],
               ),
             ),
+            if (lastLoc['accuracy'] != null &&
+                (lastLoc['accuracy'] as num) > 1000) ...[
+              Gap.vXs,
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(Gap.sm),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(Radii.sm),
+                  border: Border.all(color: Colors.amber.shade300),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      size: 16,
+                      color: Colors.amber.shade900,
+                    ),
+                    Gap.hXs,
+                    Expanded(
+                      child: Text(
+                        'تنبيه: تم رصد الموقع بدقة تقريبية عبر شبكة الإنترنت وليس عبر الأقمار الصناعية (GPS) مباشرة. للحصول على إحداثيات دقيقة وتفادي الخطأ، يرجى تفعيل الموقع الدقيق والاقتراب من نافذة أو مكان مكشوف.',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: Colors.amber.shade900,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             Gap.vSm,
           ],
           SizedBox(

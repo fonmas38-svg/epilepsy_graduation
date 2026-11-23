@@ -535,7 +535,10 @@ class _LocationNavigationCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      'اضغط للبدء في الملاحة اللحظية والوصول للمريض عبر خرائط Google',
+                      app.messages.lastSharedLocation?['accuracy'] != null &&
+                              (app.messages.lastSharedLocation!['accuracy'] as num) > 1000
+                          ? 'اضغط للملاحة (⚠️ موقع تقريبي عبر شبكة الإنترنت ±${((app.messages.lastSharedLocation!['accuracy'] as num) / 1000).toStringAsFixed(1)} كم)'
+                          : 'اضغط للبدء في الملاحة اللحظية والوصول للمريض عبر خرائط Google',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.blue.shade800,

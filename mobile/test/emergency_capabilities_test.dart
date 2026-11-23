@@ -38,6 +38,21 @@ void main() {
     ).currentResult();
     expect(result.status, LocationStatus.available);
     expect(result.fix?.latitude, 12);
+    expect(result.fix?.isCoarse, false);
+    expect(result.fix?.isSuspiciouslyCoarse, false);
+  });
+  test('flags coarse and foreign IP-geolocated fixes accurately', () {
+    const preciseFix = GpsFix(latitude: 15.35, longitude: 44.20, accuracy: 12);
+    expect(preciseFix.isCoarse, false);
+    expect(preciseFix.isSuspiciouslyCoarse, false);
+
+    const cellCoarseFix = GpsFix(latitude: 15.35, longitude: 44.20, accuracy: 1500);
+    expect(cellCoarseFix.isCoarse, true);
+    expect(cellCoarseFix.isSuspiciouslyCoarse, false);
+
+    const foreignIpFix = GpsFix(latitude: 30.04, longitude: 31.23, accuracy: 25000);
+    expect(foreignIpFix.isCoarse, true);
+    expect(foreignIpFix.isSuspiciouslyCoarse, true);
   });
   test(
     'disabled service and denied permissions have distinct explanations',

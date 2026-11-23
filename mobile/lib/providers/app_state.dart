@@ -66,6 +66,9 @@ class AppState extends ChangeNotifier {
     monitoring.onAlert = (alert) {
       lastAlert = alert;
       unawaited(_prepareEmergencySms(alert));
+      if (settings.shareLocationOnAlert) {
+        unawaited(_shareLocationOnAlert(alert));
+      }
       notifyListeners();
     };
     monitoring.onPreAlert = (reading, assessment, pre) {
@@ -76,6 +79,9 @@ class AppState extends ChangeNotifier {
       // Surface as an OS/local notification too (degrades to in-app banner).
       notifications.showLocal(l10n.severityPreAlert, pre.message);
       preAlerts.start(pre);
+      if (settings.shareLocationOnAlert) {
+        unawaited(_shareLocationOnPreAlert(pre, assessment));
+      }
     };
     preAlerts.onUpdate = notifyListeners;
     preAlerts.onEscalate = (pre) async {
@@ -361,6 +367,89 @@ class AppState extends ChangeNotifier {
     } finally {
       _preparingEmergencySms = false;
       notifyListeners();
+    }
+  }
+
+  /// Automatically broadcasts the patient's coordinates to caregivers immediately
+  /// upon detecting a confirmed or critical seizure alert.
+  Future<void> _shareLocationOnAlert(AlertItem alert) async {
+    final owner = auth.currentUser;
+    if (owner?.role != UserRole.patient ||
+        owner?.uid != alert.patientId ||
+        !settings.shareLocationOnAlert) {
+      return;
+    }
+    try {
+      final fix = await location.currentFix(
+        timeout: const Duration(seconds: 15),
+      );
+      if (fix == null || !fix.valid) return;
+
+      final accuracyDesc = fix.accuracy != null
+          ? (fix.isCoarse
+              ? ' (موقع تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم)'
+              : ' (دقة GPS: ±${fix.accuracy!.round()} م)')
+          : '';
+      final note =
+          '🚨 تنبيه تلقائي: تم رصد نوبة صرع محتملة، وتم إرسال الموقع الجغرافي للمريض فوراً للمرافقين$accuracyDesc.';
+
+      if (api.tokens.hasSession) {
+        await messages.shareLocation(
+          patientId: alert.patientId,
+          latitude: fix.latitude,
+          longitude: fix.longitude,
+          accuracy: fix.accuracy,
+          note: note,
+        );
+      }
+      notifyListeners();
+    } catch (_) {
+      // Best-effort automatic dispatch on alert
+    }
+  }
+
+  /// Automatically broadcasts the patient's coordinates to caregivers upon
+  /// detecting an early pre-alert (seizure forecast).
+  Future<void> _shareLocationOnPreAlert(
+    AlertItem pre,
+    RiskAssessment assessment,
+  ) async {
+    final owner = auth.currentUser;
+    if (owner?.role != UserRole.patient ||
+        owner?.uid != pre.patientId ||
+        !settings.shareLocationOnAlert) {
+      return;
+    }
+    try {
+      final fix = await location.currentFix(
+        timeout: const Duration(seconds: 15),
+      );
+      if (fix == null || !fix.valid) return;
+
+      final lead = assessment.features['lead_time_min'] as num?;
+      final timeStr = (lead != null && lead > 0)
+          ? ' (الوقت المتوقع للنوبة: خلال ${lead >= 10 ? lead.toStringAsFixed(0) : lead.toStringAsFixed(1)} دقيقة)'
+          : '';
+      final accuracyDesc = fix.accuracy != null
+          ? (fix.isCoarse
+              ? ' - موقع تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم'
+              : ' - دقة GPS: ±${fix.accuracy!.round()} م')
+          : '';
+      final note =
+          '⚠️ إنذار مبكر: احتمالية حدوث نوبة صرع$timeStr. تم إرسال موقع المريض تلقائياً للمرافقين$accuracyDesc.';
+
+      if (api.tokens.hasSession) {
+        await messages.shareLocation(
+          patientId: pre.patientId,
+          latitude: fix.latitude,
+          longitude: fix.longitude,
+          accuracy: fix.accuracy,
+          note: note,
+        );
+      }
+      notifyListeners();
+    } catch (_) {
+      // Best-effort automatic dispatch on pre-alert
     }
   }
 
@@ -1279,12 +1368,16 @@ class AppState extends ChangeNotifier {
         notifyListeners();
         return false;
       }
+      final effectiveNote = note ??
+          (fix.isCoarse
+              ? '📍 مشاركة يدوية للموقع (تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم)'
+              : '📍 تم إرسال وتحديث الموقع الجغرافي للمريض (دقة GPS: ±${fix.accuracy?.round() ?? 0} م)');
       await messages.shareLocation(
         patientId: pid,
         latitude: fix.latitude,
         longitude: fix.longitude,
         accuracy: fix.accuracy,
-        note: note,
+        note: effectiveNote,
       );
       notifyListeners();
       return true;

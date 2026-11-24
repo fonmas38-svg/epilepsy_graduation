@@ -561,7 +561,20 @@ def verify_moh_license(
             "record": rec,
             "message": "رقم الهوية الوطنية لا يطابق السجل المرتبط بهذا الترخيص في وزارة الصحة.",
         }
+    import re
+    def normalize_name(value):
+        return re.sub(r"^(?:د\.|الدكتور|الدكتورة|Dr\.)\s*", "", (value or "").strip(), flags=re.I).casefold()
+    if name and normalize_name(name) not in {normalize_name(rec.get("full_name_ar")), normalize_name(rec.get("full_name_en"))}:
+        return {"verified": False, "status": "mismatch", "record": rec,
+                "message": "الاسم لا يطابق سجل التحقق التجريبي؛ راجع البيانات أو استخدم التجاوز الإداري الموثق."}
     status = rec.get("status", "active")
+    expiry = rec.get("expiration_date")
+    if expiry:
+        try:
+            if datetime.fromisoformat(expiry).date() < datetime.now(timezone.utc).date():
+                status = "expired"
+        except (TypeError, ValueError):
+            status = "expired"
     if status == "suspended":
         return {
             "verified": False,
@@ -580,7 +593,7 @@ def verify_moh_license(
         "verified": True,
         "status": "active",
         "record": rec,
-        "message": "تم التحقق من ترخيص الممارس الصحي بنجاح في سجل وزارة الصحة (نشط).",
+        "message": "مطابقة ناجحة في سجل التحقق التجريبي (ليس اتصالاً رسمياً بوزارة الصحة).",
     }
 
 

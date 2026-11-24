@@ -6,6 +6,10 @@ import 'package:uuid/uuid.dart';
 import '../core/utils/time_ago.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
+import '../models/care_models.dart';
+import '../core/enums.dart';
+import 'api_client.dart';
+import 'auth_service.dart';
 import 'local_database.dart';
 import 'notification_service.dart';
 
@@ -41,6 +45,31 @@ String scheduleLabel(String stored, AppLocalizations l) =>
       _ => stored,
     };
 
+String medicationContextLabel(Medication med, AppLocalizations l) {
+  const labels = {
+    'morning': ('صباحاً', 'Morning'),
+    'noon': ('ظهراً', 'Noon'),
+    'evening': ('مساءً', 'Evening'),
+    'bedtime': ('قبل النوم', 'Bedtime'),
+    'before_meal': ('قبل الطعام', 'Before a meal'),
+    'with_meal': ('مع الطعام', 'With a meal'),
+    'after_meal': ('بعد الطعام', 'After a meal'),
+    'independent': ('بصرف النظر عن الطعام', 'Independent of meals'),
+    'breakfast': ('الإفطار', 'Breakfast'),
+    'lunch': ('الغداء', 'Lunch'),
+    'dinner': ('العشاء', 'Dinner'),
+  };
+  return [
+        med.periodContext,
+        med.mealContext,
+        if (med.mealContext != 'independent') med.mealType,
+      ]
+      .map((key) => labels[key])
+      .whereType<(String, String)>()
+      .map((label) => l.isArabic ? label.$1 : label.$2)
+      .join(' · ');
+}
+
 /// Medication-adherence and timezone-safe OS reminder scheduler (schema v2).
 ///
 /// Reminder scheduling runs completely independently of [MonitoringService] via
@@ -50,6 +79,9 @@ class MedicationService {
   MedicationService({
     required this.db,
     required this.notifications,
+    this.api,
+    this.auth,
+    this.flushOutbox,
     DateTime Function()? now,
     int Function()? timezoneOffsetMinutesProvider,
     String Function()? timezoneNameProvider,
@@ -59,10 +91,14 @@ class MedicationService {
 
   final LocalDatabase db;
   final NotificationService notifications;
+  final ApiClient? api;
+  final AuthService? auth;
+  final Future<void> Function()? flushOutbox;
   final DateTime Function() _now;
   final int Function()? _tzOffsetProvider;
   final String Function()? _timezoneNameProvider;
   final _uuid = const Uuid();
+  final _syncRevisions = <String, int>{};
 
   AppLocalizations _lastL10n = const AppLocalizations(Locale('ar'));
   final Set<int> _scheduledNotificationIds = {};
@@ -124,24 +160,142 @@ class MedicationService {
     }
     final sign = offsetMin >= 0 ? '+' : '-';
     final absMin = offsetMin.abs();
-    return tz.Location(
-      'LOCAL_UTC$sign$absMin',
-      [tz.minTime],
-      [0],
-      [tz.TimeZone(offsetMs, isDst: false, abbreviation: 'LOCAL')],
-    );
+    return tz.Location('LOCAL_UTC$sign$absMin', [tz.minTime], [0], [
+      tz.TimeZone(offsetMs, isDst: false, abbreviation: 'LOCAL'),
+    ]);
   }
 
   Future<List<Medication>> forPatient(
     String patientId, {
     bool activeOnly = false,
-  }) => db.medicationsFor(patientId, activeOnly: activeOnly);
+  }) => db.medicationsFor(
+    patientId,
+    activeOnly: activeOnly,
+    serverOrigin: auth?.isDemoSession == true ? null : api?.baseUrl,
+  );
+
+  bool _current(String owner, String origin, int revision) =>
+      auth?.currentUser?.uid == owner &&
+      api?.baseUrl == origin &&
+      api?.tokens.revision == revision;
+
+  /// A complete server snapshot updates only prescriptions from this origin.
+  Future<void> synchronize(String patientId) async {
+    final client = api;
+    final user = auth?.currentUser;
+    if (client == null ||
+        user == null ||
+        auth!.isDemoSession ||
+        !client.tokens.hasSession) {
+      return;
+    }
+    if (!auth!.canAccessPatient(patientId)) {
+      throw StateError('Patient access required');
+    }
+    final origin = client.baseUrl;
+    final revision = client.tokens.revision;
+    final scope = '$origin::$patientId';
+    final request = (_syncRevisions[scope] ?? 0) + 1;
+    _syncRevisions[scope] = request;
+    bool current() =>
+        _current(user.uid, origin, revision) &&
+        _syncRevisions[scope] == request;
+    final rows = await client.patientGetPrescriptions(patientId: patientId);
+    if (!current()) return;
+    final ids = <String>{};
+    for (final row in rows) {
+      final id = row['id'] as String?;
+      if (id == null || id.isEmpty || row['patient_id'] != patientId) {
+        throw const FormatException('Invalid prescription snapshot');
+      }
+      ids.add(id);
+    }
+    final snapshot = <Medication>[];
+    for (final row in rows) {
+      final rx = row['id'] as String;
+      final rawTimes = row['times'] as List? ?? const [];
+      final times = rawTimes
+          .whereType<String>()
+          .where((s) => RegExp(r'^(?:[01]\d|2[0-3]):[0-5]\d$').hasMatch(s))
+          .toList();
+      snapshot.add(
+        Medication(
+          id: '$origin::rx::$rx',
+          prescriptionId: rx,
+          patientId: patientId,
+          name: row['name'] as String,
+          dosage: row['dose'] as String? ?? '',
+          schedule: row['schedule'] as String? ?? '',
+          times: times,
+          active: row['active'] == true,
+          createdAt: DateTime.parse(row['created_at'] as String).toLocal(),
+          periodContext: row['period_context'] as String?,
+          mealContext: row['meal_context'] as String?,
+          mealType: row['meal_type'] as String?,
+          timezoneOffsetMin: currentTimezoneOffsetMinutes,
+          serverOrigin: origin,
+        ),
+      );
+    }
+    for (final med in snapshot) {
+      if (!current()) return;
+      await db.insertMedication(med);
+    }
+    for (final med in await forPatient(patientId)) {
+      if (!current()) return;
+      if (med.prescriptionId != null && !ids.contains(med.prescriptionId)) {
+        await db.setMedicationActive(med.id, false);
+      }
+    }
+    await flushOutbox?.call();
+    if (!current()) return;
+    final response = await client.sendJson(
+      method: 'GET',
+      path: '/patients/${Uri.encodeComponent(patientId)}/adherence?limit=500',
+    );
+    if (!current()) return;
+    for (final raw in response['logs'] as List? ?? const []) {
+      if (raw is! Map || raw['patientId'] != patientId) {
+        throw const FormatException('Invalid adherence snapshot');
+      }
+      final rx = raw['prescriptionId'] as String;
+      if (!ids.contains(rx)) continue;
+      if (!current()) return;
+      await db.cacheMedicationLog(
+        MedicationLog(
+          id: raw['id'] as String,
+          medicationId: '$origin::rx::$rx',
+          patientId: patientId,
+          scheduledFor: DateTime.parse(
+            raw['scheduledTime'] as String,
+          ).toLocal(),
+          takenAt: DateTime.tryParse(
+            raw['takenAt'] as String? ?? '',
+          )?.toLocal(),
+          status: raw['status'] as String,
+        ),
+        origin,
+      );
+    }
+    if (user.role == UserRole.patient && current()) {
+      await syncReminders(patientId);
+    }
+  }
 
   /// Seed the medication table from the free-text list on [PatientProfile]
   /// (e.g. "Levetiracetam 500mg"). Idempotent: does nothing once the patient has
   /// any medications, so it is safe to call on every sign-in.
+  void _requireLocalManagement() {
+    if (api != null && auth?.isDemoSession != true) {
+      throw StateError(
+        'Use the doctor prescription API for clinical prescriptions',
+      );
+    }
+  }
+
   Future<void> seedFromProfile(PatientProfile profile) async {
-    final existing = await db.medicationsFor(profile.patientId);
+    _requireLocalManagement();
+    final existing = await forPatient(profile.patientId);
     if (existing.isNotEmpty) return;
     final tzOffset = currentTimezoneOffsetMinutes;
     for (final raw in profile.medications) {
@@ -168,6 +322,7 @@ class MedicationService {
     String dosage = '',
     List<String> times = const ['08:00', '20:00'],
   }) async {
+    _requireLocalManagement();
     final med = Medication(
       id: _uuid.v4(),
       patientId: patientId,
@@ -183,6 +338,7 @@ class MedicationService {
   }
 
   Future<void> setActive(Medication med, bool active) async {
+    _requireLocalManagement();
     await db.setMedicationActive(med.id, active);
     await syncReminders(med.patientId);
   }
@@ -194,6 +350,7 @@ class MedicationService {
     String? dosage,
     List<String>? times,
   }) async {
+    _requireLocalManagement();
     final next = Medication(
       id: med.id,
       patientId: med.patientId,
@@ -213,13 +370,17 @@ class MedicationService {
   /// Doses missed over the last [days] days: elapsed minus taken, never below
   /// zero.
   Future<int> missedDoses(String patientId, {int days = 7}) async {
-    final meds = await db.medicationsFor(patientId, activeOnly: true);
+    final meds = await forPatient(patientId, activeOnly: true);
     if (meds.isEmpty) return 0;
     final now = _now();
     final expected = _elapsedDoses(meds, days, now);
     if (expected == 0) return 0;
     final since = _startOfToday().subtract(Duration(days: days - 1));
-    final logs = await db.medicationLogsFor(patientId, since: since);
+    final logs = await db.medicationLogsFor(
+      patientId,
+      since: since,
+      serverOrigin: auth?.isDemoSession == true ? null : api?.baseUrl,
+    );
     final taken = logs.where((l) => l.status == 'taken').length;
     final missed = expected - taken;
     return missed < 0 ? 0 : missed;
@@ -229,7 +390,9 @@ class MedicationService {
     final startOfToday = DateTime(now.year, now.month, now.day);
     var total = 0;
     for (final med in meds) {
-      final times = med.times.isEmpty ? const ['08:00'] : med.times;
+      final times = med.prescriptionId != null
+          ? med.times
+          : (med.times.isEmpty ? const ['08:00'] : med.times);
       for (final t in times) {
         final (h, m) = _parseHhmm(t);
         for (var back = days - 1; back >= 0; back--) {
@@ -252,6 +415,7 @@ class MedicationService {
   }
 
   Future<void> remove(Medication med) async {
+    _requireLocalManagement();
     await db.deleteMedication(med.id);
     await syncReminders(med.patientId);
   }
@@ -259,28 +423,88 @@ class MedicationService {
   /// Record that a scheduled dose was taken now and advance its OS reminder.
   Future<void> markTaken(Medication med, {DateTime? scheduledFor}) async {
     final now = _now();
-    await db.insertMedicationLog(
-      MedicationLog(
-        id: _uuid.v4(),
-        medicationId: med.id,
-        patientId: med.patientId,
-        scheduledFor: scheduledFor ?? now,
-        takenAt: now,
-        status: 'taken',
-        timezoneOffsetMin: currentTimezoneOffsetMinutes,
-      ),
+    final client = api;
+    final user = auth?.currentUser;
+    final isRemote = client != null && auth?.isDemoSession != true;
+    if (isRemote &&
+        (user?.role != UserRole.patient ||
+            user?.uid != med.patientId ||
+            med.prescriptionId == null ||
+            med.serverOrigin != client.baseUrl)) {
+      throw StateError('Only the prescription owner can record a dose');
+    }
+    final due = scheduledFor ?? now;
+    final doseId = _uuid.v5(
+      Namespace.url.value,
+      '${med.serverOrigin}:${med.patientId}:${med.id}:${due.toUtc().toIso8601String()}',
     );
+    final existingLogs = await db.medicationLogsFor(
+      med.patientId,
+      serverOrigin: isRemote ? med.serverOrigin : null,
+    );
+    if (existingLogs.any(
+      (l) =>
+          l.id == doseId ||
+          (l.medicationId == med.id &&
+              l.scheduledFor.isAtSameMomentAs(due) &&
+              l.status == 'taken'),
+    )) {
+      await flushOutbox?.call();
+      return;
+    }
+    final log = MedicationLog(
+      id: doseId,
+      medicationId: med.id,
+      patientId: med.patientId,
+      scheduledFor: due,
+      takenAt: now,
+      status: 'taken',
+      timezoneOffsetMin: currentTimezoneOffsetMinutes,
+    );
+    if (isRemote) {
+      await db.persistCareWrite(
+        item: OutboxItem(
+          id: 'intake-$doseId',
+          method: 'POST',
+          path:
+              '/patient/prescriptions/${Uri.encodeComponent(med.prescriptionId!)}/intake-log',
+          body: {
+            'id': doseId,
+            'patient_id': med.patientId,
+            'scheduled_time': due.toUtc().toIso8601String(),
+            'taken_at': now.toUtc().toIso8601String(),
+            'status': 'taken',
+            '_ownerId': user!.uid,
+            '_ownerOrigin': med.serverOrigin,
+            '_table': 'medication_logs',
+            '_rowId': doseId,
+          },
+          createdAt: now,
+        ),
+        table: 'medication_logs',
+        row: {...log.toMap(), 'serverOrigin': med.serverOrigin, 'synced': 0},
+      );
+      await flushOutbox?.call();
+    } else {
+      await db.insertMedicationLog(log);
+    }
     await syncReminders(med.patientId);
   }
 
   /// Today's plan across all active meds, flagging which doses are already taken.
   Future<List<ScheduleEntry>> todaySchedule(String patientId) async {
-    final meds = await db.medicationsFor(patientId, activeOnly: true);
+    final meds = await forPatient(patientId, activeOnly: true);
     final startOfDay = _startOfToday();
-    final logs = await db.medicationLogsFor(patientId, since: startOfDay);
+    final logs = await db.medicationLogsFor(
+      patientId,
+      since: startOfDay,
+      serverOrigin: auth?.isDemoSession == true ? null : api?.baseUrl,
+    );
     final entries = <ScheduleEntry>[];
     for (final med in meds) {
-      final times = med.times.isEmpty ? const ['08:00'] : med.times;
+      final times = med.prescriptionId != null
+          ? med.times
+          : (med.times.isEmpty ? const ['08:00'] : med.times);
       for (final t in times) {
         final match = logs.where(
           (l) =>
@@ -302,14 +526,46 @@ class MedicationService {
     return entries;
   }
 
+  double? adherenceFromSnapshot(
+    List<Medication> meds,
+    List<MedicationLog> logs, {
+    int days = 7,
+  }) {
+    final now = _now();
+    final expected = _elapsedDoses(meds, days, now);
+    if (expected == 0) return null;
+    final since = _startOfToday().subtract(Duration(days: days - 1));
+    final active = {for (final med in meds) med.id: med};
+    final taken = logs
+        .where((log) {
+          final med = active[log.medicationId];
+          return med != null &&
+              log.status == 'taken' &&
+              !log.scheduledFor.isBefore(since) &&
+              !log.scheduledFor.isAfter(now) &&
+              !log.scheduledFor.isBefore(med.createdAt);
+        })
+        .map(
+          (log) =>
+              '${log.medicationId}:${log.scheduledFor.toUtc().toIso8601String()}',
+        )
+        .toSet()
+        .length;
+    return (taken / expected).clamp(0.0, 1.0).toDouble();
+  }
+
   /// Adherence over the last [days] days = taken doses / doses already due, in [0,1].
   Future<double> adherence(String patientId, {int days = 7}) async {
-    final meds = await db.medicationsFor(patientId, activeOnly: true);
+    final meds = await forPatient(patientId, activeOnly: true);
     if (meds.isEmpty) return 1.0;
     final expected = _elapsedDoses(meds, days, _now());
     if (expected == 0) return 1.0;
     final since = _startOfToday().subtract(Duration(days: days - 1));
-    final logs = await db.medicationLogsFor(patientId, since: since);
+    final logs = await db.medicationLogsFor(
+      patientId,
+      since: since,
+      serverOrigin: auth?.isDemoSession == true ? null : api?.baseUrl,
+    );
     final taken = logs.where((l) => l.status == 'taken').length;
     return (taken / expected).clamp(0.0, 1.0).toDouble();
   }
@@ -317,6 +573,12 @@ class MedicationService {
   /// Cancel previous patient reminders and schedule timezone-safe OS alarms
   /// for every active medication slot independently of [MonitoringService].
   Future<void> syncReminders(String patientId, [AppLocalizations? l]) async {
+    if (api != null &&
+        auth?.isDemoSession != true &&
+        (auth?.currentUser?.role != UserRole.patient ||
+            auth?.currentUser?.uid != patientId)) {
+      return;
+    }
     if (l != null) _lastL10n = l;
     final activeL10n = _lastL10n;
 
@@ -325,7 +587,7 @@ class MedicationService {
     }
     _scheduledNotificationIds.clear();
 
-    final meds = await db.medicationsFor(patientId, activeOnly: true);
+    final meds = await forPatient(patientId, activeOnly: true);
     final location = resolveLocalLocation();
     final nowUtc = _now().toUtc();
     final tzNow = tz.TZDateTime.from(nowUtc, location);
@@ -340,10 +602,16 @@ class MedicationService {
       tzNow.month,
       tzNow.day,
     ).toUtc();
-    final logs = await db.medicationLogsFor(patientId, since: startOfDayUtc);
+    final logs = await db.medicationLogsFor(
+      patientId,
+      since: startOfDayUtc,
+      serverOrigin: auth?.isDemoSession == true ? null : api?.baseUrl,
+    );
 
     for (final med in meds) {
-      final times = med.times.isEmpty ? const ['08:00'] : med.times;
+      final times = med.prescriptionId != null
+          ? med.times
+          : (med.times.isEmpty ? const ['08:00'] : med.times);
       final doseSuffix = med.dosage.isEmpty ? '' : ' (${med.dosage})';
       final medLabel = '${med.name}$doseSuffix';
 

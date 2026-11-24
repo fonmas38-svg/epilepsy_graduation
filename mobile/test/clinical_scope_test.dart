@@ -1,3 +1,4 @@
+import 'package:epilepsy_monitor/services/api_client.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,8 +17,23 @@ class ScopeDb extends CareDb {
   final queried = <String>[];
   Completer<List<AlertItem>>? pending;
   @override
-  Future<List<AlertItem>> alertsFor(String patientId, {int limit = 50}) async {
+  Future<List<AlertItem>> alertsFor(
+    String patientId, {
+    String serverOrigin = '',
+    int limit = 50,
+  }) async {
     queried.add(patientId);
+    return pending == null ? [] : pending!.future;
+  }
+
+  @override
+  Future<List<AlertItem>> pendingReviewAlerts(
+    List<String> patients, {
+    required String serverOrigin,
+    int offset = 0,
+    int limit = 50,
+  }) async {
+    queried.addAll(patients);
     return pending == null ? [] : pending!.future;
   }
 
@@ -29,7 +45,12 @@ class ScopeDb extends CareDb {
 }
 
 Future<AppState> stateFor(ScopeDb db, UserRole role) async {
-  final app = AppState(database: db, apiClient: QueueApi());
+  final api = QueueApi()
+    ..respond = (path) async {
+      if (path.startsWith('/doctor/review-queue'))
+        throw ApiException('Not available', statusCode: 404);
+    };
+  final app = AppState(database: db, apiClient: api);
   await app.auth.applyBackendSession({
     'user': {'id': 'clinician', 'name': 'Clinician', 'role': role.name},
     'patients': [

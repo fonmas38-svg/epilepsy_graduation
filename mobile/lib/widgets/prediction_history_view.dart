@@ -24,7 +24,10 @@ class PredictionHistoryView extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final db = context.read<AppState>().db;
     return FutureBuilder<List<PredictionEvent>>(
-      future: db.predictionEventsFor(patientId),
+      future: db.predictionEventsFor(
+        patientId,
+        serverOrigin: context.read<AppState>().dataOrigin,
+      ),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Padding(
@@ -68,8 +71,9 @@ class _Summary extends StatelessWidget {
     final primary = Theme.of(context).colorScheme.primary;
 
     final escalated = events.where((e) => e.outcome == 'escalated').length;
-    final cancelled =
-        events.where((e) => e.outcome == 'cancelled_false_alarm').length;
+    final cancelled = events
+        .where((e) => e.outcome == 'cancelled_false_alarm')
+        .length;
     final leads = events
         .map((e) => e.leadTimeMin)
         .whereType<double>()
@@ -93,7 +97,11 @@ class _Summary extends StatelessWidget {
               spacing: Gap.sm,
               runSpacing: Gap.xs,
               children: [
-                _Stat(label: l.escalatedShort, value: '$escalated', color: danger),
+                _Stat(
+                  label: l.escalatedShort,
+                  value: '$escalated',
+                  color: danger,
+                ),
                 _Stat(label: l.falseAlarm, value: '$cancelled', color: caution),
                 if (avgLead != null)
                   _Stat(
@@ -128,7 +136,11 @@ class _Stat extends StatelessWidget {
       ),
       child: Text(
         '$label: $value',
-        style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -147,7 +159,11 @@ class _EventTile extends StatelessWidget {
 
     return switch (event.outcome) {
       'escalated' => (l.outcomeEscalated, danger, Icons.notifications_active),
-      'cancelled_false_alarm' => (l.outcomeFalseAlarm, caution, Icons.cancel_schedule_send),
+      'cancelled_false_alarm' => (
+        l.outcomeFalseAlarm,
+        caution,
+        Icons.cancel_schedule_send,
+      ),
       'onset_confirmed' => (l.outcomeOnsetConfirmed, danger, Icons.bolt),
       _ => (event.outcome, primary, Icons.timeline),
     };
@@ -157,7 +173,7 @@ class _EventTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final (label, color, icon) = _outcome(context);
-    final fmt = DateFormat('MM/dd HH:mm');
+    final fmt = DateFormat('MM/dd h:mm a', l.isArabic ? 'ar' : 'en');
     final isModel = event.source == 'cnn_lstm_preictal';
     final parts = <String>[
       '${l.preictalProb}: ${(event.preictalProb * 100).toStringAsFixed(0)}%',
@@ -170,8 +186,13 @@ class _EventTile extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: Icon(icon, color: color),
-        title: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w600)),
-        subtitle: Text('${fmt.format(event.firedAt)}  ·  ${parts.join('  ·  ')}'),
+        title: Text(
+          label,
+          style: TextStyle(color: color, fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          '${fmt.format(event.firedAt)}  ·  ${parts.join('  ·  ')}',
+        ),
       ),
     );
   }

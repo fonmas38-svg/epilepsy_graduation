@@ -47,9 +47,14 @@ class AppState extends ChangeNotifier {
       fallbackTitle: _l10n.notificationFallbackTitle,
       gateway: notificationGateway,
     );
-    medication = MedicationService(db: db, notifications: notifications)
-      ..adoptLocalizations(_l10n);
-    care = CareService(api: api, db: db);
+    medication = MedicationService(
+      db: db,
+      notifications: notifications,
+      api: api,
+      auth: auth,
+      flushOutbox: () => care.flushOutbox(),
+    )..adoptLocalizations(_l10n);
+    care = CareService(api: api, db: db, telemetryOrigin: () => dataOrigin);
     messages = MessageService(db: db, api: api, auth: auth);
     monitoring = MonitoringService(
       db: db,
@@ -151,6 +156,8 @@ class AppState extends ChangeNotifier {
   late final ApiClient api;
   late final SettingsService settings;
   late final SyncService sync;
+  String get dataOrigin => auth.isDemoSession ? '' : api.baseUrl;
+
   late final NotificationService notifications;
   late final MedicationService medication;
   late final MonitoringService monitoring;
@@ -191,7 +198,9 @@ class AppState extends ChangeNotifier {
       return false;
     }
   }
-  Future<DeviceDiagnostics?> get deviceDiagnostics => monitoring.getDiagnostics();
+
+  Future<DeviceDiagnostics?> get deviceDiagnostics =>
+      monitoring.getDiagnostics();
 
   bool ready = false;
   bool apiOnline = false;
@@ -387,8 +396,8 @@ class AppState extends ChangeNotifier {
 
       final accuracyDesc = fix.accuracy != null
           ? (fix.isCoarse
-              ? ' (موقع تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم)'
-              : ' (دقة GPS: ±${fix.accuracy!.round()} م)')
+                ? ' (موقع تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم)'
+                : ' (دقة GPS: ±${fix.accuracy!.round()} م)')
           : '';
       final note =
           '🚨 تنبيه تلقائي: تم رصد نوبة صرع محتملة، وتم إرسال الموقع الجغرافي للمريض فوراً للمرافقين$accuracyDesc.';
@@ -432,8 +441,8 @@ class AppState extends ChangeNotifier {
           : '';
       final accuracyDesc = fix.accuracy != null
           ? (fix.isCoarse
-              ? ' - موقع تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم'
-              : ' - دقة GPS: ±${fix.accuracy!.round()} م')
+                ? ' - موقع تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم'
+                : ' - دقة GPS: ±${fix.accuracy!.round()} م')
           : '';
       final note =
           '⚠️ إنذار مبكر: احتمالية حدوث نوبة صرع$timeStr. تم إرسال موقع المريض تلقائياً للمرافقين$accuracyDesc.';
@@ -464,6 +473,7 @@ class AppState extends ChangeNotifier {
         PredictionEvent(
           id: auth.newId(),
           patientId: reading.patientId,
+          serverOrigin: reading.serverOrigin,
           firedAt: DateTime.now(),
           preictalProb: p.preictalProb,
           leadTimeMin: p.leadTimeMin,
@@ -725,12 +735,19 @@ class AppState extends ChangeNotifier {
         },
         onRemoteAlert: (patientId, alertId) async {
           final owner = auth.currentUser?.uid;
+          final origin = dataOrigin;
+          final revision = api.tokens.revision;
           if (owner == null) return;
           AlertItem? received;
           try {
             received = await api.alertDetails(patientId, alertId);
           } catch (_) {}
-          if (auth.currentUser?.uid != owner) return;
+          if (auth.currentUser?.uid != owner ||
+              origin != dataOrigin ||
+              revision != api.tokens.revision) {
+            return;
+          }
+          received = received?.copyWith(serverOrigin: origin);
           lastAlert =
               received ??
               AlertItem(
@@ -762,7 +779,9 @@ class AppState extends ChangeNotifier {
 
     // Continuous network connectivity watcher: detects drops and auto-flushes on reconnection
     _connectivitySub?.cancel();
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) async {
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((
+      results,
+    ) async {
       final isNowConnected = results.any((r) => r != ConnectivityResult.none);
       final health = isNowConnected
           ? await api.health(null, const Duration(seconds: 10), true)
@@ -819,11 +838,18 @@ class AppState extends ChangeNotifier {
     try {
       final user = auth.currentUser;
       if (user == null) return;
+      final origin = api.baseUrl;
+      final revision = api.tokens.revision;
       final salt = PasswordHasher.generateSalt();
-      final hash = PasswordHasher.hash(password, salt);
+      final hash = await PasswordHasher.hashAsync(password, salt);
+      if (!AppUser.sameSessionOwner(user, auth.currentUser) ||
+          origin != api.baseUrl ||
+          revision != api.tokens.revision) {
+        return;
+      }
       await db.saveUserCredentials(
         username: username.trim().toLowerCase(),
-        serverOrigin: api.baseUrl,
+        serverOrigin: origin,
         passwordHash: hash,
         salt: salt,
         userProfile: jsonEncode(context),
@@ -846,7 +872,11 @@ class AppState extends ChangeNotifier {
     // 1. Try real backend login
     try {
       try {
-        await api.login(username, password, timeout: const Duration(seconds: 35));
+        await api.login(
+          username,
+          password,
+          timeout: const Duration(seconds: 35),
+        );
         final context = await api.sessionContext();
         await auth.applyBackendSession(context);
         await api.tokens.cacheSessionContext(context);
@@ -889,7 +919,11 @@ class AppState extends ChangeNotifier {
               : AppConfig.cloudProductionUrl;
           if (await api.health(fallbackUrl, const Duration(seconds: 3))) {
             api.updateBaseUrl(fallbackUrl);
-            await api.login(username, password, timeout: const Duration(seconds: 15));
+            await api.login(
+              username,
+              password,
+              timeout: const Duration(seconds: 15),
+            );
             final context = await api.sessionContext();
             await auth.applyBackendSession(context);
             await api.tokens.cacheSessionContext(context);
@@ -936,10 +970,7 @@ class AppState extends ChangeNotifier {
             customMessage: _l10n.errAccountLocked,
           );
         } else if (e.statusCode == 409) {
-          throw Failure(
-            FailureKind.validation,
-            customMessage: e.message,
-          );
+          throw Failure(FailureKind.validation, customMessage: e.message);
         }
         throw Failure.from(e);
       }
@@ -948,7 +979,7 @@ class AppState extends ChangeNotifier {
     // Network was unreachable or timed out.
     // 2. Offline credential verification via encrypted SQLCipher storage (#1)
     final u = username.trim().toLowerCase();
-    final p = password.trim();
+    final p = password;
 
     try {
       final cred = await db.getUserCredentials(
@@ -958,10 +989,17 @@ class AppState extends ChangeNotifier {
       if (cred != null) {
         final salt = cred['salt'] as String;
         final expectedHash = cred['passwordHash'] as String;
-        if (PasswordHasher.verify(p, salt, expectedHash)) {
+        if (await PasswordHasher.verifyAsync(p, salt, expectedHash)) {
           final profileJson = cred['userProfile'] as String;
           final profileMap = jsonDecode(profileJson) as Map<String, dynamic>;
           await auth.applyBackendSession(profileMap);
+          if (PasswordHasher.needsRehash(expectedHash)) {
+            await _cacheUserCredentials(
+              username: username,
+              password: password,
+              context: profileMap,
+            );
+          }
           currentSessionUsername = username;
           final user = auth.currentUser;
           final patientId = user?.role == UserRole.patient
@@ -989,7 +1027,8 @@ class AppState extends ChangeNotifier {
     } catch (_) {}
 
     if (!AppConfig.demoMode) {
-      final isDemoAccount = (u == 'doctor' && p == 'doctor123') ||
+      final isDemoAccount =
+          (u == 'doctor' && p == 'doctor123') ||
           (u == 'patient' && p == 'patient123') ||
           (u == 'caregiver' && p == 'caregiver123') ||
           (u == 'admin' && (p == 'admin123' || p == 'admin'));
@@ -1214,7 +1253,10 @@ class AppState extends ChangeNotifier {
       // Seed the medication plan from the patient profile (idempotent).
       try {
         final profile = auth.patientById(patientId);
-        if (profile != null) await medication.seedFromProfile(profile);
+        if (profile != null && auth.isDemoSession) {
+          await medication.seedFromProfile(profile);
+        }
+        await medication.synchronize(patientId);
       } catch (_) {}
       // Schedule patient OS medication reminders completely independently of
       // EEG monitoring. Non-patient roles must never schedule patient alarms.
@@ -1238,8 +1280,13 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _seedPatientTelemetry(String pid) async {
+    if (!auth.isDemoSession) return;
     try {
-      final existing = await db.assessmentsFor(pid, limit: 1);
+      final existing = await db.assessmentsFor(
+        pid,
+        limit: 1,
+        serverOrigin: dataOrigin,
+      );
       if (existing.isEmpty) {
         final now = DateTime.now();
         final reading = VitalReading(
@@ -1368,7 +1415,8 @@ class AppState extends ChangeNotifier {
         notifyListeners();
         return false;
       }
-      final effectiveNote = note ??
+      final effectiveNote =
+          note ??
           (fix.isCoarse
               ? '📍 مشاركة يدوية للموقع (تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم)'
               : '📍 تم إرسال وتحديث الموقع الجغرافي للمريض (دقة GPS: ±${fix.accuracy?.round() ?? 0} م)');
@@ -1439,15 +1487,28 @@ class AppState extends ChangeNotifier {
   /// Everything written here lands in SQLite, which is what the per-patient list
   /// screens read.
   Future<void> refreshFromCloud() async {
+    final owner = auth.currentUser;
+    final origin = api.baseUrl;
+    final revision = api.tokens.revision;
+    bool current() =>
+        AppUser.sameSessionOwner(owner, auth.currentUser) &&
+        origin == api.baseUrl &&
+        revision == api.tokens.revision;
     final patients = auth.accessiblePatients();
     if (patients.isEmpty) return;
     for (final p in patients) {
+      if (!current()) return;
       await _refreshPatientFromCloud(p.patientId);
+      if (!current()) return;
+      try {
+        await medication.synchronize(p.patientId);
+      } catch (_) {}
     }
     // Only the patient actually being monitored may repoint the monitoring
     // service. `refresh` overwrites its app-wide latest reading, assessment and
     // alert list, so calling it once per patient inside the loop would leave
     // every screen that reads those fields showing whoever happened to be last.
+    if (!current()) return;
     final active =
         monitoring.activePatientId ??
         (auth.currentUser?.role == UserRole.patient
@@ -1457,6 +1518,7 @@ class AppState extends ChangeNotifier {
       await monitoring.refresh(monitoring.activePatientId!);
     }
     if (active != null) await sync.syncPending(active);
+    if (!current()) return;
     await messages.flushPendingMessages();
     await sync.flushPendingAlerts();
     notifyListeners();
@@ -1514,13 +1576,24 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _refreshPatientFromCloud(String patientId) async {
+    final owner = auth.currentUser;
+    final endpoint = api.baseUrl;
+    final origin = dataOrigin;
+    final revision = api.tokens.revision;
+    bool current() =>
+        AppUser.sameSessionOwner(owner, auth.currentUser) &&
+        endpoint == api.baseUrl &&
+        revision == api.tokens.revision;
     try {
       final remoteAlerts = await sync.pullCloudAlerts(patientId);
+      if (!current()) return;
       for (final a in remoteAlerts.reversed) {
+        if (!current()) return;
         await db.insertAlert(a);
       }
       // update status from cloud patient doc
       final body = await api.cloudPatient(patientId);
+      if (!current()) return;
       final p = body['patient'] as Map<String, dynamic>?;
       final status = p?['currentStatus'] as String?;
       if (status != null) {
@@ -1529,9 +1602,18 @@ class AppState extends ChangeNotifier {
       final assessments = body['assessments'] as List? ?? [];
       if (assessments.isNotEmpty) {
         final latest = Map<String, dynamic>.from(assessments.first as Map);
+        if (latest['id'] is! String ||
+            DateTime.tryParse(latest['timestamp']?.toString() ?? '') == null) {
+          return;
+        }
+        if ((latest['patientId'] ?? latest['patient_id'] ?? patientId) !=
+            patientId) {
+          return;
+        }
         await db.insertAssessment(
           RiskAssessment.fromMap({
             ...latest,
+            'serverOrigin': origin,
             'id':
                 latest['id'] ??
                 'cloud-${DateTime.now().millisecondsSinceEpoch}',
@@ -1539,7 +1621,7 @@ class AppState extends ChangeNotifier {
             'timestamp':
                 latest['timestamp'] ?? DateTime.now().toIso8601String(),
             'label': latest['label'] ?? 'stable',
-            'confidence': latest['confidence'] ?? 0.5,
+            'confidence': latest['confidence'] ?? 0,
             'features': latest['features'] ?? {},
             'processingMs': latest['processingMs'] ?? 0,
           }),

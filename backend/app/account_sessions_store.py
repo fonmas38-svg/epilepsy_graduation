@@ -10,6 +10,10 @@ from sqlalchemy import delete, select, update
 from app.database import account_sessions, connection, push_tokens, transaction, users
 
 
+class DeviceBindingConflict(ValueError):
+    pass
+
+
 def stamp(epoch: float | None = None) -> str:
     return datetime.fromtimestamp(time.time() if epoch is None else epoch, timezone.utc).isoformat(timespec="microseconds")
 
@@ -26,10 +30,16 @@ def active_conditions(now: str | None = None):
 
 def create(user_id: str, role: str, expires_epoch: int, *, device_name: str = "Unknown device",
            platform: str = "unknown", device_id: str | None = None, is_hardware_bound: bool = False,
-           expected_version: int | None = None) -> dict:
+           expected_version: int | None = None, enforce_device_binding: bool = False) -> dict:
     now = stamp()
     clean_device_id = device_id.strip()[:128] if (device_id and device_id.strip()) else None
     with transaction() as conn:
+        if enforce_device_binding and role in ("patient", "caregiver"):
+            if not clean_device_id:
+                raise ValueError("Device installation identifier is required")
+            # A write lock serializes SQLite too; SELECT FOR UPDATE alone does not.
+            conn.execute(update(users).where(users.c.id == user_id).values(
+                session_version=users.c.session_version))
         # Serialize issuance with password/disable changes. The verified login
         # snapshot cannot become a fresh session after an intervening reset.
         user = conn.execute(select(users).where(users.c.id == user_id).with_for_update()).mappings().first()
@@ -38,6 +48,10 @@ def create(user_id: str, role: str, expires_epoch: int, *, device_name: str = "U
         version = int(user["session_version"])
         if expected_version is not None and expected_version != version:
             raise ValueError("Account changed; sign in again")
+        if enforce_device_binding and role in ("patient", "caregiver"):
+            if get_active_session_on_other_device(user_id, clean_device_id):
+                raise DeviceBindingConflict(
+                    "هذا الحساب مسجل ونشط حالياً على جهاز آخر. يرجى تسجيل الخروج من الجهاز السابق أولاً.")
         row = {
             "id": secrets.token_urlsafe(32), "user_id": user_id, "session_version": version,
             "device_name": device_name.strip()[:120] or "Unknown device",
@@ -69,7 +83,8 @@ def get_active_session_on_other_device(user_id: str, device_id: str | None) -> d
             if existing_dev:
                 if clean_device_id is None or existing_dev != clean_device_id:
                     return dict(row)
-            elif row.get("is_hardware_bound") and clean_device_id is not None:
+            else:
+                # Legacy sessions without a device ID cannot authorize a second device.
                 return dict(row)
     return None
 

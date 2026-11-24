@@ -55,7 +55,13 @@ void main() {
   testWidgets(
     'switching channels keeps separate drafts and filters private messages',
     (tester) async {
-      final db = MessageDb()..rows.add(message('private', 'p1'));
+      final db = MessageDb()
+        ..rows.add(
+          message(
+            'private',
+            'p1',
+          ).copyWith(serverOrigin: 'https://test.invalid'),
+        );
       final state = await session(db);
       await tester.pumpWidget(harness(state, const ClinicalMessagesScreen()));
       await tester.pumpAndSettle();
@@ -81,7 +87,13 @@ void main() {
         await tester.binding.setSurfaceSize(size);
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final db = MessageDb()
-          ..rows.add(message('family-p2', 'p2', channel: 'family_patient'));
+          ..rows.add(
+            message(
+              'family-p2',
+              'p2',
+              channel: 'family_patient',
+            ).copyWith(serverOrigin: 'https://test.invalid'),
+          );
         final state = await session(db, role: 'caregiver');
         await tester.pumpWidget(
           harness(state, const ClinicalMessagesScreen(), scale: 1.5),

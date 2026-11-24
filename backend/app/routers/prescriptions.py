@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from app import cloud_store, messages_store, users_store
 from app.auth import get_current_principal, require_role
 
@@ -25,26 +25,39 @@ def _assert_patient_access(patient_id, actor):
         raise HTTPException(status_code=403, detail="patient not assigned to you")
 
 
-class PrescriptionRequest(BaseModel):
+class ScheduleFields(BaseModel):
+    @field_validator("times", check_fields=False)
+    @classmethod
+    def valid_times(cls, value):
+        import re
+        if value is None:
+            return value
+        if len(value) > 24 or len(value) != len(set(value)) or any(
+                not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", item) for item in value):
+            raise ValueError("Dose times must be unique HH:mm values (00:00–23:59)")
+        return sorted(value)
+
+
+class PrescriptionRequest(ScheduleFields):
     name: str = Field(..., min_length=1, max_length=200)
     dose: str = Field(..., min_length=1, max_length=100)
     schedule: str = Field(..., min_length=1, max_length=200)
     notes: str | None = Field(default=None, max_length=1000)
-    period_context: str | None = Field(default=None, max_length=32)
-    meal_context: str | None = Field(default=None, max_length=32)
-    meal_type: str | None = Field(default=None, max_length=32)
+    period_context: Literal["morning", "noon", "evening", "bedtime"] | None = None
+    meal_context: Literal["before_meal", "with_meal", "after_meal", "independent"] | None = None
+    meal_type: Literal["breakfast", "lunch", "dinner"] | None = None
     times: list[str] | None = None
 
 
-class UpdatePrescriptionRequest(BaseModel):
-    name: str | None = Field(default=None, max_length=200)
-    dose: str | None = Field(default=None, max_length=100)
-    schedule: str | None = Field(default=None, max_length=200)
+class UpdatePrescriptionRequest(ScheduleFields):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    dose: str | None = Field(default=None, min_length=1, max_length=100)
+    schedule: str | None = Field(default=None, min_length=1, max_length=200)
     notes: str | None = Field(default=None, max_length=1000)
     active: bool | None = None
-    period_context: str | None = Field(default=None, max_length=32)
-    meal_context: str | None = Field(default=None, max_length=32)
-    meal_type: str | None = Field(default=None, max_length=32)
+    period_context: Literal["morning", "noon", "evening", "bedtime"] | None = None
+    meal_context: Literal["before_meal", "with_meal", "after_meal", "independent"] | None = None
+    meal_type: Literal["breakfast", "lunch", "dinner"] | None = None
     times: list[str] | None = None
 
 
@@ -77,10 +90,6 @@ def prescribe(patient_id: str, body: PrescriptionRequest, actor: dict = Depends(
         "updated_at": now,
     }
     cloud_store.upsert_sql_prescription(rx)
-    patient_doc = cloud_store.get_patient(patient_id) or {}
-    existing = list(patient_doc.get("prescriptions") or [])
-    existing.append(rx)
-    cloud_store.upsert_patient(patient_id, {"prescriptions": existing})
     users_store.log(
         actor.get("sub"),
         actor.get("role"),
@@ -112,8 +121,7 @@ def prescribe(patient_id: str, body: PrescriptionRequest, actor: dict = Depends(
 @router.get("/doctor/patients/{patient_id}/prescriptions")
 def list_prescriptions(patient_id: str, actor: dict = Depends(require_doctor)):
     _assert_patient_access(patient_id, actor)
-    patient_doc = cloud_store.get_patient(patient_id) or {}
-    return {"prescriptions": list(patient_doc.get("prescriptions") or [])}
+    return {"prescriptions": cloud_store.list_sql_prescriptions(patient_id)}
 
 
 @router.patch("/doctor/patients/{patient_id}/prescriptions/{rx_id}")
@@ -124,27 +132,12 @@ def update_prescription(
     actor: dict = Depends(require_doctor),
 ):
     _assert_patient_access(patient_id, actor)
-    patient_doc = cloud_store.get_patient(patient_id) or {}
-    prescriptions = list(patient_doc.get("prescriptions") or [])
-    rx = next((p for p in prescriptions if p.get("id") == rx_id), None)
+    changes = body.model_dump(exclude_unset=True)
+    if any(changes.get(field) is None for field in ("name", "dose", "schedule", "active") if field in changes):
+        raise HTTPException(status_code=422, detail="required prescription field cannot be null")
+    rx = cloud_store.update_sql_prescription(patient_id, rx_id, changes)
     if rx is None:
         raise HTTPException(status_code=404, detail="prescription not found")
-    for field, val in [
-        ("name", body.name),
-        ("dose", body.dose),
-        ("schedule", body.schedule),
-        ("notes", body.notes),
-        ("active", body.active),
-        ("period_context", body.period_context),
-        ("meal_context", body.meal_context),
-        ("meal_type", body.meal_type),
-        ("times", body.times),
-    ]:
-        if val is not None:
-            rx[field] = val
-    rx["updated_at"] = _now()
-    cloud_store.upsert_sql_prescription(rx)
-    cloud_store.upsert_patient(patient_id, {"prescriptions": prescriptions})
     users_store.log(
         actor.get("sub"),
         actor.get("role"),
@@ -158,15 +151,9 @@ def update_prescription(
 @router.delete("/doctor/patients/{patient_id}/prescriptions/{rx_id}")
 def cancel_prescription(patient_id: str, rx_id: str, actor: dict = Depends(require_doctor)):
     _assert_patient_access(patient_id, actor)
-    patient_doc = cloud_store.get_patient(patient_id) or {}
-    prescriptions = list(patient_doc.get("prescriptions") or [])
-    rx = next((p for p in prescriptions if p.get("id") == rx_id), None)
+    rx = cloud_store.update_sql_prescription(patient_id, rx_id, {"active": False})
     if rx is None:
         raise HTTPException(status_code=404, detail="prescription not found")
-    rx["active"] = False
-    rx["updated_at"] = _now()
-    cloud_store.upsert_sql_prescription(rx)
-    cloud_store.upsert_patient(patient_id, {"prescriptions": prescriptions})
     users_store.log(
         actor.get("sub"),
         actor.get("role"),
@@ -196,7 +183,9 @@ def patient_list_prescriptions(
         linked = users_store.patients_for_caregiver(sub)
         if not linked:
             return {"prescriptions": []}
-        if not target_pid or target_pid not in linked:
+        if target_pid and target_pid not in linked:
+            raise HTTPException(status_code=403, detail="patient not linked to this caregiver")
+        if not target_pid:
             target_pid = linked[0]
     elif role in ("doctor", "admin"):
         if not target_pid:
@@ -205,10 +194,9 @@ def patient_list_prescriptions(
     else:
         raise HTTPException(status_code=403, detail="access denied")
 
-    patient_doc = cloud_store.get_patient(target_pid) or {}
     return {
         "patientId": target_pid,
-        "prescriptions": list(patient_doc.get("prescriptions") or []),
+        "prescriptions": cloud_store.list_sql_prescriptions(target_pid),
     }
 
 
@@ -232,10 +220,9 @@ def get_patient_prescriptions(
     else:
         raise HTTPException(status_code=403, detail="access denied")
 
-    patient_doc = cloud_store.get_patient(patient_id) or {}
     return {
         "patientId": patient_id,
-        "prescriptions": list(patient_doc.get("prescriptions") or []),
+        "prescriptions": cloud_store.list_sql_prescriptions(patient_id),
     }
 
 
@@ -247,11 +234,7 @@ def record_prescription_intake_log(
 ):
     """Patient-only endpoint to record medication adherence (taken/missed/skipped) (#11)."""
     patient_id = str(actor.get("sub", ""))
-    patient_doc = cloud_store.get_patient(patient_id) or {}
-    prescriptions = list(patient_doc.get("prescriptions") or [])
-    rx = next((p for p in prescriptions if p.get("id") == rx_id), None)
-    if rx is not None:
-        cloud_store.upsert_sql_prescription(rx)
+    cloud_store.list_sql_prescriptions(patient_id)
 
     try:
         saved = cloud_store.add_medication_log(
@@ -306,7 +289,7 @@ def get_patient_adherence(
     taken = sum(1 for l in logs if l["status"] == "taken")
     missed = sum(1 for l in logs if l["status"] == "missed")
     skipped = sum(1 for l in logs if l["status"] == "skipped")
-    rate = round((taken / total) * 100.0, 1) if total > 0 else 100.0
+    rate = round((taken / total) * 100.0, 1) if total > 0 else None
     return {
         "patientId": patient_id,
         "totalLogs": total,
@@ -314,5 +297,7 @@ def get_patient_adherence(
         "missedCount": missed,
         "skippedCount": skipped,
         "adherenceRate": rate,
+        "rateBasis": "reported_logs",
+        "truncated": total == limit,
         "logs": logs,
     }

@@ -73,6 +73,9 @@ class MonitoringService {
   String? deviceId;
   int deviceBuffered = 0;
   String? lastDeviceSeen;
+  String? signalSourceLabel;
+  int? signalSampleRate;
+  String? replayRecordedAt;
   bool _autoAlertEnabled = true;
 
   void enableAutoAlerts() => _autoAlertEnabled = true;
@@ -121,6 +124,13 @@ class MonitoringService {
       _activeDevice?.getDiagnostics() ?? Future.value(null);
 
   Future<void> start(String patientId) async {
+    final owner = auth.currentUser;
+    final origin = api.baseUrl;
+    final revision = api.tokens.revision;
+    bool current() =>
+        AppUser.sameSessionOwner(owner, auth.currentUser) &&
+        origin == api.baseUrl &&
+        revision == api.tokens.revision;
     await stop(); // Also wait for an older patient's in-flight poll to finish.
     if (activePatientId != patientId) {
       latestReading = null;
@@ -131,9 +141,11 @@ class MonitoringService {
       chartReadings = [];
       alerts = [];
     }
+    if (!current()) return;
     activePatientId = patientId;
     if (!_canSimulate) source = SignalSource.headDevice;
     await refresh(patientId);
+    if (!current()) return;
     running = true;
 
     final device = _createDevice(patientId);
@@ -148,7 +160,9 @@ class MonitoringService {
     });
     _packetSub = device.packetStream.listen((packet) {
       _packetQueue = _packetQueue
-          .then((_) => _handlePacket(packet))
+          .then((_) async {
+            if (current()) await _handlePacket(packet);
+          })
           .catchError((Object _) {});
     });
     try {
@@ -226,9 +240,28 @@ class MonitoringService {
 
   Future<void> refresh(String patientId) async {
     if (activePatientId != null && activePatientId != patientId) return;
-    chartReadings = await db.recentReadings(patientId, limit: 30);
+    final owner = auth.currentUser;
+    final origin = sync.dataOrigin;
+    final endpoint = api.baseUrl;
+    final revision = api.tokens.revision;
+    bool current() =>
+        AppUser.sameSessionOwner(owner, auth.currentUser) &&
+        endpoint == api.baseUrl &&
+        revision == api.tokens.revision;
+    final rows = await db.recentReadings(
+      patientId,
+      limit: 30,
+      serverOrigin: origin,
+    );
+    final assessment = await db.latestAssessment(
+      patientId,
+      serverOrigin: origin,
+    );
+    final recentAlerts = await db.alertsFor(patientId, serverOrigin: origin);
+    if (!current()) return;
+    chartReadings = rows;
+    latestAssessment = assessment;
     latestReading = chartReadings.isEmpty ? null : chartReadings.first;
-    latestAssessment = await db.latestAssessment(patientId);
     final recovered = _usable(latestAssessment)
         ? PredictionState.fromMap(latestAssessment?.features)
         : null;
@@ -240,7 +273,7 @@ class MonitoringService {
           ? recovered.copyWith(trajectory: List.of(_localTrajectory))
           : recovered;
     }
-    alerts = await db.alertsFor(patientId);
+    alerts = recentAlerts;
     onUpdate?.call();
   }
 
@@ -258,6 +291,13 @@ class MonitoringService {
   Future<void> _runTick(RiskLabel? forcePattern) async {
     final patientId = activePatientId;
     if (patientId == null || auth.currentUser == null) return;
+    final owner = auth.currentUser;
+    final origin = api.baseUrl;
+    final revision = api.tokens.revision;
+    bool current() =>
+        AppUser.sameSessionOwner(owner, auth.currentUser) &&
+        origin == api.baseUrl &&
+        revision == api.tokens.revision;
     try {
       final dev = _activeDevice;
       if (dev == null) {
@@ -279,7 +319,7 @@ class MonitoringService {
             );
         if (tempDevice is SoftwareEmulatorEegDevice) {
           final pkt = await tempDevice.emitNow(forcePattern: forcePattern);
-          if (pkt != null) await _handlePacket(pkt);
+          if (pkt != null && current()) await _handlePacket(pkt);
         }
         if (_injectedDevice == null) {
           await tempDevice.dispose();
@@ -305,7 +345,19 @@ class MonitoringService {
         packet.patientId != patientId) {
       return;
     }
+    final owner = auth.currentUser;
+    final origin = sync.dataOrigin;
+    final endpoint = api.baseUrl;
+    final revision = api.tokens.revision;
+    bool current() =>
+        AppUser.sameSessionOwner(owner, auth.currentUser) &&
+        endpoint == api.baseUrl &&
+        revision == api.tokens.revision &&
+        activePatientId == patientId;
     try {
+      signalSourceLabel = packet.sourceLabel;
+      signalSampleRate = packet.sampleRateHz;
+      replayRecordedAt = packet.metadata['recorded_at'] as String?;
       deviceId = packet.deviceId;
       deviceBuffered = packet.samplesBuffered;
       final metaLastSeen = packet.metadata['last_seen'];
@@ -315,18 +367,20 @@ class MonitoringService {
 
       final isServerSynced =
           packet.sourceLabel == 'server_device_hub' ||
-          packet.sourceLabel == 'dataset_player';
+          packet.sourceLabel == 'dataset_player' ||
+          packet.sourceLabel == 'dataset_cached_replay';
       final readingId = packet.metadata['reading_id'] as String? ?? _uuid.v4();
-      final reading = packet.toVitalReading(
-        id: readingId,
-        synced: isServerSynced,
-      );
+      final reading = packet
+          .toVitalReading(id: readingId, synced: isServerSynced)
+          .withOrigin(origin);
       await db.insertReading(reading);
+      if (!current()) return;
       latestReading = reading;
 
       if (packet.precomputedAssessment != null) {
-        final assessment = packet.precomputedAssessment!;
+        final assessment = packet.precomputedAssessment!.withOrigin(origin);
         await db.insertAssessment(assessment);
+        if (!current()) return;
         latestAssessment = assessment;
         _deviceAssessmentValid =
             packet.metadata['assessment_valid'] == true ||
@@ -350,6 +404,7 @@ class MonitoringService {
         await refresh(patientId);
       } else {
         final assessment = await sync.analyzeAndStore(reading);
+        if (!current()) return;
         latestAssessment = assessment;
         _deviceAssessmentValid =
             assessment.features['assessment_valid'] != false;
@@ -358,6 +413,7 @@ class MonitoringService {
               ? PredictionState.fromMap(assessment.features)
               : null,
         );
+        if (!current()) return;
         final alert = await sync.maybeCreateAlert(reading, assessment);
         if (alert != null) onAlert?.call(alert);
         await sync.syncPending(patientId);
@@ -412,7 +468,7 @@ class MonitoringService {
     final patientId = activePatientId;
     if (user == null || patientId == null) return;
     await api.acknowledgeAlert(patientId: patientId, alertId: alertId);
-    await db.acknowledgeAlert(alertId, user.uid);
+    await db.acknowledgeAlert(alertId, user.uid, serverOrigin: sync.dataOrigin);
     await refresh(patientId);
   }
 }

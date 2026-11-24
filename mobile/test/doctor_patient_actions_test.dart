@@ -20,19 +20,25 @@ class DoctorFileDb extends CareDb {
   @override
   Future<List<VitalReading>> recentReadings(
     String patientId, {
+    String serverOrigin = '',
     int limit = 120,
   }) async => [];
   @override
   Future<List<RiskAssessment>> assessmentsFor(
     String patientId, {
+    String serverOrigin = '',
     int limit = 100,
   }) async => [];
   @override
-  Future<List<AlertItem>> alertsFor(String patientId, {int limit = 50}) async =>
-      [];
+  Future<List<AlertItem>> alertsFor(
+    String patientId, {
+    String serverOrigin = '',
+    int limit = 50,
+  }) async => [];
   @override
   Future<List<PredictionEvent>> predictionEventsFor(
     String patientId, {
+    String serverOrigin = '',
     int limit = 100,
   }) async => [];
   @override
@@ -45,6 +51,7 @@ class DoctorFileDb extends CareDb {
   Future<List<Medication>> medicationsFor(
     String patientId, {
     bool activeOnly = false,
+    String? serverOrigin,
   }) async => [];
 }
 

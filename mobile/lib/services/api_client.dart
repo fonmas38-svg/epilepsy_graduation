@@ -442,11 +442,7 @@ class ApiClient {
   }) async {
     final r = await _postAuthed(
       '/simulate/stream',
-      {
-        'pattern': pattern,
-        'samples': samples,
-        'seed': ?seed,
-      },
+      {'pattern': pattern, 'samples': samples, 'seed': ?seed},
       timeout: const Duration(seconds: 10),
       allowColdStartRetry: false,
     );
@@ -684,18 +680,22 @@ class ApiClient {
       final uri = _u(path);
       return switch (upper) {
         'GET' => _client.get(uri, headers: headers).timeout(attemptTimeout),
-        'PUT' => _client
-            .put(uri, headers: headers, body: payload)
-            .timeout(attemptTimeout),
-        'PATCH' => _client
-            .patch(uri, headers: headers, body: payload)
-            .timeout(attemptTimeout),
-        'DELETE' => _client
-            .delete(uri, headers: headers, body: payload)
-            .timeout(attemptTimeout),
-        _ => _client
-            .post(uri, headers: headers, body: payload)
-            .timeout(attemptTimeout),
+        'PUT' =>
+          _client
+              .put(uri, headers: headers, body: payload)
+              .timeout(attemptTimeout),
+        'PATCH' =>
+          _client
+              .patch(uri, headers: headers, body: payload)
+              .timeout(attemptTimeout),
+        'DELETE' =>
+          _client
+              .delete(uri, headers: headers, body: payload)
+              .timeout(attemptTimeout),
+        _ =>
+          _client
+              .post(uri, headers: headers, body: payload)
+              .timeout(attemptTimeout),
       };
     }
 
@@ -746,8 +746,9 @@ class ApiClient {
         final remainingAfterSleep =
             _coldStartCeiling - _now().difference(startedAt);
         if (remainingAfterSleep <= Duration.zero) break;
-        final nextTimeout =
-            timeout < remainingAfterSleep ? timeout : remainingAfterSleep;
+        final nextTimeout = timeout < remainingAfterSleep
+            ? timeout
+            : remainingAfterSleep;
         try {
           final r = await runWith401Refresh(nextTimeout);
           if (!_isTransientStatus(r.statusCode)) return r;
@@ -761,7 +762,9 @@ class ApiClient {
       }
 
       if (lastResponse != null) return lastResponse;
-      if (lastError != null) Error.throwWithStackTrace(lastError, StackTrace.current);
+      if (lastError != null) {
+        Error.throwWithStackTrace(lastError, StackTrace.current);
+      }
       throw TimeoutException('Cold-start retry ceiling exceeded');
     } finally {
       if (enteredWaking) _exitWaking();
@@ -1047,11 +1050,13 @@ class ApiClient {
     }
   }
 
-  Future<String?> adminResetUserPassword(String userId, [String? password]) async {
-    final r = await _postAuthed(
-      '/admin/users/$userId/password',
-      {'password': ?password},
-    );
+  Future<String?> adminResetUserPassword(
+    String userId, [
+    String? password,
+  ]) async {
+    final r = await _postAuthed('/admin/users/$userId/password', {
+      'password': ?password,
+    });
     if (r.statusCode != 200) {
       throw ApiException(
         _detail(r, 'تعذّر إعادة تعيين كلمة المرور'),
@@ -1064,10 +1069,7 @@ class ApiClient {
 
   Future<void> adminDeleteUser(String userId) async {
     final r = await _client
-        .delete(
-          _u('/admin/users/$userId'),
-          headers: await _headers(),
-        )
+        .delete(_u('/admin/users/$userId'), headers: await _headers())
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
       throw ApiException(
@@ -1332,21 +1334,28 @@ class ApiClient {
     required String dose,
     required String schedule,
     String? notes,
+    List<String>? times,
+    String? periodContext,
+    String? mealContext,
+    String? mealType,
   }) async {
-    final payload = jsonEncode({
+    final payload = <String, Object?>{
       'patient_id': patientId,
       'name': name,
       'dose': dose,
       'schedule': schedule,
       'notes': ?notes,
-    });
-    final r = await _client
-        .post(
-          _u('/doctor/patients/$patientId/prescriptions'),
-          headers: await _headers(),
-          body: payload,
-        )
-        .timeout(const Duration(seconds: 10));
+      'times': ?times,
+      'period_context': ?periodContext,
+      'meal_context': ?mealContext,
+      'meal_type': ?mealType,
+    };
+    final r = await _requestAuthed(
+      'POST',
+      '/doctor/patients/${Uri.encodeComponent(patientId)}/prescriptions',
+      body: payload,
+      timeout: const Duration(seconds: 35),
+    );
     if (r.statusCode != 201) {
       throw ApiException(
         _detail(r, 'تعذّر وصف الدواء'),

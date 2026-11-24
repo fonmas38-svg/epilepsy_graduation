@@ -97,10 +97,10 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
     final db = app.db;
     return _HistoryData(
       profile: app.auth.patientById(pid),
-      assessments: await db.assessmentsFor(pid, limit: 500),
-      alerts: await db.alertsFor(pid, limit: 200),
+      assessments: await db.assessmentsFor(pid, limit: 500, serverOrigin: app.dataOrigin),
+      alerts: await db.alertsFor(pid, limit: 200, serverOrigin: app.dataOrigin),
       seizures: await db.seizureLogsFor(pid, limit: 200),
-      events: await db.predictionEventsFor(pid, limit: 200),
+      events: await db.predictionEventsFor(pid, limit: 200, serverOrigin: app.dataOrigin),
     );
   }
 
@@ -250,15 +250,15 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F9FD),
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
         title: Text(
           l.historyTitle,
-          style: const TextStyle(
-            color: Color(0xFF0D253C),
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurface,
             fontSize: 18,
             fontWeight: FontWeight.w800,
           ),
@@ -267,7 +267,10 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
           IconButton(
             tooltip: l.refresh,
             onPressed: _reload,
-            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF6B7A99)),
+            icon: Icon(
+              Icons.refresh_rounded,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -604,12 +607,17 @@ class _TimelineRow extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            width: 1.2,
+          ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF0D253C).withValues(alpha: 0.03),
+              color: Theme.of(
+                context,
+              ).colorScheme.onSurface.withValues(alpha: 0.03),
               blurRadius: 10,
               offset: const Offset(0, 3),
             ),
@@ -634,18 +642,18 @@ class _TimelineRow extends StatelessWidget {
                 children: [
                   Text(
                     event.title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 14,
-                      color: Color(0xFF0D253C),
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   if (event.subtitle != null) ...[
                     const SizedBox(height: 2),
                     Text(
                       event.subtitle!,
-                      style: const TextStyle(
-                        color: Color(0xFF6B7A99),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                         fontSize: 12,
                       ),
                     ),

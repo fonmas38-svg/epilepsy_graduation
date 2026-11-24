@@ -28,7 +28,10 @@ class AccountScreen extends StatelessWidget {
       UserRole.doctor => (const Color(0xFFECFDF5), const Color(0xFF059669)),
       UserRole.caregiver => (const Color(0xFFFEF3C7), const Color(0xFFD97706)),
       UserRole.admin => (const Color(0xFFF3E8FF), const Color(0xFF7C3AED)),
-      null => (const Color(0xFFF1F5F9), const Color(0xFF64748B)),
+      null => (
+        Theme.of(context).colorScheme.surfaceContainerLow,
+        Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
     };
 
     Widget entry(IconData icon, String title, String route) => Material(
@@ -43,7 +46,7 @@ class AccountScreen extends StatelessWidget {
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF1F5F9),
+                  color: Theme.of(context).colorScheme.surfaceContainerLow,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(icon, color: const Color(0xFF0066FF), size: 20),
@@ -52,16 +55,16 @@ class AccountScreen extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF0D253C),
+                    color: Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
               ),
               Icon(
                 ar ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
-                color: const Color(0xFF94A3B8),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
                 size: 20,
               ),
             ],
@@ -70,26 +73,34 @@ class AccountScreen extends StatelessWidget {
       ),
     );
 
-    const divider = Divider(height: 1, thickness: 1, color: Color(0xFFF1F5F9), indent: 68);
+    final divider = Divider(
+      height: 1,
+      thickness: 1,
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      indent: 68,
+    );
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F9FD),
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
         title: Text(
           ar ? 'حسابي' : 'Account',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: Color(0xFF0D253C),
+            color: Theme.of(context).colorScheme.onSurface,
             fontSize: 19,
           ),
         ),
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
         automaticallyImplyLeading: !embedded,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFE4EDF7), height: 1),
+          child: Container(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            height: 1,
+          ),
         ),
       ),
       body: ResponsiveContent(
@@ -100,9 +111,12 @@ class AccountScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  width: 1.2,
+                ),
                 boxShadow: const [
                   BoxShadow(
                     color: Color(0x06000000),
@@ -132,15 +146,18 @@ class AccountScreen extends StatelessWidget {
                             isArabic: ar,
                           ),
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
-                      color: Color(0xFF0D253C),
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: roleBg,
                       borderRadius: BorderRadius.circular(20),
@@ -160,9 +177,9 @@ class AccountScreen extends StatelessWidget {
                       user.email,
                       textAlign: TextAlign.center,
                       textDirection: TextDirection.ltr,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
-                        color: Color(0xFF64748B),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -172,9 +189,12 @@ class AccountScreen extends StatelessWidget {
             const SizedBox(height: 20),
             Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  width: 1.2,
+                ),
                 boxShadow: const [
                   BoxShadow(
                     color: Color(0x06000000),
@@ -288,7 +308,9 @@ class AccountScreen extends StatelessWidget {
                   divider,
                   entry(
                     Icons.security_outlined,
-                    ar ? 'صلاحيات وأذونات النظام' : 'Device & system permissions',
+                    ar
+                        ? 'صلاحيات وأذونات النظام'
+                        : 'Device & system permissions',
                     Routes.devicePermissions,
                   ),
                   if (user != null) ...[
@@ -314,7 +336,7 @@ class AccountScreen extends StatelessWidget {
             const SizedBox(height: 20),
             Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: const Color(0xFFFEE2E2), width: 1.2),
                 boxShadow: const [
@@ -331,7 +353,10 @@ class AccountScreen extends StatelessWidget {
                 child: InkWell(
                   onTap: () => confirmSignOut(context, app),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
                     child: Row(
                       children: [
                         Container(
@@ -365,16 +390,20 @@ class AccountScreen extends StatelessWidget {
                                 ar
                                     ? 'إنهاء جلسة هذا الحساب على الجهاز'
                                     : 'End this account session on the device',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
-                                  color: Color(0xFF64748B),
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
                                 ),
                               ),
                             ],
                           ),
                         ),
                         Icon(
-                          ar ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
+                          ar
+                              ? Icons.chevron_left_rounded
+                              : Icons.chevron_right_rounded,
                           color: const Color(0xFFE11D48),
                           size: 20,
                         ),

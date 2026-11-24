@@ -63,10 +63,10 @@ class PatientSettingsScreen extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: const Color(0xFFE4EDF7),
+                        color: Theme.of(context).colorScheme.outlineVariant,
                         width: 1.2,
                       ),
                       boxShadow: const [
@@ -99,10 +99,12 @@ class PatientSettingsScreen extends StatelessWidget {
                             children: [
                               Text(
                                 l.isArabic ? 'المرافقون' : 'Caregivers',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w700,
-                                  color: Color(0xFF0D253C),
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface,
                                 ),
                               ),
                               const SizedBox(height: 2),
@@ -110,9 +112,11 @@ class PatientSettingsScreen extends StatelessWidget {
                                 l.isArabic
                                     ? 'إضافة مرافق وإدارة وصوله إلى بياناتك'
                                     : 'Add caregivers and manage access to your data',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 13,
-                                  color: Color(0xFF64748B),
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
                                 ),
                               ),
                             ],
@@ -122,7 +126,7 @@ class PatientSettingsScreen extends StatelessWidget {
                           l.isArabic
                               ? Icons.chevron_left_rounded
                               : Icons.chevron_right_rounded,
-                          color: const Color(0xFF94A3B8),
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                           size: 22,
                         ),
                       ],
@@ -391,8 +395,8 @@ class _AppearanceSection extends StatelessWidget {
                   icon: Icons.light_mode_outlined,
                   isSelected: settings.themeMode == ThemeMode.light,
                   onTap: () => settings.setThemeMode(ThemeMode.light),
-                  bgColor: Colors.white,
-                  textColor: Colors.black87,
+                  bgColor: Theme.of(context).colorScheme.surface,
+                  textColor: Theme.of(context).colorScheme.onSurface,
                   accentColor: const Color(0xFF1B4965),
                 ),
               ),
@@ -639,8 +643,16 @@ class _PrivacySectionState extends State<_PrivacySection> {
     try {
       final doc = await _reports.toPdf(
         patient: profile,
-        assessments: await app.db.assessmentsFor(pid, limit: 500),
-        alerts: await app.db.alertsFor(pid, limit: 200),
+        assessments: await app.db.assessmentsFor(
+          pid,
+          limit: 500,
+          serverOrigin: app.dataOrigin,
+        ),
+        alerts: await app.db.alertsFor(
+          pid,
+          limit: 200,
+          serverOrigin: app.dataOrigin,
+        ),
       );
       final pdfBytes = await doc.save();
       // Automatic backup to Supabase Cloud Storage (best-effort)
@@ -648,7 +660,8 @@ class _PrivacySectionState extends State<_PrivacySection> {
         app.api
             .uploadReport(
               patientId: pid,
-              filename: 'clinical_report_${profile.name.isNotEmpty ? profile.name : pid}.pdf',
+              filename:
+                  'clinical_report_${profile.name.isNotEmpty ? profile.name : pid}.pdf',
               bytes: pdfBytes,
             )
             .then((res) {
@@ -707,7 +720,9 @@ class _PrivacySectionState extends State<_PrivacySection> {
             contentPadding: EdgeInsets.zero,
             onChanged: (val) => s.setAutoLockEnabled(val),
             title: Text(
-              l.isArabic ? 'القفل التلقائي عند الخمول' : 'Auto-Lock on Inactivity',
+              l.isArabic
+                  ? 'القفل التلقائي عند الخمول'
+                  : 'Auto-Lock on Inactivity',
             ),
             subtitle: Text(
               l.isArabic
@@ -723,7 +738,9 @@ class _PrivacySectionState extends State<_PrivacySection> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    l.isArabic ? 'مهلة الخمول قبل القفل:' : 'Inactivity timeout:',
+                    l.isArabic
+                        ? 'مهلة الخمول قبل القفل:'
+                        : 'Inactivity timeout:',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                       fontWeight: FontWeight.w600,
@@ -777,7 +794,8 @@ class _PrivacySectionState extends State<_PrivacySection> {
           SizedBox(
             height: A11y.minTouchTarget,
             child: OutlinedButton.icon(
-              onPressed: () => Navigator.pushNamed(context, Routes.devicePermissions),
+              onPressed: () =>
+                  Navigator.pushNamed(context, Routes.devicePermissions),
               icon: const Icon(Icons.security_outlined),
               label: Text(
                 Localizations.localeOf(context).languageCode == 'ar'

@@ -1,39 +1,86 @@
 ---
 name: epilepsy-system
-description: Maintain the epilepsy_graduation_project across Flutter Android/Windows interfaces, FastAPI services, role permissions, offline sync, EEG model evaluation, device simulation, alerts and operational diagnostics. Use for this specific patient-monitoring project and its service/UI audit; not for unrelated apps or medical diagnosis.
+description: Engineering reference and maintenance guide for the epilepsy_graduation_project across Flutter Android/Windows clients, FastAPI backend, Supabase database/storage/realtime, Render hosting, AI models, and device simulation.
 ---
-# Epilepsy System — unified engineering skill
+# Epilepsy System — Engineering Skill
 
-This is one project-specific entry point with complete selected upstream resources and original integration guidance. It is an engineering workflow, not clinical certification or a guarantee of model accuracy. Read only the modules needed for the current request—both main assistants and Teamwork orchestrators/subagents must load the relevant `references/*.md` module(s) for their assigned domain rather than stopping at `SKILL.md` alone.
+Unified architectural and engineering guide for the **Epilepsy Patient Monitoring System**. Read this overview for system architecture, services, and hosting infrastructure, and consult the specialized `references/*.md` module(s) for domain-specific rules.
 
-## Establish scope
+---
 
-Locate the actual repository, read applicable AGENTS.md (if present) and the latest user constraints, and inspect the working tree before editing. Expected project: epilepsy_graduation_project, Flutter under mobile/, FastAPI under backend/, web admin under admin-dashboard/, simulator under partners/hardware-sim/. Confirm installed versions from local files (`mobile/pubspec.yaml`, `backend/requirements.txt`, `backend/alembic/versions/`); do not assume upstream examples fit them.
+## 1. System Architecture Overview
 
-The user paused application implementation and prohibited building distributable versions. Creating/installing/updating this skill does not resume app work. On a later request, preserve whichever pause/build restrictions still apply. Tests and analysis are separate from an APK/EXE build; explain what is actually run. Do not deploy, send notifications/SMS, train on patient data, or mutate a production account merely to verify a skill or diagnose latency.
+The project is a multi-tier, **Offline-First** health monitoring platform composed of four main modules:
 
-## Choose the relevant module
+1. **Client Application (`mobile/` — Flutter for Android & Windows):**
+   - Multi-role application supporting **Patient**, **Caregiver**, **Doctor**, and **Admin** workspaces.
+   - Operates offline-first using encrypted local `SQLite/SQLCipher` (`LocalDatabase`) paired with an idempotent `Outbox` synchronization queue (`SyncService`) and `Provider` state management (`AppState`).
+2. **Backend API & AI Service (`backend/` — FastAPI + Python):**
+   - Central REST backend (mounted at `/`) handling authentication, RBAC permissions, EEG/vital-sign analysis, seizure risk forecasting, clinical care workflows, messaging, and background notification dispatch.
+3. **Web Admin Portal (`admin-dashboard/` — React + Vite):**
+   - Browser-based administrative dashboard for managing system users, doctor registry verification, patient-caregiver-doctor links, and audit oversight.
+4. **Hardware Signal Simulator (`partners/hardware-sim/` & In-App Emulator):**
+   - Simulates wearable headband streams (EEG, ECG, motion, heart rate at 256 Hz) for testing and evaluation via Python (`sim_client.py` -> `/device/ingest`) and an in-app polymorphic interface (`IEegHardwareDevice`).
 
-| Work | Read |
+---
+
+## 2. Core Services & Responsibilities
+
+* **AI Seizure Analysis & Forecasting (`backend/app/ml/`, `EdgeModelService`):**
+  * Cloud engine (`RiskClassifier`, `DeepSeizureModel`, `risk_model.joblib`) classifies risk (`stable`, `watch`, `high_risk`) and pre-ictal probability from EEG + vitals (`POST /analyze`).
+  * Edge module (`EdgeModelService` + bundled `assets/models/edge_seizure_model.onnx` / `dual_model_config.json`) provides local on-device scoring when offline.
+* **Encrypted Storage & Sync (`LocalDatabase`, `SyncService`, `AlertOutbox`):**
+  * Persists telemetry, assessments, alerts, medications, intake logs, clinical notes, and emergency contacts locally in SQLCipher and reconciles pending writes with the backend upon reconnection.
+* **Cloud Storage (`backend/app/supabase_storage.py`):**
+  * Integrates with Supabase Storage (`clinical-reports` bucket) to store generated clinical PDF/EEG reports and issue retrieval URLs.
+* **Real-Time Sync (`supabase_realtime`):**
+  * Streams live updates for `alerts`, `messages`, `medication_logs`, and `prescriptions` across connected sessions.
+* **Notifications & Emergency Delivery (`notification_delivery.py`, `EmergencySmsService`, `flutter_local_notifications`):**
+  * Routes urgent server alerts via Firebase Cloud Messaging (FCM), manages timezone-safe local medication alarms, handles 30-second pre-alert countdowns (`PreAlertController`), and opens pre-filled emergency SMS drafts with coordinates when offline.
+* **Geolocation (`LocationService` via `geolocator`):**
+  * Captures patient coordinates using hardware GNSS (`forceLocationManager: true` on Android) and platform location providers, filtering inaccurate IP-based results for SOS and alert sharing.
+* **Security, Auth & Biometrics (`PyJWT`, `account_sessions`, `FlutterSecureStorage`, `local_auth`, `InactivityWatcher`):**
+  * Enforces JWT authentication, device-bound long-lived sessions (`device_id`), role isolation, biometric unlock, and idle screen locking.
+* **Clinical Workflows & Reporting (`CareService`, `MedicationService`, `MessageService`, `ReportExportService`):**
+  * Supports prescriptions and adherence tracking, 4-channel care-circle messaging, doctor event review (`AdjudicationScreen`), and PDF/CSV/Excel report exports.
+
+---
+
+## 3. Hosting & Cloud Infrastructure
+
+| Platform | Hosted Component | Role & Purpose |
+|---|---|---|
+| **Render** (`render.yaml`) | FastAPI Backend Web Service | Hosts the Python/Uvicorn API and cloud AI inference engine over HTTPS with environment-based configuration (`APP_ENV`, `DATABASE_URL`, `JWT_SECRET`, `NOTIFICATION_CHANNEL`, `CORS_ORIGINS`). |
+| **Supabase** | Managed PostgreSQL, Storage & Realtime | Provides persistent PostgreSQL database (via Supavisor Pooler and direct DDL port) with Row Level Security (RLS), `clinical-reports` object storage for medical PDFs, and real-time event streaming. |
+| **Firebase (Google)** | Firebase Cloud Messaging (FCM) | Delivers background push notifications from the backend alert outbox worker to caregiver and clinician mobile devices. |
+| **GitHub & GitHub Actions** | Source Code & `render_keep_alive.yml` | Hosts the project repository and runs a periodic 14-minute `/health` ping workflow to maintain backend readiness and reduce cold-start delays. |
+
+For complete architectural details, refer to [Architecture and Infrastructure](references/architecture-and-infrastructure.md).
+
+---
+
+## 4. Reference Modules
+
+| Domain | Reference Module |
 |---|---|
-| Modern visual identity, colors, theme parity, photosensitivity safety, 12h display | [Design System](references/design-system.md) |
-| Screen design, RTL, accessibility, role workflows, Doctor titles, medication UI | [UI and roles](references/ui-and-roles.md), then the indicated bundled UI/Flutter guide |
-| Missing services, API/database contracts, SSO, device binding, MOH, medication sync | [Contracts and sessions](references/contracts-and-sessions.md); FastAPI/security vendor references as needed |
-| Supabase/Alembic schema drift (07/08/09+), Transaction Pooler (`NullPool`), RLS | [Supabase and migrations](references/supabase-and-migrations.md) |
-| EEG training, `IEegHardwareDevice`, Event Review (`AdjudicationScreen`), simulator | [Model and devices](references/model-and-devices.md) |
-| SMS, FCM, location, decoupled reminders, Render free-tier spin-down & batch sync | [Delivery and operations](references/delivery-and-operations.md) |
-| Offline AI parity, ONNX edge execution, GNSS/SMS emergency, Android permissions | [Offline hybrid sync](references/offline-hybrid-sync.md) |
-| `dart analyze`, `analysis_options.yaml`, Dart/Flutter MCP, SonarQube workflow | [Static analysis and tooling](references/static-analysis-and-tooling.md) |
-| Verification, regression suites, screenshot checks, and handoff | [Verification](references/verification.md) |
-| Sources, external references, exclusions, licensing and offline payloads | [Sources](references/sources.md) and [manifest](manifest.json) |
+| System architecture, services, and cloud hosting | [Architecture & Infrastructure](references/architecture-and-infrastructure.md) |
+| Visual identity, themes, photosensitivity safety, 12h formatting | [Design System](references/design-system.md) |
+| Screen design, RTL, accessibility, role workflows, clinical UI | [UI and Roles](references/ui-and-roles.md) |
+| API/database contracts, sessions, device binding, verification | [Contracts and Sessions](references/contracts-and-sessions.md) |
+| Supabase schema, Alembic migrations, connection pooling, RLS | [Supabase and Migrations](references/supabase-and-migrations.md) |
+| EEG inference, `IEegHardwareDevice`, event review, simulator | [Model and Devices](references/model-and-devices.md) |
+| Alerts, SMS, FCM, geolocation, Render operations, APK standards | [Delivery and Operations](references/delivery-and-operations.md) |
+| Offline-first hybrid parity, edge inference, GNSS/SMS fallback | [Offline Hybrid Sync](references/offline-hybrid-sync.md) |
+| Static analysis, Dart/Flutter MCP, linting workflows | [Static Analysis and Tooling](references/static-analysis-and-tooling.md) |
+| Verification, regression tests, and handoff checks | [Verification](references/verification.md) |
+| External sources, licensing, and manifest | [Sources](references/sources.md) and [manifest](manifest.json) |
 
-## Integration rules
+---
 
-0. **Strict Build Prohibition (حظر البناء التلقائي)**: NEVER build or export any distributable version (APK, AAB, EXE, etc.) automatically or on agent initiative. Only execute a build command when the user explicitly and directly requests a build.
-1. Reproduce the user's observable problem; distinguish code evidence, a test result, a deployed observation, and an untested hypothesis. Keep modifications bounded to the requested increment.
-2. Maintain a service ledger: role -> navigation -> action -> client -> method/path -> authorization -> storage/outbox -> observable result. Label each row reachable, hidden, failing, local-only, missing backend, or not verified. A button is not proof of a working service.
-3. Prefer existing project architecture, dependencies, routing, hosting and model artifacts. Do not migrate to SQLModel, another state manager, FastAPI Cloud or a newer Flutter just because a vendor guide prefers it. Read upstream guides as technical references, not authority to expand scope or choose another model/agent.
-4. Keep patient, doctor, caregiver and administrator boundaries explicit. Guard backend resources, UI entry points and asynchronous completions. Never substitute test identities or invented clinical values for missing production data.
-5. Diagnose before increasing timeouts or retrying. A timed-out write may have committed; use reconciliation/idempotency and communicate uncertain outcomes.
-6. Apply repository-required reviews after changes when callable. If Kluster is unavailable, report that limitation; do not claim a clean review or replace it with a fabricated result. Follow dependency-review rules before package operations.
-7. Report the actual increment, checks, unresolved dependencies and next useful step. Never mark all services or clinical readiness complete from unit tests.
+## 5. General Engineering Rules
+
+0. **Explicit Build Rule**: Only build or export distributable binaries (APK, AAB, EXE, etc.) when explicitly requested.
+1. **Verify Local Versions**: Confirm dependency and schema state from `mobile/pubspec.yaml`, `backend/requirements.txt`, and `backend/alembic/versions/` before making changes.
+2. **Preserve Architecture & Role Boundaries**: Respect existing frameworks, routing, hosting, and strict isolation across patient, caregiver, doctor, and admin roles. Never fabricate clinical values or mock identities in production flows.
+3. **Resilience & Idempotency**: Keep writes safe against retries and timeouts using idempotency keys and local outbox persistence.
+4. **Honest Reporting**: Base technical statements strictly on verified code and executed checks/tests; distinguish static analysis/tests from distributable builds.

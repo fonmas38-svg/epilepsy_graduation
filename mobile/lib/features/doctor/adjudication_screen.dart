@@ -16,6 +16,7 @@ import '../../models/care_models.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
 import '../shared/alerts_list.dart';
+import 'event_evidence_view.dart';
 
 /// Localised name of a verdict. Public so the patient file shows the same word
 /// for the same decision.
@@ -80,6 +81,10 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
   bool _busy = false;
   List<_Pending> _items = const [];
   Failure? _failure;
+  int? _cursor;
+  int _offset = 0;
+  bool _remote = false;
+  bool _hasMore = false;
 
   @override
   void initState() {
@@ -93,7 +98,7 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
     });
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool more = false}) async {
     if (!_current) return;
     final app = context.read<AppState>();
     setState(() {
@@ -101,34 +106,103 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
       _failure = null;
     });
     try {
-      final out = <_Pending>[];
-      for (final p in app.auth.accessiblePatients()) {
-        if (widget.args != null && widget.args!.patientId != p.patientId) {
-          continue;
-        }
-        if (!_current) return;
-        final decided = await app.db.adjudicatedAlertIds(p.patientId);
-        final alerts = await app.db.alertsFor(p.patientId, limit: 100);
-        for (final a in alerts) {
-          if (decided.contains(a.id)) continue;
-          // `safe` means informational. Everything else — including a severity
-          // string this build does not recognise — is worth a human look.
-          if (alertRiskView(a.severity) == RiskView.safe) continue;
-          out.add(_Pending(alert: a, patientName: p.name));
+      final patients = app.auth
+          .accessiblePatients()
+          .where(
+            (p) => widget.args == null || widget.args!.patientId == p.patientId,
+          )
+          .toList();
+      final names = {for (final p in patients) p.patientId: p.name};
+      final page = <_Pending>[];
+      var remote = more && _remote;
+      if (!more) {
+        _cursor = null;
+        _offset = 0;
+      }
+      if ((more && _remote) ||
+          (!more && !app.auth.isDemoSession && app.api.tokens.hasSession)) {
+        try {
+          final response = await app.api.sendJson(
+            method: 'GET',
+            path: Uri(
+              path: '/doctor/review-queue',
+              queryParameters: {
+                'limit': '50',
+                if (more && _cursor != null) 'before': '$_cursor',
+                if (widget.args != null) 'patient_id': widget.args!.patientId,
+              },
+            ).toString(),
+          );
+          if (!_current) return;
+          if (response['items'] is! List) {
+            throw const FormatException('Invalid review queue');
+          }
+          for (final raw in response['items'] as List) {
+            final item = Map<String, dynamic>.from(raw as Map);
+            final alert = AlertItem.fromMap(
+              Map<String, dynamic>.from(item['alert'] as Map),
+            ).copyWith(serverOrigin: app.dataOrigin);
+            if (!names.containsKey(alert.patientId)) {
+              throw const FormatException('Unauthorized queue patient');
+            }
+            await app.db.insertAlert(alert);
+            if (!_current) return;
+            final local = await app.db.adjudicatedAlertIds(
+              alert.patientId,
+              serverOrigin: app.dataOrigin,
+            );
+            if (!local.contains(alert.id)) {
+              page.add(
+                _Pending(alert: alert, patientName: names[alert.patientId]!),
+              );
+            }
+          }
+          _cursor = (response['nextCursor'] as num?)?.toInt();
+          _hasMore = _cursor != null;
+          remote = true;
+        } catch (error) {
+          final failure = Failure.from(error);
+          if (more ||
+              (!failure.isConnectivity &&
+                  failure.kind != FailureKind.notFound)) {
+            rethrow;
+          }
+          remote = false;
         }
       }
-      out.sort((x, y) => y.alert.timestamp.compareTo(x.alert.timestamp));
+      if (!remote) {
+        final rows = await app.db.pendingReviewAlerts(
+          names.keys.toList(),
+          serverOrigin: app.dataOrigin,
+          offset: _offset,
+          limit: 51,
+        );
+        if (!_current) return;
+        _hasMore = rows.length > 50;
+        final slice = rows.take(50).toList();
+        _offset += slice.length;
+        page.addAll(
+          slice.map(
+            (alert) =>
+                _Pending(alert: alert, patientName: names[alert.patientId]!),
+          ),
+        );
+      }
       if (!_current) return;
       setState(() {
-        _items = out;
+        _remote = remote;
+        _items = [...(more ? _items : <_Pending>[]), ...page];
         _loading = false;
       });
-    } catch (e) {
+    } catch (error) {
       if (!_current) return;
       setState(() {
-        _failure = Failure.from(e);
         _loading = false;
+        if (!more) _failure = Failure.from(error);
       });
+      if (more && mounted) {
+        AppSnack.error(context, AppLocalizations.of(context).errUnknown);
+      }
     }
   }
 
@@ -161,12 +235,15 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
         verdict: draft.verdict,
         notes: combinedNotes,
         doctorId: _owner?.uid ?? '',
+        seizureType: draft.semiology,
+        artifactCause: draft.artifactCause,
       );
       if (!_current || !mounted) return;
       // Dropped from the queue immediately rather than after a reload: the row
       // has a verdict now, and leaving it visible invites a second one.
       setState(() {
         _items = _items.where((i) => i.alert.id != item.alert.id).toList();
+        if (!_remote && _offset > 0) _offset--;
         _busy = false;
       });
       AppSnack.success(context, l.savedLocallyWillSync);
@@ -198,7 +275,7 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
         loading: _loading,
         failure: _failure,
         value: _items,
-        isEmpty: (v) => v.isEmpty,
+        isEmpty: (v) => v.isEmpty && !_hasMore,
         onRetry: _load,
         emptyTitle: l.noAdjudicationsPending,
         emptyBody: l.adjNoRetrainNote,
@@ -209,8 +286,18 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
             padding: Insets.pageBottomSafe,
             children: [
               OfflineBanner(
-                visible: !app.apiOnline,
+                visible: !_remote,
                 pendingCount: app.care.pendingCount,
+              ),
+              InfoNote(
+                text: _remote
+                    ? (l.isArabic
+                          ? 'طابور الخادم؛ التحديث يجلب قرارات الأطباء الآخرين.'
+                          : 'Server queue; refresh reconciles other clinicians’ reviews.')
+                    : (l.isArabic
+                          ? 'نسخة محلية؛ قد توجد تنبيهات وقرارات أحدث على الخادم.'
+                          : 'Local copy; newer alerts and decisions may exist on the server.'),
+                icon: Icons.sync,
               ),
               InfoNote(text: l.adjudicationIntro, icon: Icons.rule_outlined),
               Gap.vSm,
@@ -232,6 +319,12 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
                         item: i,
                         enabled: !_busy,
                         onDecide: () => _decide(i),
+                      ),
+                    if (_hasMore)
+                      OutlinedButton.icon(
+                        onPressed: _loading ? null : () => _load(more: true),
+                        icon: const Icon(Icons.expand_more),
+                        label: Text(l.isArabic ? 'تحميل المزيد' : 'Load more'),
                       ),
                   ],
                 ),
@@ -384,20 +477,7 @@ class _VerdictSheetState extends State<_VerdictSheet> {
               ),
             ),
             Gap.vSm,
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
-                borderRadius: Radii.rMd,
-                border: Border.all(color: theme.dividerColor),
-              ),
-              child: Text(
-                ar
-                    ? 'قنوات الإشارة للحدث: EEG (256Hz) · ECG · التسارع الحركي (Motion) · نبض القلب (HR)'
-                    : 'Event telemetry channels: 4-ch EEG/ECG/Motion/HR window (256Hz)',
-                style: theme.textTheme.labelSmall,
-              ),
-            ),
+            EventEvidenceView(patientId: alert.patientId, alertId: alert.id),
             Gap.vMd,
             for (final v in AdjudicationVerdict.values) ...[
               _VerdictOption(
@@ -412,7 +492,9 @@ class _VerdictSheetState extends State<_VerdictSheet> {
               DropdownButtonFormField<String>(
                 initialValue: _semiology,
                 decoration: InputDecoration(
-                  labelText: ar ? 'نوع النوبة (Semiology)' : 'Seizure semiology',
+                  labelText: ar
+                      ? 'نوع النوبة (Semiology)'
+                      : 'Seizure semiology',
                 ),
                 items: const [
                   DropdownMenuItem(
@@ -440,7 +522,9 @@ class _VerdictSheetState extends State<_VerdictSheet> {
               DropdownButtonFormField<String>(
                 initialValue: _artifactCause,
                 decoration: InputDecoration(
-                  labelText: ar ? 'سبب التشويش / الإنذار الكاذب' : 'Artifact cause',
+                  labelText: ar
+                      ? 'سبب التشويش / الإنذار الكاذب'
+                      : 'Artifact cause',
                 ),
                 items: const [
                   DropdownMenuItem(
@@ -493,8 +577,7 @@ class _VerdictSheetState extends State<_VerdictSheet> {
                                 verdict: _verdict!,
                                 notes: _notes.text,
                                 semiology:
-                                    _verdict ==
-                                        AdjudicationVerdict.seizure
+                                    _verdict == AdjudicationVerdict.seizure
                                     ? _semiology
                                     : null,
                                 artifactCause:

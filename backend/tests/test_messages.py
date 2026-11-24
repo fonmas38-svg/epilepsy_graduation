@@ -211,3 +211,30 @@ def test_caregiver_cannot_overwrite_patient_location(client, test_setup):
     headers = {"Authorization": f"Bearer {test_setup['cg_token']}"}
     assert client.post(f"/patients/{test_setup['pat']['id']}/location",
         headers=headers, json={"latitude": 0, "longitude": 0}).status_code == 403
+
+
+def test_private_channels_hide_other_caregiver_and_unfiltered_role_reads(client, test_setup):
+    setup = test_setup
+    pid, cid = setup["pat"]["id"], setup["cg"]["id"]
+    doc = {"Authorization": f"Bearer {setup['doc_token']}"}
+    patient = {"Authorization": f"Bearer {setup['pat_token']}"}
+    second = create_user(username="second_private_carer", name="Second caregiver", role="caregiver",
+                         password_hash=security.hash_password("password123"))
+    link_caregiver(pid, second["id"])
+    other = {"Authorization": f"Bearer {create_token(second['id'], 'caregiver')}"}
+    response = client.post(f"/patients/{pid}/messages", headers=doc,
+        json={"channel_type": "doctor_caregiver", "peer_user_id": cid, "content": "private first caregiver"})
+    assert response.status_code == 201
+    private_id = response.json()["message"]["id"]
+    for headers, suffix in ((patient, ""), (other, "?channel_type=doctor_caregiver")):
+        rows = client.get(f"/patients/{pid}/messages{suffix}", headers=headers)
+        assert rows.status_code == 200
+        assert private_id not in {row["id"] for row in rows.json()["messages"]}
+    read = client.post(f"/patients/{pid}/messages/read", headers=other,
+                       json={"channel_type": "doctor_caregiver"})
+    assert read.json()["updated"] == 0
+    assert client.get(f"/patients/{pid}/messages?channel_type=doctor_caregiver&peer_user_id={cid}", headers=other).status_code == 403
+    assert client.post(f"/patients/{pid}/messages", headers=doc,
+        json={"channel_type": "doctor_caregiver", "content": "missing recipient"}).status_code == 422
+    assert client.post(f"/patients/{pid}/messages", headers=doc,
+        json={"channel_type": "doctor_caregiver", "peer_user_id": pid, "content": "wrong recipient"}).status_code == 403

@@ -23,7 +23,7 @@ def _admin_headers(client: TestClient) -> dict[str, str]:
     # /auth/login is the account login; /auth/token is for devices.
     response = client.post(
         "/auth/login",
-        json={"username": TEST_ADMIN_USERNAME, "password": TEST_ADMIN_PASSWORD},
+        json={"username": TEST_ADMIN_USERNAME, "password": TEST_ADMIN_PASSWORD, "device_id": "test-installation"},
     )
     assert response.status_code == 200, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}

@@ -84,11 +84,19 @@ class _MedicationScreenState extends State<MedicationScreen> {
       return;
     }
     try {
-      List<Map<String, dynamic>> doctorPrescriptions = const [];
-      if (mounted) {
-        try {
-          doctorPrescriptions = await context.read<AppState>().api.patientGetPrescriptions(patientId: pid);
-        } catch (_) {}
+      final app = context.read<AppState>();
+      final owner = app.auth.currentUser;
+      final origin = app.api.baseUrl;
+      try {
+        await _svc.synchronize(pid);
+      } catch (_) {
+        /* Local prescriptions remain readable offline. */
+      }
+      if (!mounted ||
+          _pid != pid ||
+          !AppUser.sameSessionOwner(owner, app.auth.currentUser) ||
+          origin != app.api.baseUrl) {
+        return;
       }
       final data = _MedData(
         meds: await _svc.forPatient(pid),
@@ -96,9 +104,13 @@ class _MedicationScreenState extends State<MedicationScreen> {
         week: await _svc.adherence(pid),
         month: await _svc.adherence(pid, days: 30),
         missed: await _svc.missedDoses(pid),
-        doctorPrescriptions: doctorPrescriptions,
       );
-      if (!mounted) return;
+      if (!mounted ||
+          _pid != pid ||
+          !AppUser.sameSessionOwner(owner, app.auth.currentUser) ||
+          origin != app.api.baseUrl) {
+        return;
+      }
       setState(() {
         _data = data;
         _loading = false;
@@ -160,26 +172,23 @@ class _MedicationScreenState extends State<MedicationScreen> {
       ),
     );
     if (draft == null || !mounted) return;
-    await _guard(
-      () async {
-        if (existing == null) {
-          await _svc.add(
-            patientId: pid,
-            name: draft.name,
-            dosage: draft.dosage,
-            times: draft.times,
-          );
-        } else {
-          await _svc.update(
-            existing,
-            name: draft.name,
-            dosage: draft.dosage,
-            times: draft.times,
-          );
-        }
-      },
-      l.saved,
-    );
+    await _guard(() async {
+      if (existing == null) {
+        await _svc.add(
+          patientId: pid,
+          name: draft.name,
+          dosage: draft.dosage,
+          times: draft.times,
+        );
+      } else {
+        await _svc.update(
+          existing,
+          name: draft.name,
+          dosage: draft.dosage,
+          times: draft.times,
+        );
+      }
+    }, l.saved);
   }
 
   Future<void> _togglePause(Medication med) async {
@@ -262,10 +271,13 @@ class _MedicationScreenState extends State<MedicationScreen> {
 
     final canPop = Navigator.canPop(context);
     final profile = app.auth.patientById(pid);
-    final isOtherPatient = widget.patientId != null &&
+    final isOtherPatient =
+        widget.patientId != null &&
         widget.patientId != app.auth.currentUser?.uid;
     final role = app.auth.currentUser?.role ?? UserRole.patient;
-    final canManageMeds = role == UserRole.doctor || role == UserRole.admin;
+    final canManageMeds =
+        app.auth.isDemoSession &&
+        (role == UserRole.doctor || role == UserRole.admin);
     final canTakeDose = role == UserRole.patient;
     final canShareAdherence = role == UserRole.patient;
     final theme = Theme.of(context);
@@ -365,17 +377,6 @@ class _MedicationScreenState extends State<MedicationScreen> {
                 onShare: canShareAdherence ? () => _share(d) : null,
               ),
               Gap.vMd,
-              if (d.doctorPrescriptions.isNotEmpty) ...[
-                _DoctorPrescriptionsSection(
-                  prescriptions: d.doctorPrescriptions,
-                  existingMeds: d.meds,
-                  onImport: (rx) => _addOrEdit(
-                    initialName: rx['name']?.toString(),
-                    initialDosage: rx['dose']?.toString(),
-                  ),
-                ),
-                Gap.vMd,
-              ],
               _TodaySection(
                 schedule: d.schedule,
                 enabled: !_busy && canTakeDose,
@@ -410,7 +411,6 @@ class _MedData {
     required this.week,
     required this.month,
     required this.missed,
-    this.doctorPrescriptions = const [],
   });
 
   final List<Medication> meds;
@@ -418,7 +418,6 @@ class _MedData {
   final double week;
   final double month;
   final int missed;
-  final List<Map<String, dynamic>> doctorPrescriptions;
 }
 
 class _MedDraft {
@@ -646,15 +645,18 @@ class _DoseTile extends StatelessWidget {
     final med = entry.medication;
     final dosage = med.dosage.isEmpty ? '' : ' · ${med.dosage}';
 
+    final safe = AppColors.of(context, RiskView.safe);
+    final caution = AppColors.of(context, RiskView.caution);
+    final colors = Theme.of(context).colorScheme;
     final Color cardBg = taken
-        ? const Color(0xFFF1F8F4)
-        : (overdue ? const Color(0xFFFFF7ED) : Colors.white);
+        ? safe.container
+        : (overdue ? caution.container : colors.surface);
     final Color borderColor = taken
-        ? const Color(0xFFC8E6C9)
-        : (overdue ? const Color(0xFFFFD8A8) : const Color(0xFFE4EDF7));
+        ? safe.border
+        : (overdue ? caution.border : colors.outlineVariant);
     final Color iconColor = taken
-        ? const Color(0xFF2E7D32)
-        : (overdue ? const Color(0xFFE65100) : const Color(0xFF0066FF));
+        ? safe.foreground
+        : (overdue ? caution.foreground : colors.primary);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -666,7 +668,9 @@ class _DoseTile extends StatelessWidget {
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF0D253C).withValues(alpha: 0.03),
+              color: Theme.of(
+                context,
+              ).colorScheme.onSurface.withValues(alpha: 0.03),
               blurRadius: 10,
               offset: const Offset(0, 3),
             ),
@@ -684,7 +688,9 @@ class _DoseTile extends StatelessWidget {
               child: Icon(
                 taken
                     ? Icons.check_circle_rounded
-                    : (overdue ? Icons.warning_amber_rounded : Icons.medication_rounded),
+                    : (overdue
+                          ? Icons.warning_amber_rounded
+                          : Icons.medication_rounded),
                 color: iconColor,
                 size: 24,
               ),
@@ -696,10 +702,10 @@ class _DoseTile extends StatelessWidget {
                 children: [
                   Text(
                     '${med.name}$dosage',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 15,
-                      color: Color(0xFF0D253C),
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 3),
@@ -708,7 +714,9 @@ class _DoseTile extends StatelessWidget {
                         ? '${l.takenAt} ${TimeAgo.clock(entry.log?.takenAt ?? DateTime.now(), l)}'
                         : '${l.dueAt} ${TimeAgo.formatHhmm12h(entry.time, isArabic: l.isArabic)}',
                     style: TextStyle(
-                      color: taken ? const Color(0xFF2E7D32) : const Color(0xFF6B7A99),
+                      color: taken
+                          ? const Color(0xFF2E7D32)
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
                       fontSize: 12.5,
                       fontWeight: FontWeight.w500,
                     ),
@@ -719,7 +727,10 @@ class _DoseTile extends StatelessWidget {
             const SizedBox(width: 10),
             if (taken)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFE8F5E9),
                   borderRadius: BorderRadius.circular(10),
@@ -841,6 +852,9 @@ class _MedTile extends StatelessWidget {
     final subtitle = [
       if (med.dosage.isNotEmpty) med.dosage,
       scheduleLabel(med.schedule, l),
+      if (medicationContextLabel(med, l).isNotEmpty)
+        medicationContextLabel(med, l),
+      if (med.prescriptionId != null && med.times.isEmpty) l.notSet,
       if (med.times.isNotEmpty)
         med.times
             .map((t) => TimeAgo.formatHhmm12h(t, isArabic: l.isArabic))
@@ -922,11 +936,7 @@ class _MedTile extends StatelessWidget {
 // ---------------------------------------------------------------- add / edit
 
 class _MedSheet extends StatefulWidget {
-  const _MedSheet({
-    this.existing,
-    this.initialName,
-    this.initialDosage,
-  });
+  const _MedSheet({this.existing, this.initialName, this.initialDosage});
 
   final Medication? existing;
   final String? initialName;
@@ -944,8 +954,12 @@ class _MedSheetState extends State<_MedSheet> {
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController(text: widget.existing?.name ?? widget.initialName ?? '');
-    _dosage = TextEditingController(text: widget.existing?.dosage ?? widget.initialDosage ?? '');
+    _name = TextEditingController(
+      text: widget.existing?.name ?? widget.initialName ?? '',
+    );
+    _dosage = TextEditingController(
+      text: widget.existing?.dosage ?? widget.initialDosage ?? '',
+    );
     // Two defaults for a new drug, matching `MedicationService.add`. Most
     // anti-epileptics are twice daily, and a plan with no times generates no
     // reminders at all — the one outcome this screen exists to prevent.
@@ -1082,134 +1096,3 @@ class _MedSheetState extends State<_MedSheet> {
     );
   }
 }
-
-// ---------------------------------------------------------------- doctor prescriptions
-
-class _DoctorPrescriptionsSection extends StatelessWidget {
-  const _DoctorPrescriptionsSection({
-    required this.prescriptions,
-    required this.existingMeds,
-    required this.onImport,
-  });
-
-  final List<Map<String, dynamic>> prescriptions;
-  final List<Medication> existingMeds;
-  final void Function(Map<String, dynamic> rx) onImport;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final activeRx = prescriptions.where((p) => p['active'] == true).toList();
-    if (activeRx.isEmpty) return const SizedBox.shrink();
-
-    return SectionCard(
-      title: 'وصفات الطبيب المعالج',
-      subtitle: 'الأدوية المعتمدة طبياً من طبيبك مع إمكانية إدراجها في جدول التذكيرات اليومي',
-      icon: Icons.medical_services_outlined,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final rx in activeRx) ...[
-            Builder(builder: (context) {
-              final name = rx['name']?.toString() ?? '';
-              final dose = rx['dose']?.toString() ?? '';
-              final schedule = rx['schedule']?.toString() ?? '';
-              final notes = rx['notes']?.toString();
-              final isAlreadyInMeds = existingMeds.any(
-                (m) => m.name.trim().toLowerCase() == name.trim().toLowerCase(),
-              );
-
-              return Container(
-                margin: const EdgeInsets.only(bottom: Gap.sm),
-                padding: const EdgeInsets.all(Gap.sm),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.3),
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.medication_outlined, color: theme.colorScheme.primary),
-                        Gap.hSm,
-                        Expanded(
-                          child: Text(
-                            '$name · $dose',
-                            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        if (isAlreadyInMeds)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFE8F5E9),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.check, size: 14, color: Color(0xFF2E7D32)),
-                                SizedBox(width: 4),
-                                Text(
-                                  'مُدرج في جدولك',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF2E7D32),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                        else
-                          FilledButton.tonalIcon(
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                            onPressed: () => onImport(rx),
-                            icon: const Icon(Icons.add_task, size: 16),
-                            label: const Text('إدراج في التذكير', style: TextStyle(fontSize: 12)),
-                          ),
-                      ],
-                    ),
-                    if (schedule.isNotEmpty) ...[
-                      Gap.vXs,
-                      Padding(
-                        padding: const EdgeInsets.only(right: 28),
-                        child: Text(
-                          'نظام الجرعات: $schedule',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ],
-                    if (notes != null && notes.isNotEmpty) ...[
-                      Gap.vXxs,
-                      Padding(
-                        padding: const EdgeInsets.only(right: 28),
-                        child: Text(
-                          'تعليمات الطبيب: $notes',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.primary,
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              );
-            }),
-          ],
-        ],
-      ),
-    );
-  }
-}
-

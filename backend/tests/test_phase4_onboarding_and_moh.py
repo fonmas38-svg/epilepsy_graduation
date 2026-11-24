@@ -1,5 +1,6 @@
 """Phase 4 backend verification: MOH license verification, doctor profiles, idempotency keys, optional email, and doctor dashboard summary."""
 from __future__ import annotations
+from tests.account_payloads import doctor_payload, patient_payload
 
 from fastapi.testclient import TestClient
 
@@ -72,7 +73,7 @@ def test_create_doctor_with_moh_verification_override_and_idempotency():
     r_reject = client.post(
         "/admin/doctors",
         headers=headers,
-        json={
+        json=doctor_payload({
             "username": "dr_unverified_1",
             "name": "د. طارق غير مسجل",
             "password": "password123",
@@ -83,7 +84,7 @@ def test_create_doctor_with_moh_verification_override_and_idempotency():
             "hospital_affiliation": "مستشفى التخصصي",
             "national_id": "1077777771",
             "moh_override": False,
-        },
+        }),
     )
     assert r_reject.status_code == 422
 
@@ -102,7 +103,7 @@ def test_create_doctor_with_moh_verification_override_and_idempotency():
         "moh_override": True,
         "idempotency_key": idem_key,
     }
-    r_create = client.post("/admin/doctors", headers=headers, json=payload)
+    r_create = client.post("/admin/doctors", headers=headers, json=doctor_payload(payload))
     assert r_create.status_code == 201
     doc_user = r_create.json()["user"]
     assert doc_user["email"] == "tareq@hospital.sa"
@@ -111,7 +112,7 @@ def test_create_doctor_with_moh_verification_override_and_idempotency():
     assert doc_user["doctorProfile"]["mohOverrideBy"] is not None
 
     # Re-sending identical request with same idempotency_key returns cached result instead of 409
-    r_retry = client.post("/admin/doctors", headers=headers, json=payload)
+    r_retry = client.post("/admin/doctors", headers=headers, json=doctor_payload(payload))
     assert r_retry.status_code in (200, 201)
     assert r_retry.json()["user"]["id"] == doc_user["id"]
 
@@ -124,7 +125,7 @@ def test_patient_creation_idempotency_and_doctor_dashboard_summary():
     r_doc = client.post(
         "/admin/doctors",
         headers=headers,
-        json={"username": "dr_summary_doc", "name": "د. مازن العتيبي", "password": "password123"},
+        json=doctor_payload({"username": "dr_summary_doc", "name": "د. مازن العتيبي", "password": "password123"}),
     )
     assert r_doc.status_code == 201
     doc_id = r_doc.json()["user"]["id"]
@@ -143,13 +144,13 @@ def test_patient_creation_idempotency_and_doctor_dashboard_summary():
         "diagnosis": "صرع بؤري",
         "idempotency_key": "idem-pat-summary-1",
     }
-    r1 = client.post("/doctor/patients", headers=doc_headers, json=pat_payload)
+    r1 = client.post("/doctor/patients", headers=doc_headers, json=patient_payload(pat_payload))
     assert r1.status_code == 201
     pat_id = r1.json()["user"]["id"]
     assert r1.json()["user"]["email"] == "salman@patient.sa"
 
     # Retry with same idempotency_key does not throw 409 Conflict
-    r2 = client.post("/doctor/patients", headers=doc_headers, json=pat_payload)
+    r2 = client.post("/doctor/patients", headers=doc_headers, json=patient_payload(pat_payload))
     assert r2.status_code in (200, 201)
     assert r2.json()["user"]["id"] == pat_id
 

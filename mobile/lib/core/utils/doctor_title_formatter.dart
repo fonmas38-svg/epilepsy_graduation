@@ -5,7 +5,7 @@ class DoctorTitleFormatter {
   DoctorTitleFormatter._();
 
   static final RegExp _existingTitle = RegExp(
-    r'^(?:الدكتورة|الدكتور|دكتورة|دكتور|د\.|د/|dr\.?)\s*',
+    r'^(?:(?:الدكتورة|الدكتور|دكتورة|دكتور)\s+|د[./]\s*|dr\.\s*|dr\s+)',
     caseSensitive: false,
   );
 
@@ -20,7 +20,10 @@ class DoctorTitleFormatter {
     if (trimmed.isEmpty) return isArabic ? 'د.' : 'Dr.';
     if (role != UserRole.doctor) return trimmed;
 
-    final stripped = trimmed.replaceFirst(_existingTitle, '').trim();
+    var stripped = trimmed;
+    while (_existingTitle.hasMatch(stripped)) {
+      stripped = stripped.replaceFirst(_existingTitle, '').trim();
+    }
     final core = stripped.isEmpty ? trimmed : stripped;
     final prefix = isArabic ? 'د. ' : 'Dr. ';
     return '$prefix$core';

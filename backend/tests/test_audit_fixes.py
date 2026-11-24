@@ -1,4 +1,5 @@
 """Security/atomicity regressions from the October audit (temporary stores only)."""
+from tests.account_payloads import patient_payload
 from dataclasses import replace
 import importlib
 
@@ -42,10 +43,10 @@ def test_cannot_link_admin_as_caregiver_or_leave_partial_patient():
     doctor = account("audit-doctor", "doctor")
     admin = account("audit-admin", "admin")
     with TestClient(app, raise_server_exceptions=False) as client:
-        result = client.post("/doctor/patients", headers=headers(doctor), json={
+        result = client.post("/doctor/patients", headers=headers(doctor), json=patient_payload({
             "username": "new-patient", "name": "Patient", "password": "test-password",
             "caregiver_name": "Caregiver", "caregiver_username": admin["username"],
-        })
+        }))
         assert result.status_code == 409
         assert users_store.get_by_username("new-patient") is None
     patient = account("patient-for-link", "patient")
@@ -78,9 +79,9 @@ def test_caregiver_disable_is_scoped_to_relationship(monkeypatch):
 def test_patient_creation_with_clinical_fields_is_atomic(monkeypatch):
     doctor = account("clinical-doctor", "doctor")
     payload = {"username": "clinical-patient", "name": "Patient", "diagnosis": "Recorded diagnosis",
-               "phone": "123456", "age": 30, "notes": "Recorded notes", "password": "test-password"}
+               "phone": "+967771234567", "age": 30, "notes": "Recorded notes", "password": "test-password"}
     with TestClient(app, raise_server_exceptions=False) as client:
-        result = client.post("/doctor/patients", headers=headers(doctor), json=payload)
+        result = client.post("/doctor/patients", headers=headers(doctor), json=patient_payload(payload))
         assert result.status_code == 201, result.text
         patient = result.json()["user"]
         assert users_store.is_assigned(patient["id"], doctor["id"])
@@ -88,10 +89,10 @@ def test_patient_creation_with_clinical_fields_is_atomic(monkeypatch):
         def fail(*args, **kwargs):
             raise RuntimeError("injected storage failure")
         monkeypatch.setattr(users_store, "assign_patient", fail)
-        failed = client.post("/doctor/patients", headers=headers(doctor), json={
+        failed = client.post("/doctor/patients", headers=headers(doctor), json=patient_payload({
             **payload, "username": "rolled-back-patient", "caregiver_name": "Rollback caregiver",
             "caregiver_username": "rolled-back-caregiver",
-        })
+        }))
         assert failed.status_code == 500
         assert users_store.get_by_username("rolled-back-patient") is None
         assert users_store.get_by_username("rolled-back-caregiver") is None

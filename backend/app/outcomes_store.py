@@ -39,6 +39,14 @@ def _outcome(row) -> dict:
     return payload
 
 
+def _detach_report(conn, row):
+    payload = load_json(row._mapping["payload_json"], {})
+    payload["reported_alert_id"] = row._mapping["alert_id"]
+    conn.execute(update(outcomes).where(outcomes.c.id == row._mapping["id"]).values(
+        alert_id=None, payload_json=dump_json(payload)))
+    return conn.execute(select(outcomes).where(outcomes.c.id == row._mapping["id"])).one()
+
+
 def add_outcome(
     *,
     patient_id: str,
@@ -54,11 +62,20 @@ def add_outcome(
 ) -> dict:
     outcome_id, recorded_at = client_id or str(uuid4()), _now()
     with transaction() as conn:
+        metadata = dict(metadata or {})
+        if metadata.get("record_kind") == "reported_seizure_log" and alert_id:
+            if not conn.execute(select(alerts.c.id).where(alerts.c.id == alert_id, alerts.c.patient_id == patient_id)).first():
+                raise ValueError("alert does not belong to this patient")
+            metadata["reported_alert_id"] = alert_id
+            alert_id = None
         if client_id:
             previous = conn.execute(
                 select(outcomes).where(outcomes.c.id == client_id)
             ).first()
             if previous:
+                if (load_json(previous._mapping["payload_json"], {}).get("record_kind") == "reported_seizure_log"
+                        and previous._mapping["alert_id"]):
+                    previous = _detach_report(conn, previous)
                 saved = _outcome(previous)
                 if (
                     saved["patientId"] != patient_id
@@ -80,15 +97,18 @@ def add_outcome(
                     outcomes.c.alert_id == alert_id,
                 )
             ).first()
+            if (existing_alert_outcome and load_json(existing_alert_outcome._mapping["payload_json"], {}).get("record_kind") == "reported_seizure_log"):
+                _detach_report(conn, existing_alert_outcome)
+                existing_alert_outcome = None
             if existing_alert_outcome:
                 current_ver = int(existing_alert_outcome._mapping.get("version") or 1)
                 existing_id = existing_alert_outcome._mapping["id"]
                 if expected_version is None or int(expected_version) != current_ver:
                     raise ValueError("outcome version conflict for this alert")
                 next_ver = current_ver + 1
-                conn.execute(
+                result = conn.execute(
                     update(outcomes)
-                    .where(outcomes.c.id == existing_id)
+                    .where(outcomes.c.id == existing_id, outcomes.c.version == current_ver)
                     .values(
                         outcome=outcome,
                         occurred_at=occurred_at,
@@ -99,6 +119,8 @@ def add_outcome(
                         version=next_ver,
                     )
                 )
+                if result.rowcount != 1:
+                    raise ValueError("outcome version conflict for this alert")
                 return get_outcome(existing_id)
 
         if (

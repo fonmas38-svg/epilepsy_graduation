@@ -34,6 +34,8 @@ class Session implements AuthService {
 
 class Tokens implements TokenProvider {
   @override
+  int get revision => 0;
+  @override
   bool get hasSession => true;
   @override
   dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
@@ -68,13 +70,17 @@ class Store implements LocalDatabase {
   Future<void> deleteOutbox(String id) async =>
       queue.removeWhere((e) => e.id == id);
   @override
-  Future<void> markSynced(List<String> ids) async => synced.addAll(ids);
+  Future<void> markSynced(List<String> ids, {String serverOrigin = ''}) async =>
+      synced.addAll(ids);
   @override
-  Future<List<VitalReading>> unsyncedReadings(String patientId) async =>
-      synced.contains('r1') ? [] : [reading()];
+  Future<List<VitalReading>> unsyncedReadings(
+    String patientId, {
+    String serverOrigin = '',
+  }) async => synced.contains('r1') ? [] : [reading()];
   @override
   Future<List<RiskAssessment>> assessmentsFor(
     String patientId, {
+    String serverOrigin = '',
     int limit = 100,
   }) async => saved;
   @override
@@ -82,6 +88,8 @@ class Store implements LocalDatabase {
 }
 
 class Cloud implements ApiClient {
+  @override
+  String get baseUrl => 'https://cloud.invalid';
   @override
   final TokenProvider tokens = Tokens();
   bool healthy = true;

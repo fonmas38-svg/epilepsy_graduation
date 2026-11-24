@@ -24,6 +24,8 @@ void main() {
     });
 
     test('DoctorTitleFormatter applies idempotent doctor honorifics', () {
+      expect(DoctorTitleFormatter.format('د. Dr. الدكتور خالد'), 'د. خالد');
+      expect(DoctorTitleFormatter.format('Drew', isArabic: false), 'Dr. Drew');
       expect(
         DoctorTitleFormatter.format('مطهر', role: UserRole.doctor),
         'د. مطهر',
@@ -33,7 +35,10 @@ void main() {
         'د. مطهر',
       );
       expect(
-        DoctorTitleFormatter.format('الدكتور خالد العمري', role: UserRole.doctor),
+        DoctorTitleFormatter.format(
+          'الدكتور خالد العمري',
+          role: UserRole.doctor,
+        ),
         'د. خالد العمري',
       );
       expect(
@@ -54,21 +59,26 @@ void main() {
       );
     });
 
-    test('AppUser.sameSessionOwner preserves session identity across immutable copies', () {
-      final beforeAdd = AppUser(
-        uid: 'doc-1',
-        name: 'د. مطهر',
-        email: 'doc@epilepsy.local',
-        role: UserRole.doctor,
-        linkedPatientIds: const ['p1'],
-      );
-      final afterAdd = beforeAdd.copyWith(linkedPatientIds: const ['p1', 'p2']);
+    test(
+      'AppUser.sameSessionOwner preserves session identity across immutable copies',
+      () {
+        final beforeAdd = AppUser(
+          uid: 'doc-1',
+          name: 'د. مطهر',
+          email: 'doc@epilepsy.local',
+          role: UserRole.doctor,
+          linkedPatientIds: const ['p1'],
+        );
+        final afterAdd = beforeAdd.copyWith(
+          linkedPatientIds: const ['p1', 'p2'],
+        );
 
-      expect(identical(beforeAdd, afterAdd), isFalse);
-      expect(AppUser.sameSessionOwner(beforeAdd, afterAdd), isTrue);
-      expect(AppUser.sameSessionOwner(null, null), isTrue);
-      expect(AppUser.sameSessionOwner(beforeAdd, null), isFalse);
-    });
+        expect(identical(beforeAdd, afterAdd), isFalse);
+        expect(AppUser.sameSessionOwner(beforeAdd, afterAdd), isTrue);
+        expect(AppUser.sameSessionOwner(null, null), isTrue);
+        expect(AppUser.sameSessionOwner(beforeAdd, null), isFalse);
+      },
+    );
 
     test('HTTP 409 maps to FailureKind.conflict', () {
       final failure = Failure.from(

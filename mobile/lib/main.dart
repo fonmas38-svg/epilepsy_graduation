@@ -90,7 +90,7 @@ class EpilepsyApp extends StatelessWidget {
             debugShowCheckedModeBanner: false,
             theme: AppTheme.light(),
             darkTheme: AppTheme.dark(),
-            themeAnimationDuration: const Duration(milliseconds: 220),
+            themeAnimationDuration: Duration.zero,
             themeAnimationCurve: Curves.easeInOut,
             // Dark mode is not optional (§2.4): a patient checking their status
             // at 3 a.m. should not be hit with a white screen.

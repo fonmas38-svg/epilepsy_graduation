@@ -334,10 +334,14 @@ class _TriggerRow extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isDark ? theme.colorScheme.surfaceContainerHighest : const Color(0xFFF8FAFC),
+        color: isDark
+            ? theme.colorScheme.surfaceContainerHighest
+            : const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isDark ? theme.colorScheme.outlineVariant : const Color(0xFFE4EDF7),
+          color: isDark
+              ? theme.colorScheme.outlineVariant
+              : Theme.of(context).colorScheme.outlineVariant,
           width: 1,
         ),
       ),
@@ -367,15 +371,17 @@ class _TriggerRow extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
-                    color: isDark ? theme.colorScheme.onSurface : const Color(0xFF0D253C),
+                    color: isDark
+                        ? theme.colorScheme.onSurface
+                        : const Color(0xFF0D253C),
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: Color(0xFF64748B),
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
                 if (entry.note.isNotEmpty) ...[
@@ -384,7 +390,9 @@ class _TriggerRow extends StatelessWidget {
                     entry.note,
                     style: TextStyle(
                       fontSize: 12,
-                      color: isDark ? theme.colorScheme.onSurfaceVariant : const Color(0xFF334155),
+                      color: isDark
+                          ? theme.colorScheme.onSurfaceVariant
+                          : const Color(0xFF334155),
                     ),
                   ),
                 ],
@@ -394,9 +402,9 @@ class _TriggerRow extends StatelessWidget {
           IconButton(
             tooltip: l.delete,
             onPressed: onDelete,
-            icon: const Icon(
+            icon: Icon(
               Icons.delete_outline_rounded,
-              color: Color(0xFF94A3B8),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
               size: 20,
             ),
           ),

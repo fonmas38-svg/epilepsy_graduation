@@ -71,6 +71,8 @@ def create_token(subject: str, role: Role, extra: dict | None = None, *,
         try:
             session = account_sessions_store.create(subject, role, session_expiry,
                 expected_version=expected_session_version, **(session_context or {}))
+        except account_sessions_store.DeviceBindingConflict as exc:
+            raise AuthError(str(exc), code=status.HTTP_409_CONFLICT) from exc
         except ValueError as exc:
             raise AuthError(str(exc)) from exc
         payload["session_version"] = session["session_version"]

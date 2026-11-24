@@ -45,6 +45,47 @@ void main() {
   tearDown(() async => sql.close());
 
   test(
+    'clinical contract migration preserves v7 rows and is idempotent',
+    () async {
+      final legacy = await databaseFactoryFfi.openDatabase(
+        inMemoryDatabasePath,
+        options: OpenDatabaseOptions(singleInstance: false),
+      );
+      try {
+        await legacy.execute(
+          'CREATE TABLE messages (id TEXT PRIMARY KEY, content TEXT)',
+        );
+        await legacy.execute(
+          "INSERT INTO messages VALUES ('pending', 'Keep me')",
+        );
+        await legacy.execute(
+          'CREATE TABLE medications (id TEXT PRIMARY KEY, name TEXT)',
+        );
+        await legacy.execute(
+          "INSERT INTO medications VALUES ('old-rx', 'Existing medicine')",
+        );
+        await legacy.execute(
+          'CREATE TABLE medication_logs (id TEXT PRIMARY KEY, status TEXT)',
+        );
+        await migrateClinicalContracts(legacy);
+        await migrateClinicalContracts(legacy);
+        expect((await legacy.query('messages')).single['content'], 'Keep me');
+        expect(
+          (await legacy.query('medications')).single['name'],
+          'Existing medicine',
+        );
+        final columns = await legacy.rawQuery('PRAGMA table_info(messages)');
+        expect(
+          columns.map((r) => r['name']),
+          containsAll(['peerUserId', 'deliveredAt']),
+        );
+      } finally {
+        await legacy.close();
+      }
+    },
+  );
+
+  test(
     'explicit retry preserves payload and never resets another source',
     () async {
       final own = delivery('own', attempts: OutboxItem.maxAttempts);

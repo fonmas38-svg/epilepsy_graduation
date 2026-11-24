@@ -1,3 +1,4 @@
+import 'patient_file_screen.dart';
 import 'dart:math';
 import '../../core/ui/workspace_scaffold.dart';
 import 'package:flutter/material.dart';
@@ -70,6 +71,8 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
   List<_Row> _rows = const [];
   _Sort _sort = _Sort.attention;
   final Set<_Filter> _filters = {};
+  String? _selectedPatient;
+  bool _showTwoPane = false;
 
   @override
   void initState() {
@@ -91,38 +94,55 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
       _loading = true;
       _failure = null;
     });
+    final owner = app.auth.currentUser;
+    final origin = app.api.baseUrl;
+    final revision = app.api.tokens.revision;
+    bool current() =>
+        mounted &&
+        AppUser.sameSessionOwner(owner, app.auth.currentUser) &&
+        origin == app.api.baseUrl &&
+        revision == app.api.tokens.revision;
     try {
+      final patients = app.auth.accessiblePatients();
+      final snapshot = await app.db.dashboardSnapshot(
+        patients.map((p) => p.patientId).toList(),
+        serverOrigin: app.dataOrigin,
+        includeCare: true,
+      );
+      if (!current()) return;
       final rows = <_Row>[];
-      for (final p in app.auth.accessiblePatients()) {
-        final assessments = await app.db.assessmentsFor(p.patientId, limit: 1);
-        final alerts = await app.db.alertsFor(p.patientId, limit: 100);
-        final decided = await app.db.adjudicatedAlertIds(p.patientId);
+      for (final p in patients) {
+        final assessment = snapshot.latest[p.patientId];
+        final alerts = snapshot.alerts[p.patientId] ?? <AlertItem>[];
         // Same rule as the adjudication queue (§5.4): informational alerts are
         // never pending, and an unrecognised severity is.
         final pending = alerts
             .where(
               (a) =>
-                  !decided.contains(a.id) &&
+                  !snapshot.reviewed.contains('${p.patientId}::${a.id}') &&
                   alertRiskView(a.severity) != RiskView.safe,
             )
             .length;
         rows.add(
           _Row(
             profile: p,
-            latest: assessments.isEmpty ? null : assessments.first,
+            latest: assessment,
             alerts: alerts,
             pendingAdjudications: pending,
-            adherence: await app.medication.adherence(p.patientId),
+            adherence: app.medication.adherenceFromSnapshot(
+              snapshot.medications[p.patientId] ?? [],
+              snapshot.logs[p.patientId] ?? [],
+            ),
           ),
         );
       }
-      if (!mounted) return;
+      if (!current()) return;
       setState(() {
         _rows = rows;
         _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!current()) return;
       setState(() {
         _failure = Failure.from(e);
         _loading = false;
@@ -150,6 +170,10 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
   /// Select, then open. The file screen loads that patient's notes and consents,
   /// and both are per-patient state on `CareService`.
   Future<void> _open(_Row row) async {
+    if (_showTwoPane) {
+      setState(() => _selectedPatient = row.profile.patientId);
+      return;
+    }
     final app = context.read<AppState>();
     setState(() => _busy = true);
     try {
@@ -182,7 +206,7 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
         final match = switch (f) {
           _Filter.newAlerts => r.unacked > 0,
           _Filter.brokenDevice => r.notReporting,
-          _Filter.lowAdherence => r.adherence < _lowAdherence,
+          _Filter.lowAdherence => (r.adherence ?? 1) < _lowAdherence,
         };
         // Filters are additive: every selected one must hold, otherwise
         // selecting two of them would widen the list instead of narrowing it.
@@ -222,90 +246,123 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
             ),
           ],
         ),
-        body: AsyncView<List<_Row>>(
-          loading: _loading,
-          failure: _failure,
-          value: _rows,
-          isEmpty: (v) => v.isEmpty,
-          onRetry: _load,
-          emptyTitle: l.noPatientsYet,
-          emptyBody:
-              'يمكنك إضافة مريضك الأول الآن للبدء بمتابعة حالته السريرية وإشاراته الحيوية',
-          emptyIcon: Icons.people_outline,
-          builder: (context, _) => RefreshIndicator(
-            onRefresh: _refresh,
-            child: ResponsiveContent(
-              maxWidth: 850,
-              child: ListView(
-                padding: Insets.pageBottomSafe,
-                children: [
-                  OfflineBanner(
-                    visible: !app.apiOnline,
-                    lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
-                    pendingCount: app.care.pendingCount,
-                  ),
-                  TextField(
-                    controller: _search,
-                    textInputAction: TextInputAction.search,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      labelText: l.searchByName,
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _search.text.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: l.cancel,
-                              onPressed: () => setState(_search.clear),
-                              icon: const Icon(Icons.close),
-                            ),
-                    ),
-                  ),
-                  Gap.vSm,
-                  _Controls(
-                    sort: _sort,
-                    filters: _filters,
-                    onSort: (s) => setState(() => _sort = s),
-                    onToggle: (f) => setState(() {
-                      if (!_filters.remove(f)) _filters.add(f);
-                    }),
-                  ),
-                  Gap.vMd,
-                  SectionCard(
-                    title: l.patientsList,
-                    icon: Icons.people_outline,
-                    trailing: Text(
-                      '${rows.length}/${_rows.length}',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    child: rows.isEmpty
-                        ? EmptyState(
-                            title: l.emptyTitle,
-                            body: l.emptyBody,
-                            icon: Icons.filter_alt_off_outlined,
-                            compact: true,
-                          )
-                        : Column(
-                            children: [
-                              for (final r in rows)
-                                _PatientTile(
-                                  row: r,
-                                  enabled: !_busy,
-                                  onOpen: () => _open(r),
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            _showTwoPane = constraints.maxWidth >= 900;
+            final list = AsyncView<List<_Row>>(
+              loading: _loading,
+              failure: _failure,
+              value: _rows,
+              isEmpty: (v) => v.isEmpty,
+              onRetry: _load,
+              emptyTitle: l.noPatientsYet,
+              emptyBody:
+                  'يمكنك إضافة مريضك الأول الآن للبدء بمتابعة حالته السريرية وإشاراته الحيوية',
+              emptyIcon: Icons.people_outline,
+              builder: (context, _) => RefreshIndicator(
+                onRefresh: _refresh,
+                child: ResponsiveContent(
+                  maxWidth: 850,
+                  child: ListView(
+                    padding: Insets.pageBottomSafe,
+                    children: [
+                      OfflineBanner(
+                        visible: !app.apiOnline,
+                        lastUpdateLabel: TimeAgo.since(
+                          app.care.lastSyncedAt,
+                          l,
+                        ),
+                        pendingCount: app.care.pendingCount,
+                      ),
+                      TextField(
+                        controller: _search,
+                        textInputAction: TextInputAction.search,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          labelText: l.searchByName,
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: _search.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: l.cancel,
+                                  onPressed: () => setState(_search.clear),
+                                  icon: const Icon(Icons.close),
                                 ),
-                            ],
-                          ),
+                        ),
+                      ),
+                      Gap.vSm,
+                      _Controls(
+                        sort: _sort,
+                        filters: _filters,
+                        onSort: (s) => setState(() => _sort = s),
+                        onToggle: (f) => setState(() {
+                          if (!_filters.remove(f)) _filters.add(f);
+                        }),
+                      ),
+                      Gap.vMd,
+                      SectionCard(
+                        title: l.patientsList,
+                        icon: Icons.people_outline,
+                        trailing: Text(
+                          '${rows.length}/${_rows.length}',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        child: rows.isEmpty
+                            ? EmptyState(
+                                title: l.emptyTitle,
+                                body: l.emptyBody,
+                                icon: Icons.filter_alt_off_outlined,
+                                compact: true,
+                              )
+                            : Column(
+                                children: [
+                                  for (final r in rows)
+                                    _PatientTile(
+                                      row: r,
+                                      enabled: !_busy,
+                                      onOpen: () => _open(r),
+                                    ),
+                                ],
+                              ),
+                      ),
+                      Gap.vMd,
+                      SectionCard(
+                        title: l.modelPerformance,
+                        icon: Icons.insights_outlined,
+                        subtitle: l.operatingPointNote,
+                        child: const MetricsPanel(),
+                      ),
+                    ],
                   ),
-                  Gap.vMd,
-                  SectionCard(
-                    title: l.modelPerformance,
-                    icon: Icons.insights_outlined,
-                    subtitle: l.operatingPointNote,
-                    child: const MetricsPanel(),
-                  ),
-                ],
+                ),
               ),
-            ),
-          ),
+            );
+            if (constraints.maxWidth < 900) return list;
+            return Row(
+              children: [
+                SizedBox(
+                  width: (constraints.maxWidth * .38).clamp(330.0, 500.0),
+                  child: list,
+                ),
+                const VerticalDivider(width: 1),
+                Expanded(
+                  child: _selectedPatient == null
+                      ? Center(
+                          child: Text(
+                            l.isArabic
+                                ? 'اختر مريضاً لعرض ملفه'
+                                : 'Select a patient to view their file',
+                          ),
+                        )
+                      : PatientFileScreen(
+                          key: ValueKey(_selectedPatient),
+                          embedded: true,
+                          args: PatientRouteArgs(patientId: _selectedPatient!),
+                        ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -394,18 +451,18 @@ class _PatientTile extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(
-                      row.profile.name.isEmpty
-                          ? row.profile.patientId
-                          : row.profile.name,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                  Text(
+                    row.profile.name.isEmpty
+                        ? row.profile.patientId
+                        : row.profile.name,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
+                  Gap.vXs,
                   RiskBadge(view: row.view, dense: true),
                 ],
               ),
@@ -441,8 +498,10 @@ class _PatientTile extends StatelessWidget {
                   _Chip(
                     icon: Icons.medication_outlined,
                     label: l.adherenceShort,
-                    value: '${(row.adherence * 100).round()}%',
-                    alert: row.adherence < _lowAdherence,
+                    value: row.adherence == null
+                        ? l.notSet
+                        : '${(row.adherence! * 100).round()}%',
+                    alert: (row.adherence ?? 1) < _lowAdherence,
                   ),
                   if (row.pendingAdjudications > 0)
                     _Chip(
@@ -531,11 +590,16 @@ class _Row {
   final RiskAssessment? latest;
   final List<AlertItem> alerts;
   final int pendingAdjudications;
-  final double adherence;
+  final double? adherence;
 
-  RiskLabel? get label => latest?.label ?? profile.currentStatus;
+  bool get hasAssessment =>
+      latest != null &&
+      latest!.confidence > 0 &&
+      latest!.features['assessment_valid'] != false;
 
-  DateTime? get observedAt => latest?.timestamp ?? profile.lastUpdated;
+  RiskLabel? get label => hasAssessment ? latest!.label : null;
+
+  DateTime? get observedAt => hasAssessment ? latest!.timestamp : null;
 
   int get unacked => alerts.where((a) => !a.acknowledged).length;
 
@@ -558,7 +622,10 @@ class _Row {
     // patient. `profile.currentStatus` defaults to `stable` and
     // `profile.lastUpdated` to «now» on a profile this device has never synced,
     // so trusting them would paint a brand-new patient green.
-    dataAvailable: latest != null,
+    dataAvailable:
+        latest != null &&
+        latest!.confidence > 0 &&
+        latest!.features['assessment_valid'] != false,
   );
 
   /// Ranking for «الأكثر حاجة للانتباه».
@@ -579,7 +646,7 @@ class _Row {
     score += unacked * 50;
     score += pendingAdjudications * 10;
     if (notReporting) score += 60;
-    if (adherence < _lowAdherence) score += 30;
+    if ((adherence ?? 1) < _lowAdherence) score += 30;
     return score;
   }
 }
@@ -602,7 +669,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
   final _emergencyContactCtrl = TextEditingController();
   final _diagnosisCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
-  final String _gender = 'male';
+  String? _gender;
 
   bool _addCaregiver = false;
   final _cgNameCtrl = TextEditingController();
@@ -645,7 +712,10 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
 
   void _onCaregiverNameChanged() {
     if (_cgUsernameEditedManually || _busy) return;
-    final generated = UsernameGenerator.generate(_cgNameCtrl.text, prefix: 'cg');
+    final generated = UsernameGenerator.generate(
+      _cgNameCtrl.text,
+      prefix: 'cg',
+    );
     if (generated.isNotEmpty) {
       _cgUsernameCtrl.value = TextEditingValue(
         text: generated,
@@ -944,16 +1014,52 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
 
                   ExpansionTile(
                     tilePadding: EdgeInsets.zero,
-                    title: const Text('معلومات طبية واتصال'),
-                    subtitle: const Text('اختيارية'),
+                    title: const Text('بيانات المريض المطلوبة'),
+                    initiallyExpanded: true,
                     maintainState: true,
                     children: [
+                      DropdownButtonFormField<String>(
+                        initialValue: _gender,
+                        decoration: const InputDecoration(labelText: 'الجنس *'),
+                        items: const [
+                          DropdownMenuItem(value: 'male', child: Text('ذكر')),
+                          DropdownMenuItem(
+                            value: 'female',
+                            child: Text('أنثى'),
+                          ),
+                        ],
+                        validator: (v) => v == null ? 'اختر الجنس' : null,
+                        onChanged: _busy
+                            ? null
+                            : (value) => setState(() => _gender = value),
+                      ),
+                      const SizedBox(height: 10),
+                      TextFormField(
+                        controller: _emergencyContactCtrl,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: 'رقم اتصال الطوارئ *',
+                        ),
+                        validator: (v) =>
+                            RegExp(
+                              r'^\+?[0-9]{8,15}$',
+                            ).hasMatch(v?.trim() ?? '')
+                            ? null
+                            : 'أدخل رقم اتصال طوارئ صالحاً',
+                      ),
+                      const SizedBox(height: 10),
                       Column(
                         children: [
                           SizedBox(
                             width: double.infinity,
                             child: TextFormField(
                               controller: _phoneCtrl,
+                              validator: (v) =>
+                                  RegExp(
+                                    r'^\+?[0-9]{8,15}$',
+                                  ).hasMatch(v?.trim() ?? '')
+                                  ? null
+                                  : 'أدخل رقم هاتف من 8 إلى 15 رقماً',
                               keyboardType: TextInputType.phone,
                               decoration: const InputDecoration(
                                 labelText: 'رقم هاتف المريض',
@@ -968,7 +1074,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                               controller: _ageCtrl,
                               validator: (value) {
                                 if (value == null || value.trim().isEmpty) {
-                                  return null;
+                                  return 'العمر مطلوب';
                                 }
                                 final age = int.tryParse(value.trim());
                                 return age == null || age < 0 || age > 130
@@ -987,6 +1093,9 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                       const SizedBox(height: 10),
                       TextFormField(
                         controller: _diagnosisCtrl,
+                        validator: (v) => v == null || v.trim().isEmpty
+                            ? 'التشخيص مطلوب'
+                            : null,
                         decoration: const InputDecoration(
                           labelText: 'التشخيص ونوع الصرع',
                           prefixIcon: Icon(Icons.medical_information_outlined),

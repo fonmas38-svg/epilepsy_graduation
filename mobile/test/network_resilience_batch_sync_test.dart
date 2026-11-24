@@ -1,3 +1,4 @@
+import 'package:epilepsy_monitor/models/care_models.dart';
 // ignore_for_file: depend_on_referenced_packages
 import 'dart:async';
 import 'dart:convert';
@@ -271,6 +272,7 @@ void main() {
         VitalReading(
           id: 'r-$i',
           patientId: pid,
+          serverOrigin: 'https://cloud.invalid',
           timestamp: DateTime.utc(2026, 11, 22, 0, 0, i),
           eeg: const [0.1, 0.2, 0.3],
           ecg: const [0.1, 0.2, 0.3],
@@ -311,7 +313,7 @@ void main() {
     expect(batchSizes, [500, 5]);
     expect(idemKeys, hasLength(2));
     expect(idemKeys.every((k) => k.isNotEmpty), isTrue);
-    expect(await db.unsyncedReadings(pid), isEmpty);
+    expect(await db.unsyncedReadings(pid, serverOrigin: 'https://cloud.invalid'), isEmpty);
     api.dispose();
   });
 
@@ -330,6 +332,7 @@ void main() {
         VitalReading(
           id: 'p-$i',
           patientId: pid,
+          serverOrigin: 'https://cloud.invalid',
           timestamp: DateTime.utc(2026, 11, 22, 0, 0, i),
           eeg: const [0.1, 0.2],
           ecg: const [0.1, 0.2],
@@ -364,7 +367,7 @@ void main() {
 
     final syncPartial = SyncService(db: db, api: apiPartial, auth: auth);
     await syncPartial.syncPending(pid);
-    final remaining = await db.unsyncedReadings(pid);
+    final remaining = await db.unsyncedReadings(pid, serverOrigin: 'https://cloud.invalid');
     expect(remaining, hasLength(5));
     expect(remaining.first.id, 'p-500');
     apiPartial.dispose();
@@ -390,7 +393,55 @@ void main() {
     final syncFallback = SyncService(db: db, api: apiFallback, auth: auth);
     await syncFallback.syncPending(pid);
     expect(singleCalls, 5);
-    expect(await db.unsyncedReadings(pid), isEmpty);
+    expect(await db.unsyncedReadings(pid, serverOrigin: 'https://cloud.invalid'), isEmpty);
     apiFallback.dispose();
   });
+  test('monitoring outbox quarantines unknown origins and cannot upload to a different server', () async {
+    final auth = AuthService();
+    await auth.applyBackendSession({'user': {'id': 'p1', 'role': 'patient', 'name': 'P'},
+      'patients': [{'id': 'p1', 'name': 'P'}]});
+    final sent = <String>[];
+    final api = ApiClient(baseUrl: 'https://a.invalid', tokens: _TestTokens(), client: MockClient((request) async {
+      final payload = jsonDecode(request.body) as Map;
+      sent.add((payload['reading'] as Map)['id'] as String);
+      expect(payload.containsKey('_ownerOrigin'), isFalse);
+      return http.Response('{}', 200);
+    }));
+    for (final origin in ['', 'https://a.invalid', 'https://b.invalid']) {
+      final id = origin.isEmpty ? 'legacy' : Uri.parse(origin).host;
+      await db.enqueueOutbox(OutboxItem(id: id, method: 'POST', path: '/cloud/sync', createdAt: DateTime.now(),
+        body: {'_ownerId': 'p1', if (origin.isNotEmpty) '_ownerOrigin': origin,
+          'patient_id': 'p1', 'reading': {'id': id}}));
+    }
+    final sync = SyncService(db: db, api: api, auth: auth);
+    await sync.flushPendingAlerts();
+    expect(sent, ['a.invalid']);
+    api.updateBaseUrl('https://b.invalid');
+    await sync.flushPendingAlerts();
+    expect(sent, ['a.invalid', 'b.invalid']);
+    final pending = await db.pendingOutbox(onlyPath: '/cloud/sync', ownerId: 'p1');
+    expect(pending.single.id, 'legacy');
+    api.dispose();
+  });
+
+  test('server switch during upload cannot acknowledge an old source row', () async {
+    final auth = AuthService();
+    await auth.applyBackendSession({'user': {'id': 'p1', 'role': 'patient', 'name': 'P'},
+      'patients': [{'id': 'p1', 'name': 'P'}]});
+    late ApiClient api;
+    api = ApiClient(baseUrl: 'https://a.invalid', tokens: _TestTokens(), client: MockClient((_) async {
+      api.updateBaseUrl('https://b.invalid');
+      return http.Response('{}', 200);
+    }));
+    await db.insertReading(VitalReading(id: 'r', patientId: 'p1', serverOrigin: 'https://a.invalid',
+      timestamp: DateTime.now(), eeg: [1], ecg: [2], motion: [0], hr: 70));
+    await db.enqueueOutbox(OutboxItem(id: 'intent', method: 'POST', path: '/cloud/sync', createdAt: DateTime.now(),
+      body: {'_ownerId': 'p1', '_ownerOrigin': 'https://a.invalid', 'patient_id': 'p1',
+        'reading': {'id': 'r'}, 'assessment': {'id': 'assessment'}}));
+    await SyncService(db: db, api: api, auth: auth).flushPendingAlerts();
+    expect(await db.unsyncedReadings('p1', serverOrigin: 'https://a.invalid'), hasLength(1));
+    expect(await db.pendingOutbox(onlyPath: '/cloud/sync', ownerId: 'p1'), hasLength(1));
+    api.dispose();
+  });
+
 }

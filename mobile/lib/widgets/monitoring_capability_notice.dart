@@ -18,6 +18,7 @@ class MonitoringCapabilityNotice extends StatelessWidget {
     final missingStream =
         app.monitoring.source == SignalSource.headDevice &&
         !app.monitoring.deviceConnected;
+    final replay = app.monitoring.signalSourceLabel == 'dataset_cached_replay';
     final location = app.location.lastResult?.status;
     final messages = <String>[
       ar
@@ -34,6 +35,13 @@ class MonitoringCapabilityNotice extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (replay)
+          InfoNote(
+            text: ar
+                ? 'إعادة عرض محلية لإشارات مسجلة سابقاً (${app.monitoring.replayRecordedAt ?? ""}). ليست قياساً حالياً، ولا يصدر عنها توقع عصبي جديد.'
+                : 'Offline replay of previously recorded signals (${app.monitoring.replayRecordedAt ?? ""}). These are not live measurements or a new neural prediction.',
+            view: RiskView.unknown,
+          ),
         InfoNote(
           text: missingStream
               ? (ar

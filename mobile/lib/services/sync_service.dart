@@ -24,6 +24,7 @@ class SyncService {
   final ApiClient api;
   final AuthService auth;
   final _uuid = const Uuid();
+  String get dataOrigin => auth.isDemoSession ? '' : api.baseUrl;
 
   AppLocalizations _l10n = const AppLocalizations(Locale('ar'));
 
@@ -53,10 +54,22 @@ class SyncService {
 
   Future<RiskAssessment> analyzeAndStore(VitalReading reading) async {
     final owner = auth.currentUser?.uid;
+    final origin = dataOrigin;
+    final endpoint = api.baseUrl;
+    final revision = api.tokens.revision;
+    if (reading.serverOrigin.isNotEmpty && reading.serverOrigin != origin) {
+      throw StateError('Reading belongs to another server');
+    }
+    reading = reading.withOrigin(origin);
+    bool current() =>
+        auth.currentUser?.uid == owner &&
+        api.baseUrl == endpoint &&
+        api.tokens.revision == revision;
     if (owner == null) throw StateError('No active session');
     AnalyzeResult result;
     try {
-      if (await isOnline && await api.health(null, const Duration(seconds: 7))) {
+      if (await isOnline &&
+          await api.health(null, const Duration(seconds: 7))) {
         result = await api.analyze(reading).timeout(const Duration(seconds: 5));
       } else {
         result = _offlineEdgeInference(reading);
@@ -65,22 +78,36 @@ class SyncService {
       result = _offlineEdgeInference(reading);
     }
 
-    if (auth.currentUser?.uid != owner) throw StateError('Session changed during analysis');
+    if (!current()) throw StateError('Session changed during analysis');
     final assessment = RiskAssessment(
       id: _uuid.v4(),
       patientId: reading.patientId,
+      serverOrigin: origin,
       timestamp: reading.timestamp,
       label: result.label,
       confidence: result.confidence,
       features: {...result.features, 'reading_id': reading.id},
       processingMs: result.processingMs,
     );
-    await db.insertAssessment(assessment, delivery: OutboxItem(
-      id: 'assessment-${assessment.id}', method: 'POST', path: '/cloud/sync',
-      body: {'_ownerId': owner, 'patient_id': reading.patientId,
-        'reading': reading.toMap(), 'assessment': assessment.toMap()}, createdAt: DateTime.now()));
-    if (auth.currentUser?.uid != owner) return assessment;
-    if (assessment.confidence > 0 && assessment.features['assessment_valid'] != false) {
+    await db.insertAssessment(
+      assessment,
+      delivery: OutboxItem(
+        id: 'assessment-${assessment.id}',
+        method: 'POST',
+        path: '/cloud/sync',
+        body: {
+          '_ownerId': owner,
+          '_ownerOrigin': origin,
+          'patient_id': reading.patientId,
+          'reading': reading.toMap(),
+          'assessment': assessment.toMap(),
+        },
+        createdAt: DateTime.now(),
+      ),
+    );
+    if (!current()) return assessment;
+    if (assessment.confidence > 0 &&
+        assessment.features['assessment_valid'] != false) {
       await auth.updatePatientStatus(reading.patientId, assessment.label);
     }
     if (result.features['offline'] != true) await flushPendingAlerts();
@@ -111,6 +138,7 @@ class SyncService {
     return AlertItem(
       id: _uuid.v4(),
       patientId: reading.patientId,
+      serverOrigin: reading.serverOrigin,
       timestamp: DateTime.now(),
       severity: 'pre_alert',
       message: '$headline — ${_l10n.preAlertCancelWindowNote}',
@@ -145,6 +173,7 @@ class SyncService {
     final escalated = AlertItem(
       id: preAlert.id,
       patientId: preAlert.patientId,
+      serverOrigin: reading.serverOrigin,
       timestamp: DateTime.now(),
       severity: stillActive ? 'critical' : 'resolved',
       message: statusNote,
@@ -189,6 +218,7 @@ class SyncService {
   VitalReading _sosBeaconReading(String patientId) => VitalReading(
     id: _uuid.v4(),
     patientId: patientId,
+    serverOrigin: dataOrigin,
     timestamp: DateTime.now(),
     eeg: const [],
     ecg: const [],
@@ -207,11 +237,12 @@ class SyncService {
     if (assessment.label != RiskLabel.highRisk) return null;
 
     final now = DateTime.now();
-    final lastAlert = _lastAlertAt[reading.patientId];
+    final scope = '${reading.serverOrigin}::${reading.patientId}';
+    final lastAlert = _lastAlertAt[scope];
     if (lastAlert != null && now.difference(lastAlert) < _alertCooldown) {
       return null;
     }
-    _lastAlertAt[reading.patientId] = now;
+    _lastAlertAt[scope] = now;
 
     Map<String, dynamic>? remote;
     try {
@@ -225,12 +256,15 @@ class SyncService {
 
     final lead = assessment.features['lead_time_min'] as num?;
     final defaultMsg = (lead != null && lead > 0)
-        ? _l10n.riskDangerBody(lead >= 10 ? lead.toStringAsFixed(0) : lead.toStringAsFixed(1))
+        ? _l10n.riskDangerBody(
+            lead >= 10 ? lead.toStringAsFixed(0) : lead.toStringAsFixed(1),
+          )
         : _l10n.riskDangerBodyNoLead;
 
     final alert = AlertItem(
       id: _uuid.v4(),
       patientId: reading.patientId,
+      serverOrigin: reading.serverOrigin,
       timestamp: DateTime.now(),
       severity: remote?['severity'] as String? ?? 'critical',
       message: remote?['message'] as String? ?? defaultMsg,
@@ -249,12 +283,18 @@ class SyncService {
     RiskAssessment? assessment,
   }) async {
     final owner = auth.currentUser?.uid;
+    final origin = reading.serverOrigin;
+    if (origin != dataOrigin || owner == null) {
+      throw StateError('Alert source changed');
+    }
+    alert = alert.copyWith(serverOrigin: origin);
     final delivery = OutboxItem(
       id: 'monitoring-${alert.id}',
       method: 'POST',
       path: '/cloud/sync',
       body: {
         '_ownerId': owner,
+        '_ownerOrigin': origin,
         'patient_id': alert.patientId,
         'reading': reading.toMap(),
         if (assessment != null) 'assessment': assessment.toMap(),
@@ -272,6 +312,13 @@ class SyncService {
 
   Future<void> flushPendingAlerts() async {
     final owner = auth.currentUser?.uid;
+    final endpoint = api.baseUrl;
+    final origin = dataOrigin;
+    final revision = api.tokens.revision;
+    bool current() =>
+        auth.currentUser?.uid == owner &&
+        api.baseUrl == endpoint &&
+        api.tokens.revision == revision;
     if (_flushingAlerts || owner == null || !api.tokens.hasSession) return;
     _flushingAlerts = true;
     try {
@@ -281,14 +328,21 @@ class SyncService {
         limit: 1000,
       );
       for (final item in pending) {
-        if (auth.currentUser?.uid != owner) break;
-        if (item.body['_ownerId'] != owner) continue;
-        final body = Map<String, Object?>.from(item.body)..remove('_ownerId');
+        if (!current()) break;
+        if (item.body['_ownerId'] != owner ||
+            item.body['_ownerOrigin'] != origin) {
+          continue;
+        }
+        final body = Map<String, Object?>.from(item.body)
+          ..remove('_ownerId')
+          ..remove('_ownerOrigin');
         try {
           await api.sendJson(method: 'POST', path: '/cloud/sync', body: body);
-          if (auth.currentUser?.uid != owner) break;
+          if (!current()) break;
           final readingId = (body['reading'] as Map?)?['id'];
-          if (body['assessment'] != null && readingId is String) await db.markSynced([readingId]);
+          if (body['assessment'] != null && readingId is String) {
+            await db.markSynced([readingId], serverOrigin: origin);
+          }
           await db.deleteOutbox(item.id);
         } catch (_) {
           // Keep the durable intent on all transport/server failures.
@@ -304,28 +358,50 @@ class SyncService {
 
   Future<void> syncPending(String patientId) async {
     final owner = auth.currentUser?.uid;
-    if (owner != patientId || _syncingPatients.contains(patientId)) return;
+    final endpoint = api.baseUrl;
+    final origin = dataOrigin;
+    final revision = api.tokens.revision;
+    bool current() =>
+        auth.currentUser?.uid == owner &&
+        api.baseUrl == endpoint &&
+        api.tokens.revision == revision;
+    if (auth.currentUser?.role != UserRole.patient ||
+        owner != patientId ||
+        _syncingPatients.contains(patientId)) {
+      return;
+    }
     _syncingPatients.add(patientId);
     try {
-      if (!await isOnline || auth.currentUser?.uid != owner ||
+      if (!await isOnline ||
+          !current() ||
           !await api.health(null, const Duration(seconds: 7))) {
         return;
       }
       await flushPendingAlerts();
-      final pending = await db.unsyncedReadings(patientId);
+      if (!current()) return;
+      final pending = await db.unsyncedReadings(
+        patientId,
+        serverOrigin: origin,
+      );
       if (pending.isEmpty) return;
-      final assessments = await db.assessmentsFor(patientId, limit: 1000);
+      final assessments = await db.assessmentsFor(
+        patientId,
+        limit: 1000,
+        serverOrigin: origin,
+      );
       final byReading = <String, RiskAssessment>{};
       for (final assessment in assessments) {
         final readingId = assessment.features['reading_id'];
-        if (readingId is String) byReading.putIfAbsent(readingId, () => assessment);
+        if (readingId is String) {
+          byReading.putIfAbsent(readingId, () => assessment);
+        }
       }
       cloudReadings.putIfAbsent(patientId, () => []);
       const maxBatchItems = 500;
       const maxBatchBytes = 5 * 1024 * 1024;
       var index = 0;
       while (index < pending.length) {
-        if (auth.currentUser?.uid != owner) break;
+        if (!current()) break;
         final chunkReadings = <VitalReading>[];
         final chunkItems = <Map<String, dynamic>>[];
         var chunkBytes = 128; // envelope overhead
@@ -338,7 +414,8 @@ class SyncService {
             if (assessment != null) 'assessment': assessment.toMap(),
           };
           final itemBytes = utf8.encode(jsonEncode(item)).length + 2;
-          if (chunkReadings.isNotEmpty && chunkBytes + itemBytes > maxBatchBytes) {
+          if (chunkReadings.isNotEmpty &&
+              chunkBytes + itemBytes > maxBatchBytes) {
             break;
           }
           chunkReadings.add(reading);
@@ -355,13 +432,13 @@ class SyncService {
             items: chunkItems,
             idempotencyKey: idempotencyKey,
           );
-          if (auth.currentUser?.uid != owner) break;
+          if (!current()) break;
           final chunkIdSet = chunkReadings.map((r) => r.id).toSet();
           final rawIds = res['synced_reading_ids'];
           final ackIds = rawIds is List
               ? rawIds.whereType<String>().where(chunkIdSet.contains).toList()
               : chunkReadings.map((r) => r.id).toList();
-          await db.markSynced(ackIds);
+          await db.markSynced(ackIds, serverOrigin: origin);
           final ackSet = ackIds.toSet();
           for (final r in chunkReadings) {
             if (ackSet.contains(r.id)) {
@@ -372,7 +449,7 @@ class SyncService {
           if (e.statusCode == 404 || e.statusCode == 405) {
             var singleFailed = false;
             for (final reading in chunkReadings) {
-              if (auth.currentUser?.uid != owner) break;
+              if (!current()) break;
               try {
                 final assessment = byReading[reading.id];
                 await api.cloudSync(
@@ -380,8 +457,8 @@ class SyncService {
                   reading: reading.toMap(),
                   assessment: assessment?.toMap(),
                 );
-                if (auth.currentUser?.uid != owner) break;
-                await db.markSynced([reading.id]);
+                if (!current()) break;
+                await db.markSynced([reading.id], serverOrigin: origin);
                 cloudReadings[patientId]!.add(reading.toMap());
               } catch (_) {
                 singleFailed = true;
@@ -404,12 +481,27 @@ class SyncService {
 
   /// Pull shared alerts/status for caregiver/doctor from backend cloud store.
   Future<List<AlertItem>> pullCloudAlerts(String patientId) async {
+    final owner = auth.currentUser;
+    final origin = dataOrigin;
+    final endpoint = api.baseUrl;
+    final revision = api.tokens.revision;
+    bool current() =>
+        AppUser.sameSessionOwner(owner, auth.currentUser) &&
+        endpoint == api.baseUrl &&
+        revision == api.tokens.revision;
     try {
       if (!await isOnline || !await api.health()) return [];
       final body = await api.cloudPatient(patientId);
+      if (!current()) return [];
       final raw = body['alerts'] as List? ?? [];
       return raw
-          .map((e) => AlertItem.fromMap(Map<String, dynamic>.from(e as Map)))
+          .map(
+            (e) => AlertItem.fromMap({
+              ...Map<String, dynamic>.from(e as Map),
+              'serverOrigin': origin,
+            }),
+          )
+          .where((alert) => alert.patientId == patientId)
           .toList();
     } catch (_) {
       return [];

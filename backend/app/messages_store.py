@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid4, uuid5
 import json
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 
 from app.database import connection, messages, transaction, upsert
 
@@ -89,9 +89,30 @@ def create_message(
         )
         row = conn.execute(select(messages).where(messages.c.id == msg_id)).one()
         saved = _message(row)
-        if saved["content"] != content or saved["channelType"] != channel_type:
+        if (saved["content"] != content or saved["channelType"] != channel_type
+                or saved["peerUserId"] != clean_peer):
             raise ValueError("client_message_id already used for a different message")
         return saved
+
+
+def _visibility(viewer_id: str, viewer_role: str):
+    """Apply permissions before pagination, including unfiltered requests."""
+    if viewer_role == "admin":
+        return messages.c.channel_type.in_(VALID_CHANNELS)
+    allowed = [messages.c.channel_type.in_(("family_patient", "care_team_triage"))]
+    if viewer_role in ("patient", "doctor"):
+        allowed.append(messages.c.channel_type == "doctor_patient")
+    private = {
+        "patient": ("patient_caregiver",),
+        "doctor": ("doctor_caregiver",),
+        "caregiver": ("patient_caregiver", "doctor_caregiver"),
+    }.get(viewer_role, ())
+    if private:
+        predicate = messages.c.channel_type.in_(private)
+        if viewer_role == "caregiver":
+            predicate = and_(predicate, messages.c.peer_user_id == viewer_id)
+        allowed.append(predicate)
+    return or_(*allowed)
 
 
 def list_messages(
@@ -101,8 +122,12 @@ def list_messages(
     limit: int = 100,
     offset: int = 0,
     latest: bool = False,
+    viewer_id: str | None = None,
+    viewer_role: str | None = None,
 ) -> list[dict]:
     query = select(messages).where(messages.c.patient_id == patient_id)
+    if viewer_id is not None:
+        query = query.where(_visibility(viewer_id, viewer_role or ""))
     if channel_type:
         query = query.where(messages.c.channel_type == channel_type)
     if peer_user_id:
@@ -122,6 +147,8 @@ def mark_messages_read(
     patient_id: str,
     reader_id: str,
     channel_type: str | None = None,
+    peer_user_id: str | None = None,
+    viewer_role: str | None = None,
 ) -> int:
     now = _now()
     conditions = [
@@ -131,6 +158,10 @@ def mark_messages_read(
     ]
     if channel_type:
         conditions.append(messages.c.channel_type == channel_type)
+    if peer_user_id:
+        conditions.append(messages.c.peer_user_id == peer_user_id)
+    if viewer_role is not None:
+        conditions.append(_visibility(reader_id, viewer_role))
     with transaction() as conn:
         res = conn.execute(
             update(messages)

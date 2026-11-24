@@ -1,3 +1,4 @@
+import 'package:epilepsy_monitor/models/models.dart';
 // ignore_for_file: depend_on_referenced_packages
 import 'dart:convert';
 
@@ -19,8 +20,12 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:timezone/timezone.dart' as tz;
 
 String _mockJwt({required String sub, required String role}) {
-  final header = base64Url.encode(utf8.encode('{"alg":"HS256","typ":"JWT"}')).replaceAll('=', '');
-  final exp = DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch ~/ 1000;
+  final header = base64Url
+      .encode(utf8.encode('{"alg":"HS256","typ":"JWT"}'))
+      .replaceAll('=', '');
+  final exp =
+      DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch ~/
+      1000;
   final payload = base64Url
       .encode(utf8.encode('{"sub":"$sub","role":"$role","exp":$exp}'))
       .replaceAll('=', '');
@@ -30,8 +35,9 @@ String _mockJwt({required String sub, required String role}) {
 class _FakeConnectivity extends ConnectivityPlatform
     with MockPlatformInterfaceMixin {
   @override
-  Future<List<ConnectivityResult>> checkConnectivity() async =>
-      const [ConnectivityResult.none];
+  Future<List<ConnectivityResult>> checkConnectivity() async => const [
+    ConnectivityResult.none,
+  ];
 
   @override
   Stream<List<ConnectivityResult>> get onConnectivityChanged =>
@@ -132,141 +138,295 @@ void main() {
 
   tearDown(() async => sql.close());
 
-  test('patient login schedules OS reminders decoupled from monitoring.onUpdate; non-patient does not; signOut cancels', () async {
-    final gateway = _FakeNotificationGateway();
-    String currentRole = 'patient';
-    String currentId = 'pat-1';
+  test(
+    'patient login schedules OS reminders decoupled from monitoring.onUpdate; non-patient does not; signOut cancels',
+    () async {
+      final gateway = _FakeNotificationGateway();
+      String currentRole = 'patient';
+      String currentId = 'pat-1';
 
-    final api = ApiClient(
-      baseUrl: 'https://cloud.invalid',
-      client: MockClient((request) async {
-        if (request.url.path == '/auth/login') {
+      final api = ApiClient(
+        baseUrl: 'https://cloud.invalid',
+        client: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(
+              jsonEncode({
+                'access_token': _mockJwt(sub: currentId, role: currentRole),
+                'role': currentRole,
+                'user': {
+                  'id': currentId,
+                  'username': currentId,
+                  'name': currentId,
+                },
+              }),
+              200,
+            );
+          }
+          if (request.url.path == '/auth/me') {
+            return http.Response(
+              jsonEncode({
+                'user': {
+                  'id': currentId,
+                  'username': currentId,
+                  'name': currentId,
+                  'role': currentRole,
+                },
+                'patients': [
+                  {
+                    'patientId': 'pat-1',
+                    'name': 'Ahmed',
+                    'medications': ['Levetiracetam 500mg'],
+                  },
+                ],
+              }),
+              200,
+            );
+          }
+          if (request.url.path == '/patient/prescriptions')
+            return http.Response(
+              jsonEncode({
+                'prescriptions': [
+                  {
+                    'id': 'rx-1',
+                    'patient_id': 'pat-1',
+                    'name': 'Levetiracetam',
+                    'dose': '500mg',
+                    'schedule': 'daily',
+                    'times': ['08:00', '20:00'],
+                    'active': true,
+                    'created_at': '2026-11-01T00:00:00Z',
+                  },
+                ],
+              }),
+              200,
+            );
+          if (request.url.path.endsWith('/adherence'))
+            return http.Response('{"logs":[]}', 200);
+          if (request.url.path == '/health') return http.Response('{}', 200);
+          return http.Response('{}', 200);
+        }),
+      );
+      final state = AppState(
+        apiClient: api,
+        database: db,
+        notificationGateway: gateway,
+        useBackgroundIsolate: false,
+      );
+
+      // Patient sign-in: even with monitoring stopped, reminders are scheduled.
+      await state.signInWithPassword(username: 'pat-1', password: 'pw');
+      await state.setMonitoringEnabled(false);
+      expect(state.monitoring.running, isFalse);
+      expect(gateway.scheduled, isNotEmpty);
+
+      // Sign-out cancels all scheduled reminders.
+      await state.signOut();
+      expect(gateway.cancelAllCount, greaterThanOrEqualTo(1));
+      expect(gateway.scheduled, isEmpty);
+
+      // Doctor login must NOT schedule patient OS dose alarms.
+      currentRole = 'doctor';
+      currentId = 'doc-1';
+      await state.signInWithPassword(username: 'doc-1', password: 'pw');
+      expect(gateway.scheduled, isEmpty);
+      await state.signOut();
+
+      // Caregiver login must NOT schedule patient OS dose alarms.
+      currentRole = 'caregiver';
+      currentId = 'cg-1';
+      await state.signInWithPassword(username: 'cg-1', password: 'pw');
+      expect(gateway.scheduled, isEmpty);
+
+      state.dispose();
+      api.dispose();
+    },
+  );
+
+  test(
+    'timezone shift recalculates UTC reminder instants and markTaken advances slot to next day',
+    () async {
+      final gateway = _FakeNotificationGateway();
+      var fakeNowUtc = DateTime.utc(2026, 6, 1, 4, 0); // 07:00 in UTC+3
+      var tzOffsetMin = 180; // UTC+3
+
+      final notifications = NotificationService(
+        gateway: gateway,
+        now: () => fakeNowUtc,
+      );
+      final meds = MedicationService(
+        db: db,
+        notifications: notifications,
+        now: () => fakeNowUtc,
+        timezoneOffsetMinutesProvider: () => tzOffsetMin,
+      );
+
+      final added = await meds.add(
+        patientId: 'p1',
+        name: 'Levetiracetam',
+        dosage: '500mg',
+        times: const ['08:00'],
+      );
+
+      expect(gateway.scheduled, hasLength(1));
+      final firstAlarm = gateway.scheduled.values.single;
+      // 08:00 in UTC+3 == 05:00Z
+      expect(firstAlarm.scheduledDate.toUtc(), DateTime.utc(2026, 6, 1, 5, 0));
+      // Reminder body uses 12h formatting (Arabic default -> 8:00 ص)
+      expect(firstAlarm.body, contains('8:00 ص'));
+
+      // Simulate timezone travel to UTC+1 (+60 min) while still before 08:00 local (04:00Z = 05:00 in UTC+1)
+      tzOffsetMin = 60;
+      await meds.rescheduleIfTimezoneChanged(
+        'p1',
+        const AppLocalizations(Locale('en')),
+      );
+
+      expect(gateway.cancelledIds, contains(firstAlarm.id));
+      expect(gateway.scheduled, hasLength(1));
+      final shiftedAlarm = gateway.scheduled.values.single;
+      // 08:00 in UTC+1 == 07:00Z
+      expect(
+        shiftedAlarm.scheduledDate.toUtc(),
+        DateTime.utc(2026, 6, 1, 7, 0),
+      );
+      expect(shiftedAlarm.body, contains('8:00 AM'));
+
+      // Mark today's 08:00 dose taken in UTC+1 (08:00 in UTC+1 == 07:00Z)
+      await meds.markTaken(added, scheduledFor: DateTime.utc(2026, 6, 1, 7, 0));
+      final nextDayAlarm = gateway.scheduled.values.single;
+      expect(
+        nextDayAlarm.scheduledDate.toUtc(),
+        DateTime.utc(2026, 6, 2, 7, 0),
+      );
+      expect(nextDayAlarm.scheduledDate.toUtc().isAfter(fakeNowUtc), isTrue);
+    },
+  );
+
+  test(
+    'clinical prescriptions sync by origin and dose logging is atomic and retry safe',
+    () async {
+      var online = true;
+      var flushes = 0;
+      final api = ApiClient(
+        baseUrl: 'https://clinical.invalid',
+        sleep: (_) async {},
+        client: MockClient((request) async {
+          if (!online) return http.Response('{}', 503);
+          if (request.url.path.endsWith('/adherence'))
+            return http.Response('{"logs":[]}', 200);
           return http.Response(
             jsonEncode({
-              'access_token': _mockJwt(sub: currentId, role: currentRole),
-              'role': currentRole,
-              'user': {'id': currentId, 'username': currentId, 'name': currentId},
-            }),
-            200,
-          );
-        }
-        if (request.url.path == '/auth/me') {
-          return http.Response(
-            jsonEncode({
-              'user': {'id': currentId, 'username': currentId, 'name': currentId, 'role': currentRole},
-              'patients': [
+              'prescriptions': [
                 {
-                  'patientId': 'pat-1',
-                  'name': 'Ahmed',
-                  'medications': ['Levetiracetam 500mg'],
+                  'id': 'rx-1',
+                  'patient_id': 'p1',
+                  'name': 'Prescribed medicine',
+                  'dose': '500mg',
+                  'schedule': 'daily',
+                  'times': ['08:00'],
+                  'active': true,
+                  'period_context': 'morning',
+                  'meal_context': 'after_meal',
+                  'meal_type': 'breakfast',
+                  'created_at': '2026-11-01T00:00:00Z',
                 },
               ],
             }),
             200,
           );
-        }
-        if (request.url.path == '/health') return http.Response('{}', 200);
-        return http.Response('{}', 200);
-      }),
-    );
-    final state = AppState(
-      apiClient: api,
-      database: db,
-      notificationGateway: gateway,
-      useBackgroundIsolate: false,
-    );
+        }),
+      );
+      final app = AppState(
+        apiClient: api,
+        database: db,
+        notificationGateway: _FakeNotificationGateway(),
+      );
+      await app.auth.applyBackendSession({
+        'user': {'id': 'p1', 'role': 'patient', 'name': 'P'},
+        'patients': [
+          {'patientId': 'p1', 'name': 'P'},
+        ],
+      });
+      await api.tokens.useLoginToken(
+        token: _mockJwt(sub: 'p1', role: 'patient'),
+        role: 'patient',
+        subject: 'p1',
+      );
+      final service = MedicationService(
+        db: db,
+        notifications: app.notifications,
+        api: api,
+        auth: app.auth,
+        flushOutbox: () async {
+          flushes++;
+        },
+      );
+      await service.synchronize('p1');
+      final med = (await service.forPatient('p1')).single;
+      expect(med.prescriptionId, 'rx-1');
+      expect(med.mealContext, 'after_meal');
+      expect(med.times, ['08:00']);
+      final due = DateTime(2026, 11, 24, 8);
+      await Future.wait([
+        service.markTaken(med, scheduledFor: due),
+        service.markTaken(med, scheduledFor: due),
+      ]);
+      expect(
+        (await db.medicationLogsFor('p1', serverOrigin: api.baseUrl)).length,
+        1,
+      );
+      final pending = await db.careOutboxForOwner('p1');
+      expect(pending.length, 1);
+      expect(pending.single.path, '/patient/prescriptions/rx-1/intake-log');
+      expect(pending.single.body['_ownerOrigin'], api.baseUrl);
+      expect(flushes, greaterThanOrEqualTo(2));
+      // A remote snapshot cannot overwrite an unacknowledged local dose.
+      await db.cacheMedicationLog(
+        MedicationLog(
+          id: 'server-copy',
+          medicationId: med.id,
+          patientId: 'p1',
+          scheduledFor: due,
+          status: 'missed',
+        ),
+        api.baseUrl,
+      );
+      expect((await db.medicationLogsFor('p1')).single.status, 'taken');
+      online = false;
+      await expectLater(
+        service.synchronize('p1'),
+        throwsA(isA<ApiException>()),
+      );
+      expect((await service.forPatient('p1')).single.id, med.id);
+      await expectLater(
+        service.add(patientId: 'p1', name: 'Unprescribed'),
+        throwsStateError,
+      );
+      api.updateBaseUrl('https://another.invalid');
+      expect(await service.forPatient('p1'), isEmpty);
+      await expectLater(
+        service.markTaken(med, scheduledFor: due),
+        throwsStateError,
+      );
+      app.dispose();
+    },
+  );
 
-    // Patient sign-in: even with monitoring stopped, reminders are scheduled.
-    await state.signInWithPassword(username: 'pat-1', password: 'pw');
-    await state.setMonitoringEnabled(false);
-    expect(state.monitoring.running, isFalse);
-    expect(gateway.scheduled, isNotEmpty);
-
-    // Sign-out cancels all scheduled reminders.
-    await state.signOut();
-    expect(gateway.cancelAllCount, greaterThanOrEqualTo(1));
-    expect(gateway.scheduled, isEmpty);
-
-    // Doctor login must NOT schedule patient OS dose alarms.
-    currentRole = 'doctor';
-    currentId = 'doc-1';
-    await state.signInWithPassword(username: 'doc-1', password: 'pw');
-    expect(gateway.scheduled, isEmpty);
-    await state.signOut();
-
-    // Caregiver login must NOT schedule patient OS dose alarms.
-    currentRole = 'caregiver';
-    currentId = 'cg-1';
-    await state.signInWithPassword(username: 'cg-1', password: 'pw');
-    expect(gateway.scheduled, isEmpty);
-
-    state.dispose();
-    api.dispose();
-  });
-
-  test('timezone shift recalculates UTC reminder instants and markTaken advances slot to next day', () async {
-    final gateway = _FakeNotificationGateway();
-    var fakeNowUtc = DateTime.utc(2026, 6, 1, 4, 0); // 07:00 in UTC+3
-    var tzOffsetMin = 180; // UTC+3
-
-    final notifications = NotificationService(
-      gateway: gateway,
-      now: () => fakeNowUtc,
-    );
-    final meds = MedicationService(
-      db: db,
-      notifications: notifications,
-      now: () => fakeNowUtc,
-      timezoneOffsetMinutesProvider: () => tzOffsetMin,
-    );
-
-    final added = await meds.add(
-      patientId: 'p1',
-      name: 'Levetiracetam',
-      dosage: '500mg',
-      times: const ['08:00'],
-    );
-
-    expect(gateway.scheduled, hasLength(1));
-    final firstAlarm = gateway.scheduled.values.single;
-    // 08:00 in UTC+3 == 05:00Z
-    expect(firstAlarm.scheduledDate.toUtc(), DateTime.utc(2026, 6, 1, 5, 0));
-    // Reminder body uses 12h formatting (Arabic default -> 8:00 ص)
-    expect(firstAlarm.body, contains('8:00 ص'));
-
-    // Simulate timezone travel to UTC+1 (+60 min) while still before 08:00 local (04:00Z = 05:00 in UTC+1)
-    tzOffsetMin = 60;
-    await meds.rescheduleIfTimezoneChanged('p1', const AppLocalizations(Locale('en')));
-
-    expect(gateway.cancelledIds, contains(firstAlarm.id));
-    expect(gateway.scheduled, hasLength(1));
-    final shiftedAlarm = gateway.scheduled.values.single;
-    // 08:00 in UTC+1 == 07:00Z
-    expect(shiftedAlarm.scheduledDate.toUtc(), DateTime.utc(2026, 6, 1, 7, 0));
-    expect(shiftedAlarm.body, contains('8:00 AM'));
-
-    // Mark today's 08:00 dose taken in UTC+1 (08:00 in UTC+1 == 07:00Z)
-    await meds.markTaken(
-      added,
-      scheduledFor: DateTime.utc(2026, 6, 1, 7, 0),
-    );
-    final nextDayAlarm = gateway.scheduled.values.single;
-    expect(nextDayAlarm.scheduledDate.toUtc(), DateTime.utc(2026, 6, 2, 7, 0));
-    expect(nextDayAlarm.scheduledDate.toUtc().isAfter(fakeNowUtc), isTrue);
-  });
-
-  test('default NotificationService runs safely in headless flutter test without DLL/channel crashes', () async {
-    final service = NotificationService();
-    await service.init();
-    await service.showLocal('Test', 'Body');
-    await service.scheduleDoseReminder(
-      id: 42,
-      title: 'Med',
-      body: 'Dose',
-      scheduledUtc: DateTime.now().toUtc().add(const Duration(hours: 1)),
-    );
-    await service.cancelReminder(42);
-    await service.cancelAllReminders();
-    await service.dispose();
-  });
+  test(
+    'default NotificationService runs safely in headless flutter test without DLL/channel crashes',
+    () async {
+      final service = NotificationService();
+      await service.init();
+      await service.showLocal('Test', 'Body');
+      await service.scheduleDoseReminder(
+        id: 42,
+        title: 'Med',
+        body: 'Dose',
+        scheduledUtc: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      );
+      await service.cancelReminder(42);
+      await service.cancelAllReminders();
+      await service.dispose();
+    },
+  );
 }

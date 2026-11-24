@@ -1,4 +1,5 @@
 """End-to-end tests for device, caregiver, acknowledgment, and outcome flows."""
+from tests.account_payloads import patient_payload
 from dataclasses import replace
 
 import pytest
@@ -16,7 +17,7 @@ def client():
 
 
 def _login(client: TestClient, username: str, password: str) -> str:
-    response = client.post("/auth/login", json={"username": username, "password": password})
+    response = client.post("/auth/login", json={"username": username, "password": password, "device_id": "test-installation"})
     assert response.status_code == 200, response.text
     return response.json()["access_token"]
 
@@ -32,7 +33,7 @@ def _admin(client: TestClient) -> str:
 def _create_patient(client: TestClient, admin: str, username: str = "patient_ops") -> dict:
     response = client.post(
         "/admin/patients",
-        json={"username": username, "name": "Operational Patient", "password": "secret123"},
+        json=patient_payload({"username": username, "name": "Operational Patient", "password": "secret123"}),
         headers=_headers(admin),
     )
     assert response.status_code == 201, response.text

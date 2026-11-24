@@ -362,11 +362,17 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _phone,
+                  validator: (v) =>
+                      RegExp(r'^\+?[0-9]{8,15}$').hasMatch(v?.trim() ?? '')
+                      ? null
+                      : (ar
+                            ? 'أدخل رقم هاتف صالحاً'
+                            : 'Enter a valid phone number'),
                   readOnly: _busy,
                   maxLength: 32,
                   keyboardType: TextInputType.phone,
                   decoration: InputDecoration(
-                    labelText: ar ? 'الهاتف (اختياري)' : 'Phone (optional)',
+                    labelText: ar ? 'الهاتف *' : 'Phone *',
                     prefixIcon: const Icon(Icons.phone_outlined),
                   ),
                 ),
@@ -385,17 +391,24 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
                 ),
                 const SizedBox(height: 12),
                 ExpansionTile(
+                  initiallyExpanded: true,
                   tilePadding: EdgeInsets.zero,
                   title: Text(
                     ar
-                        ? 'بيانات الترخيص المهني ووزارة الصحة (MOH)'
-                        : 'Professional License & MOH Verification',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                        ? 'بيانات الترخيص المطلوبة — سجل تحقق تجريبي'
+                        : 'Required license details — simulated registry',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   children: [
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _licenseNumber,
+                      validator: (v) => v == null || v.trim().isEmpty
+                          ? (ar ? 'هذا الحقل مطلوب' : 'Required field')
+                          : null,
                       readOnly: _busy,
                       maxLength: 64,
                       decoration: InputDecoration(
@@ -418,6 +431,9 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _nationalId,
+                      validator: (v) => v == null || v.trim().isEmpty
+                          ? (ar ? 'هذا الحقل مطلوب' : 'Required field')
+                          : null,
                       readOnly: _busy,
                       maxLength: 32,
                       decoration: InputDecoration(
@@ -428,16 +444,24 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _specialization,
+                      validator: (v) => v == null || v.trim().isEmpty
+                          ? (ar ? 'هذا الحقل مطلوب' : 'Required field')
+                          : null,
                       readOnly: _busy,
                       maxLength: 120,
                       decoration: InputDecoration(
-                        labelText: ar ? 'التخصص الطبي' : 'Medical Specialization',
+                        labelText: ar
+                            ? 'التخصص الطبي'
+                            : 'Medical Specialization',
                         prefixIcon: const Icon(Icons.medical_services_outlined),
                       ),
                     ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _hospital,
+                      validator: (v) => v == null || v.trim().isEmpty
+                          ? (ar ? 'هذا الحقل مطلوب' : 'Required field')
+                          : null,
                       readOnly: _busy,
                       maxLength: 180,
                       decoration: InputDecoration(

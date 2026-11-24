@@ -1,5 +1,6 @@
 """Push-token privacy, recipient resolution, and FCM adapter tests."""
 from __future__ import annotations
+from tests.account_payloads import patient_payload
 
 from types import SimpleNamespace
 
@@ -20,7 +21,7 @@ def client():
 
 def _login(client: TestClient, username: str, password: str) -> str:
     response = client.post(
-        "/auth/login", json={"username": username, "password": password}
+        "/auth/login", json={"username": username, "password": password, "device_id": "test-installation"}
     )
     assert response.status_code == 200, response.text
     return response.json()["access_token"]
@@ -59,10 +60,10 @@ def _create_patient(client: TestClient) -> tuple[dict, str]:
     admin = _login(client, TEST_ADMIN_USERNAME, TEST_ADMIN_PASSWORD)
     response = client.post(
         "/admin/patients",
-        json={
+        json=patient_payload({
             "username": "push_patient", "name": "Push Patient",
             "password": "secret123",
-        },
+        }),
         headers=_headers(admin),
     )
     assert response.status_code == 201, response.text

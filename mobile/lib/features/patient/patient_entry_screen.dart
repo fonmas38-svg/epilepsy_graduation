@@ -21,92 +21,99 @@ class PatientEntryScreen extends StatelessWidget {
       required String title,
       required String description,
       required String route,
-    }) =>
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => Navigator.pushNamed(context, route),
+    }) => Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => Navigator.pushNamed(context, route),
+        borderRadius: BorderRadius.circular(20),
+        child: Ink(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
             borderRadius: BorderRadius.circular(20),
-            child: Ink(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x06000000),
-                    blurRadius: 10,
-                    offset: Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: iconBgColor,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(icon, color: iconColor, size: 24),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF0D253C),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          description,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF64748B),
-                            height: 1.35,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    ar ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
-                    color: const Color(0xFF94A3B8),
-                    size: 22,
-                  ),
-                ],
-              ),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outlineVariant,
+              width: 1.2,
             ),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x06000000),
+                blurRadius: 10,
+                offset: Offset(0, 4),
+              ),
+            ],
           ),
-        );
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: iconBgColor,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: iconColor, size: 24),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      description,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                ar ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                size: 22,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F9FD),
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
         title: Text(
           ar ? 'إضافة سجل' : 'Add a record',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: Color(0xFF0D253C),
+            color: Theme.of(context).colorScheme.onSurface,
             fontSize: 19,
           ),
         ),
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Color(0xFF0D253C)),
+        iconTheme: IconThemeData(
+          color: Theme.of(context).colorScheme.onSurface,
+        ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFE4EDF7), height: 1),
+          child: Container(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            height: 1,
+          ),
         ),
       ),
       body: ResponsiveContent(
@@ -116,10 +123,10 @@ class PatientEntryScreen extends StatelessWidget {
           children: [
             Text(
               ar ? 'ما الذي تريد تسجيله؟' : 'What would you like to record?',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w800,
-                color: Color(0xFF0D253C),
+                color: Theme.of(context).colorScheme.onSurface,
               ),
             ),
             const SizedBox(height: 6),
@@ -127,9 +134,9 @@ class PatientEntryScreen extends StatelessWidget {
               ar
                   ? 'اختر نوع الإدخال لمتابعة حالتك الصحية وتوثيق الأحداث بدقة.'
                   : 'Choose an entry type to keep your health log up to date.',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
-                color: Color(0xFF64748B),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 24),
@@ -137,7 +144,9 @@ class PatientEntryScreen extends StatelessWidget {
               icon: Icons.bolt_rounded,
               iconColor: const Color(0xFFE11D48),
               iconBgColor: const Color(0xFFFFF1F2),
-              title: ar ? 'توثيق نوبة تمت ملاحظتها' : 'Document an observed seizure',
+              title: ar
+                  ? 'توثيق نوبة تمت ملاحظتها'
+                  : 'Document an observed seizure',
               description: ar
                   ? 'وقت الحدث ومدته إن عُرفت، مع ملاحظاتك.'
                   : 'Record the time, known duration and your notes.',
@@ -312,23 +321,28 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
       if (!didPop) _confirmLeave();
     },
     child: Scaffold(
-      backgroundColor: const Color(0xFFF6F9FD),
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
         title: Text(
           ar ? 'توثيق حدث' : 'Document an event',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: Color(0xFF0D253C),
+            color: Theme.of(context).colorScheme.onSurface,
             fontSize: 19,
           ),
         ),
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Color(0xFF0D253C)),
+        iconTheme: IconThemeData(
+          color: Theme.of(context).colorScheme.onSurface,
+        ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFE4EDF7), height: 1),
+          child: Container(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            height: 1,
+          ),
         ),
       ),
       body: ResponsiveContent(
@@ -350,11 +364,17 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                   onTap: _busy ? null : _chooseTime,
                   borderRadius: BorderRadius.circular(16),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                        width: 1.2,
+                      ),
                       boxShadow: const [
                         BoxShadow(
                           color: Color(0x06000000),
@@ -384,19 +404,23 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                             children: [
                               Text(
                                 ar ? 'وقت وقوع الحدث' : 'Event time',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
-                                  color: Color(0xFF64748B),
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
                               const SizedBox(height: 2),
                               Text(
                                 TimeAgo.stamp(_occurredAt),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,
-                                  color: Color(0xFF0D253C),
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface,
                                 ),
                               ),
                             ],
@@ -421,25 +445,43 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                   labelText: ar
                       ? 'المدة بالثواني (اختياري)'
                       : 'Duration in seconds (optional)',
-                  labelStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 14),
-                  prefixIcon: const Icon(Icons.timer_outlined, color: Color(0xFF0066FF)),
+                  labelStyle: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 14,
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.timer_outlined,
+                    color: Color(0xFF0066FF),
+                  ),
                   filled: true,
-                  fillColor: Colors.white,
+                  fillColor: Theme.of(context).colorScheme.surfaceContainerLow,
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Color(0xFFE4EDF7), width: 1.2),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                      width: 1.2,
+                    ),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Color(0xFF0066FF), width: 1.5),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF0066FF),
+                      width: 1.5,
+                    ),
                   ),
                   errorBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Color(0xFFE11D48), width: 1.2),
+                    borderSide: const BorderSide(
+                      color: Color(0xFFE11D48),
+                      width: 1.2,
+                    ),
                   ),
                   focusedErrorBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Color(0xFFE11D48), width: 1.5),
+                    borderSide: const BorderSide(
+                      color: Color(0xFFE11D48),
+                      width: 1.5,
+                    ),
                   ),
                 ),
                 onChanged: (_) => setState(() => _dirty = true),
@@ -461,17 +503,29 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                   labelText: ar
                       ? 'النوع المعروف إن وُجد'
                       : 'Known type, if available',
-                  labelStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 14),
-                  prefixIcon: const Icon(Icons.bubble_chart_outlined, color: Color(0xFF0066FF)),
+                  labelStyle: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 14,
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.bubble_chart_outlined,
+                    color: Color(0xFF0066FF),
+                  ),
                   filled: true,
-                  fillColor: Colors.white,
+                  fillColor: Theme.of(context).colorScheme.surfaceContainerLow,
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Color(0xFFE4EDF7), width: 1.2),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                      width: 1.2,
+                    ),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Color(0xFF0066FF), width: 1.5),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF0066FF),
+                      width: 1.5,
+                    ),
                   ),
                 ),
                 items: SeizureType.values
@@ -505,21 +559,30 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                 maxLength: 2000,
                 decoration: InputDecoration(
                   labelText: ar ? 'ملاحظات (اختياري)' : 'Notes (optional)',
-                  labelStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 14),
+                  labelStyle: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 14,
+                  ),
                   alignLabelWithHint: true,
                   prefixIcon: const Padding(
                     padding: EdgeInsets.only(bottom: 60),
                     child: Icon(Icons.notes_rounded, color: Color(0xFF0066FF)),
                   ),
                   filled: true,
-                  fillColor: Colors.white,
+                  fillColor: Theme.of(context).colorScheme.surfaceContainerLow,
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Color(0xFFE4EDF7), width: 1.2),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                      width: 1.2,
+                    ),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Color(0xFF0066FF), width: 1.5),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF0066FF),
+                      width: 1.5,
+                    ),
                   ),
                 ),
                 onChanged: (_) => setState(() => _dirty = true),
@@ -546,7 +609,10 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                             color: Colors.white,
                           ),
                         )
-                      : const Icon(Icons.check_circle_outline_rounded, size: 20),
+                      : const Icon(
+                          Icons.check_circle_outline_rounded,
+                          size: 20,
+                        ),
                   label: Text(
                     ar ? 'حفظ البلاغ' : 'Save report',
                     style: const TextStyle(

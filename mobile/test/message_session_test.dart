@@ -62,6 +62,7 @@ class MessageDb implements LocalDatabase {
     String channel, {
     int limit = 100,
     String? serverOrigin,
+    String? peerUserId,
   }) async {
     queries.add('$patient/$channel');
     return read != null
@@ -71,6 +72,7 @@ class MessageDb implements LocalDatabase {
                 (m) =>
                     m.patientId == patient &&
                     m.channelType == channel &&
+                    (peerUserId == null || m.peerUserId == peerUserId) &&
                     (serverOrigin == null ||
                         serverOrigin.isEmpty ||
                         m.serverOrigin == serverOrigin),
@@ -92,13 +94,24 @@ class MessageDb implements LocalDatabase {
   }
 
   @override
-  Future<List<ChatMessage>> unsyncedMessages(String senderId) async =>
-      rows.where((m) => !m.synced && m.senderId == senderId).toList();
+  Future<List<ChatMessage>> unsyncedMessages(
+    String senderId, {
+    String? serverOrigin,
+  }) async => rows
+      .where(
+        (m) =>
+            !m.synced &&
+            m.senderId == senderId &&
+            (serverOrigin == null || m.serverOrigin == serverOrigin),
+      )
+      .toList();
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class MessageTokens implements TokenProvider {
+  @override
+  int revision = 0;
   @override
   String? subject = 'p1';
   @override

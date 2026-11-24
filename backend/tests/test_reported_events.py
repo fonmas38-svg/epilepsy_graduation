@@ -1,3 +1,4 @@
+from tests.account_payloads import patient_payload
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -8,16 +9,16 @@ from tests.conftest import TEST_ADMIN_PASSWORD, TEST_ADMIN_USERNAME
 
 
 def credentials(client):
-    admin = client.post('/auth/login', json={'username': TEST_ADMIN_USERNAME, 'password': TEST_ADMIN_PASSWORD}).json()['access_token']
+    admin = client.post('/auth/login', json={'username': TEST_ADMIN_USERNAME, 'password': TEST_ADMIN_PASSWORD, "device_id": "test-installation"}).json()['access_token']
     headers = {'Authorization': f'Bearer {admin}'}
     ids, tokens = [], []
     for i in range(2):
-        row = client.post('/admin/patients', headers=headers, json={
+        row = client.post('/admin/patients', headers=headers, json=patient_payload({
             'username': f'event-patient-{i}', 'name': f'Patient {i}', 'password': 'report-password-123',
-        })
+        }))
         assert row.status_code == 201, row.text
         ids.append(row.json()['user']['id'])
-        token = client.post('/auth/login', json={'username': f'event-patient-{i}', 'password': 'report-password-123'}).json()['access_token']
+        token = client.post('/auth/login', json={'username': f'event-patient-{i}', 'password': 'report-password-123', "device_id": "test-installation"}).json()['access_token']
         tokens.append({'Authorization': f'Bearer {token}'})
     return ids, tokens
 

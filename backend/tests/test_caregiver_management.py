@@ -1,3 +1,4 @@
+from tests.account_payloads import patient_payload
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
@@ -6,11 +7,11 @@ from tests.conftest import TEST_ADMIN_PASSWORD, TEST_ADMIN_USERNAME
 
 
 def patient_session(client):
-    admin = client.post('/auth/login', json={'username': TEST_ADMIN_USERNAME, 'password': TEST_ADMIN_PASSWORD}).json()['access_token']
+    admin = client.post('/auth/login', json={'username': TEST_ADMIN_USERNAME, 'password': TEST_ADMIN_PASSWORD, "device_id": "test-installation"}).json()['access_token']
     headers = {'Authorization': f'Bearer {admin}'}
-    patient = client.post('/admin/patients', headers=headers, json={'name': 'Patient', 'username': 'family-patient', 'password': 'patient-password-123'})
+    patient = client.post('/admin/patients', headers=headers, json=patient_payload({'name': 'Patient', 'username': 'family-patient', 'password': 'patient-password-123'}))
     assert patient.status_code == 201
-    token = client.post('/auth/login', json={'username': 'family-patient', 'password': 'patient-password-123'}).json()['access_token']
+    token = client.post('/auth/login', json={'username': 'family-patient', 'password': 'patient-password-123', "device_id": "test-installation"}).json()['access_token']
     return patient.json()['user']['id'], {'Authorization': f'Bearer {token}'}
 
 
@@ -57,7 +58,7 @@ def test_disabled_access_is_patient_scoped_and_does_not_disable_login():
         assert users_store.caregivers_for_patient(patient_id) == []
         assert users_store.caregivers_for_patient(other['id']) == [row['id']]
         assert users_store.get_user(row['id'])['disabled'] is False
-        assert client.post('/auth/login', json={'username': 'family-member', 'password': 'caregiver-password-123'}).status_code == 200
+        assert client.post('/auth/login', json={'username': 'family-member', 'password': 'caregiver-password-123', "device_id": "test-installation"}).status_code == 200
         assert client.post(f"/patient/caregivers/{row['id']}/enable", headers=headers).status_code == 200
 
 

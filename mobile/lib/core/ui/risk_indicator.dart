@@ -25,9 +25,10 @@ abstract final class RiskCopy {
   }) => switch (view) {
     RiskView.safe => l.riskSafeBody,
     RiskView.caution => l.riskCautionBody,
-    RiskView.danger => leadTimeMin != null && leadTimeMin > 0
-        ? l.riskDangerBody(leadTimeMin.round())
-        : l.riskDangerBodyNoLead,
+    RiskView.danger =>
+      leadTimeMin != null && leadTimeMin > 0
+          ? l.riskDangerBody(leadTimeMin.round())
+          : l.riskDangerBodyNoLead,
     RiskView.unknown => l.riskUnknownBody,
   };
 
@@ -84,12 +85,14 @@ class RiskBadge extends StatelessWidget {
                 color: tone.foreground,
               ),
               SizedBox(width: dense ? Gap.xs : Gap.sm),
-              Text(
-                label,
-                style: TextStyle(
-                  color: tone.foreground,
-                  fontWeight: FontWeight.w700,
-                  fontSize: dense ? 12 : 14,
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: tone.foreground,
+                    fontWeight: FontWeight.w700,
+                    fontSize: dense ? 12 : 14,
+                  ),
                 ),
               ),
             ],
@@ -124,7 +127,9 @@ class RiskStrip extends StatelessWidget {
               child: Container(
                 height: 8,
                 decoration: BoxDecoration(
-                  color: i == active ? tone.solid : scheme.surfaceContainerHighest,
+                  color: i == active
+                      ? tone.solid
+                      : scheme.surfaceContainerHighest,
                   borderRadius: Radii.rPill,
                   border: i == active
                       ? null
@@ -206,7 +211,11 @@ class RiskGauge extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(AppColors.iconFor(view), color: tone.foreground, size: 32),
+                  Icon(
+                    AppColors.iconFor(view),
+                    color: tone.foreground,
+                    size: 32,
+                  ),
                   Gap.hMd,
                   Expanded(
                     child: Column(

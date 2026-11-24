@@ -25,7 +25,7 @@ def make_user(role="patient", username="session-person"):
         password_hash=security.hash_password(PASSWORD))
 
 
-def login(client, username, name="Test device", password=PASSWORD, device_id=None):
+def login(client, username, name="Test device", password=PASSWORD, device_id="test-installation"):
     payload = {"username": username, "password": password,
         "device_name": name, "platform": "android"}
     if device_id is not None:
@@ -202,7 +202,7 @@ def test_login_snapshot_cannot_survive_password_reset_between_verification_and_i
         return original_create(*args, **kwargs)
 
     monkeypatch.setattr(account_sessions_store, "create", reset_before_create)
-    response = client.post("/auth/login", json={"username": user["username"], "password": PASSWORD})
+    response = client.post("/auth/login", json={"username": user["username"], "password": PASSWORD, "device_id": "test-installation"})
     assert response.status_code == 401
     with connection() as conn:
         assert conn.execute(select(account_sessions).where(account_sessions.c.user_id == user["id"])).first() is None
@@ -331,8 +331,7 @@ def test_patient_login_hardware_binding_rejects_second_device_with_409(client):
 
     # Login without device_id while hardware bound session is active -> also rejected with 409
     no_dev_res = login_raw(client, user["username"])
-    assert no_dev_res.status_code == 409
-    assert no_dev_res.json()["detail"] == "هذا الحساب مسجل ونشط حالياً على جهاز آخر. يرجى تسجيل الخروج من الجهاز السابق أولاً."
+    assert no_dev_res.status_code == 422
 
 
 def test_caregiver_login_hardware_binding_rejects_second_device_with_409(client):
@@ -438,11 +437,28 @@ def test_list_sessions_includes_device_id_and_hardware_binding(client):
     assert session["isHardwareBound"] is True
 
 
-def test_baseline_compatibility_logins_without_device_id_work(client):
-    user = make_user(role="patient", username="compat-no-device-id-user")
-    # Two logins without device_id both succeed
-    first, _, _ = login(client, user["username"])
-    second, _, _ = login(client, user["username"])
-    assert client.get("/auth/me", headers=first).status_code == 200
-    assert client.get("/auth/me", headers=second).status_code == 200
+@pytest.mark.parametrize("role", ["patient", "caregiver"])
+def test_login_requires_device_id_even_before_first_session(client, role):
+    user = make_user(role=role, username="missing-device-" + role)
+    assert login_raw(client, user["username"]).status_code == 422
+    assert login_raw(client, user["username"], device_id="   ").status_code == 422
 
+
+def test_legacy_unbound_session_blocks_device_until_revoked(client):
+    user = make_user(username="legacy-device-owner")
+    auth.create_token(user["id"], "patient")
+    assert login_raw(client, user["username"], device_id="new-device").status_code == 409
+
+
+@pytest.mark.parametrize("role", ["patient", "caregiver"])
+def test_concurrent_first_logins_cannot_bind_two_devices(client, role):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    user = make_user(role=role, username="concurrent-binding-" + role)
+    ready = Barrier(2)
+    def issue(device):
+        ready.wait(timeout=10)
+        return login_raw(client, user["username"], device_id=device).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(issue, ["phone-a", "phone-b"]))
+    assert sorted(statuses) == [200, 409]

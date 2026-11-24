@@ -32,23 +32,28 @@ class ConsentsScreen extends StatelessWidget {
     final app = context.watch<AppState>();
     final ar = AppLocalizations.of(context).isArabic;
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F9FD),
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
         title: Text(
           ar ? 'المشاركة والصلاحيات' : 'Sharing and permissions',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: Color(0xFF0D253C),
+            color: Theme.of(context).colorScheme.onSurface,
             fontSize: 19,
           ),
         ),
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Color(0xFF0D253C)),
+        iconTheme: IconThemeData(
+          color: Theme.of(context).colorScheme.onSurface,
+        ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFE4EDF7), height: 1),
+          child: Container(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            height: 1,
+          ),
         ),
       ),
       body: ResponsiveContent(
@@ -59,9 +64,12 @@ class ConsentsScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  width: 1.2,
+                ),
                 boxShadow: const [
                   BoxShadow(
                     color: Color(0x06000000),
@@ -94,10 +102,10 @@ class ConsentsScreen extends StatelessWidget {
                           ar
                               ? 'التحكم في وصول المرافقين'
                               : 'Manage caregiver access',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
-                            color: Color(0xFF0D253C),
+                            color: Theme.of(context).colorScheme.onSurface,
                           ),
                         ),
                       ),
@@ -108,9 +116,9 @@ class ConsentsScreen extends StatelessWidget {
                     ar
                         ? 'يمكنك تفعيل وصول المرافق إلى بياناتك أو إيقافه من صفحة المرافقين. يطبق الخادم صلاحيات العلاقات الفعالة؛ القناة الخاصة بين المريض والطبيب لا تُعرض للمرافق.'
                         : 'Enable or disable access from the caregivers page. The server enforces active care relationships; the private patient–doctor channel is not shared with caregivers.',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
-                      color: Color(0xFF64748B),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                       height: 1.45,
                     ),
                   ),
@@ -143,9 +151,12 @@ class ConsentsScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  width: 1.2,
+                ),
                 boxShadow: const [
                   BoxShadow(
                     color: Color(0x06000000),
@@ -178,10 +189,10 @@ class ConsentsScreen extends StatelessWidget {
                           ar
                               ? 'مستويات المشاركة التفصيلية'
                               : 'Detailed sharing levels',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
-                            color: Color(0xFF0D253C),
+                            color: Theme.of(context).colorScheme.onSurface,
                           ),
                         ),
                       ),
@@ -192,9 +203,9 @@ class ConsentsScreen extends StatelessWidget {
                     ar
                         ? 'اختيار مستوى مثل «تنبيهات فقط» أو إخفاء الموقع عن مرافق محدد غير مدعوم في الخادم الحالي. أُوقفت أدوات الإعداد المحلية حتى لا توحي بحماية غير مطبقة.'
                         : 'Levels such as alerts-only or hiding location from a specific caregiver are not supported by the current server. Local configuration controls are disabled to avoid implying unenforced protection.',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
-                      color: Color(0xFF64748B),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                       height: 1.45,
                     ),
                   ),
@@ -205,9 +216,9 @@ class ConsentsScreen extends StatelessWidget {
                         ar
                             ? 'تفضيلات المشاركة القديمة المحفوظة محليًا لا تثبت تطبيقها على الخادم.'
                             : 'Previously stored local preferences do not prove server enforcement.',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: Color(0xFF94A3B8),
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ),

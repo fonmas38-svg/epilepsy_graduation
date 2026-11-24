@@ -380,6 +380,44 @@ def upsert_sql_prescription(rx: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _prescription(row) -> dict:
+    result = dict(row._mapping)
+    result["times"] = load_json(result.pop("times_json", None), [])
+    return result
+
+
+def list_sql_prescriptions(patient_id: str) -> list[dict]:
+    # Import legacy profile entries once without overwriting authoritative rows.
+    legacy = (get_patient(patient_id) or {}).get("prescriptions") or []
+    with transaction() as conn:
+        for rx in legacy:
+            if not isinstance(rx, dict) or not rx.get("id"):
+                continue
+            values = {key: rx.get(key) for key in (
+                "doctor_id", "name", "dose", "schedule", "notes", "period_context", "meal_context", "meal_type")}
+            values.update(id=str(rx["id"]), patient_id=patient_id,
+                active=bool(rx.get("active", True)), times_json=dump_json(rx.get("times") or []),
+                created_at=rx.get("created_at") or _now(), updated_at=rx.get("updated_at") or _now())
+            conn.execute(upsert(prescriptions, values).on_conflict_do_nothing(index_elements=["id"]))
+        return [_prescription(row) for row in conn.execute(select(prescriptions).where(
+            prescriptions.c.patient_id == patient_id).order_by(prescriptions.c.created_at, prescriptions.c.id)).all()]
+
+
+def update_sql_prescription(patient_id: str, rx_id: str, changes: dict) -> dict | None:
+    list_sql_prescriptions(patient_id)
+    values = dict(changes)
+    if "times" in values:
+        values["times_json"] = dump_json(values.pop("times") or [])
+    values["updated_at"] = _now()
+    with transaction() as conn:
+        result = conn.execute(update(prescriptions).where(
+            prescriptions.c.patient_id == patient_id, prescriptions.c.id == rx_id).values(**values))
+        if result.rowcount != 1:
+            return None
+        return _prescription(conn.execute(select(prescriptions).where(
+            prescriptions.c.patient_id == patient_id, prescriptions.c.id == rx_id)).one())
+
+
 def save_monitoring_bundle(
     patient_id: str,
     reading: dict[str, Any],

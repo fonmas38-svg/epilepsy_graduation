@@ -77,6 +77,17 @@ void main() {
           expect(requests, 0);
           await tester.ensureVisible(fields.at(2));
           await tester.enterText(fields.at(2), 'test-password-123');
+          for (final entry in {
+            3: '+967771234567',
+            5: 'TEST-LICENSE',
+            6: '1234567890',
+            7: 'Neurology',
+            8: 'Test hospital',
+          }.entries) {
+            await tester.ensureVisible(fields.at(entry.key));
+            await tester.enterText(fields.at(entry.key), entry.value);
+          }
+
           await tester.ensureVisible(submit);
           await tester.tap(submit);
           await tester.pumpAndSettle();

@@ -252,6 +252,8 @@ function CreateDoctorModal({ onClose, onCreated }) {
     e?.preventDefault?.();
     if (username.trim().length < 3) return toast.error('اسم المستخدم 3 أحرف على الأقل');
     if (!name.trim()) return toast.error('الاسم مطلوب');
+    if (![licenseNumber, specialization, hospitalAffiliation, nationalId].every(v => v.trim())) return toast.error('أكمل بيانات الترخيص والتخصص والمستشفى والهوية');
+    if (!/^\+?[0-9]{8,15}$/.test(phone.trim())) return toast.error('أدخل رقم هاتف صالحاً');
     if (password && password.length < 6) return toast.error('كلمة المرور 6 أحرف على الأقل');
     setBusy(true);
     try {
@@ -317,19 +319,21 @@ function CreateDoctorModal({ onClose, onCreated }) {
           hint="اتركها فارغة لتوليد كلمة مرور مؤقتة تلقائياً"
         />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-          <FormField label="رقم الهاتف" name="phone" value={phone} onChange={setPhone} />
+          <FormField label="رقم الهاتف" name="phone" required value={phone} onChange={setPhone} />
           <FormField label="البريد الإلكتروني (اختياري)" name="email" type="email" value={email} onChange={setEmail} />
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
           <FormField
             label="التخصص الطبي"
             name="specialization"
+            required
             value={specialization}
             onChange={setSpecialization}
           />
           <FormField
             label="المستشفى / جهة العمل"
             name="hospitalAffiliation"
+            required
             value={hospitalAffiliation}
             onChange={setHospitalAffiliation}
           />
@@ -338,12 +342,14 @@ function CreateDoctorModal({ onClose, onCreated }) {
           <FormField
             label="رقم الترخيص الطبي (MOH)"
             name="licenseNumber"
+            required
             value={licenseNumber}
             onChange={setLicenseNumber}
           />
           <FormField
             label="الرقم القومي / الهوية"
             name="nationalId"
+            required
             value={nationalId}
             onChange={setNationalId}
           />

@@ -79,6 +79,23 @@ void main() {
       expect(app.requests, 0);
       await tester.ensureVisible(password);
       await tester.enterText(password, 'test-password-123');
+      for (final entry in {
+        'رقم هاتف المريض': '+967771234567',
+        'العمر': '30',
+        'التشخيص ونوع الصرع': 'Test diagnosis',
+        'رقم اتصال الطوارئ *': '+967771234568',
+      }.entries) {
+        final field = find.widgetWithText(TextFormField, entry.key);
+        await tester.ensureVisible(field);
+        await tester.enterText(field, entry.value);
+      }
+      final gender = find.byType(DropdownButtonFormField<String>).first;
+      await tester.ensureVisible(gender);
+      await tester.tap(gender);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('أنثى').last);
+      await tester.pumpAndSettle();
+
       await tester.ensureVisible(find.text('حفظ وإنشاء السجل'));
       await tester.tap(find.text('حفظ وإنشاء السجل'));
       await tester.pumpAndSettle();

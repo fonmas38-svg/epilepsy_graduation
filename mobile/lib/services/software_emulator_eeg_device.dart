@@ -9,6 +9,7 @@ import '../models/models.dart';
 import 'api_client.dart';
 import 'eeg_hardware_device.dart';
 import 'signal_simulator.dart';
+import 'recorded_window_cache.dart';
 
 /// Transport sub-modes unified under [SoftwareEmulatorEegDevice].
 enum EmulatorTransportMode {
@@ -205,12 +206,7 @@ void _ringBufferIsolateEntry(_IsolateInitMessage init) {
         final w = ring.popWindow();
         if (w != null) {
           windows.add(
-            _WindowPayload(
-              eeg: w.eeg,
-              ecg: w.ecg,
-              motion: w.motion,
-              hr: w.hr,
-            ),
+            _WindowPayload(eeg: w.eeg, ecg: w.ecg, motion: w.motion, hr: w.hr),
           );
         }
       }
@@ -245,12 +241,7 @@ void _ringBufferIsolateEntry(_IsolateInitMessage init) {
         final w = ring.popWindow();
         if (w != null) {
           windows.add(
-            _WindowPayload(
-              eeg: w.eeg,
-              ecg: w.ecg,
-              motion: w.motion,
-              hr: w.hr,
-            ),
+            _WindowPayload(eeg: w.eeg, ecg: w.ecg, motion: w.motion, hr: w.hr),
           );
         }
       }
@@ -285,7 +276,12 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
     this.seed = 42,
     SignalSimulator? fallbackSimulator,
     SeizureCycleController? cycleController,
-  }) : _fallbackSimulator =
+    RecordedWindowCache? recordedCache,
+  }) : _recordedOrigin = api.baseUrl,
+       _recordedCache =
+           recordedCache ??
+           RecordedWindowCache(scope: '${api.baseUrl}::$patientId'),
+       _fallbackSimulator =
            fallbackSimulator ?? SignalSimulator(random: Random(seed)),
        cycleController =
            cycleController ??
@@ -303,6 +299,8 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
   final String patientId;
   final ApiClient api;
   final EmulatorTransportMode mode;
+  final RecordedWindowCache _recordedCache;
+  final String _recordedOrigin;
   @override
   final String deviceId;
   final int sampleRateHz;
@@ -767,15 +765,31 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
   }
 
   Future<EegPacket?> _acquireRecordedDataset({RiskLabel? forcePattern}) async {
+    if (api.baseUrl != _recordedOrigin) return null;
+    final revision = api.tokens.revision;
     _transportModeLabel = 'dataset_http_poll';
     try {
       final body = await api.datasetNext(
         patientId,
         preferLabel: forcePattern?.apiValue,
       );
-      if (_disposed) return null;
+      if (_disposed ||
+          api.baseUrl != _recordedOrigin ||
+          api.tokens.revision != revision) {
+        return null;
+      }
       final window = Map<String, dynamic>.from(body['window'] as Map);
       final raw = Map<String, dynamic>.from(body['assessment'] as Map);
+      try {
+        await _recordedCache.remember(window);
+      } catch (_) {
+        /* Recording must not interrupt the live stream. */
+      }
+      if (_disposed ||
+          api.baseUrl != _recordedOrigin ||
+          api.tokens.revision != revision) {
+        return null;
+      }
       final ts =
           DateTime.tryParse(window['timestamp'] as String? ?? '') ??
           DateTime.now();
@@ -797,7 +811,11 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
           motion: motion,
           hr: hr,
         );
-        if (_disposed) return null;
+        if (_disposed ||
+            api.baseUrl != _recordedOrigin ||
+            api.tokens.revision != revision) {
+          return null;
+        }
         if (ringRes.windows.isNotEmpty) {
           final w = ringRes.windows.last;
           eeg = w.eeg;
@@ -853,10 +871,65 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
       if (!_packetController.isClosed) _packetController.add(pkt);
       return pkt;
     } catch (e) {
-      if (_disposed) return null;
+      if (_disposed ||
+          api.baseUrl != _recordedOrigin ||
+          api.tokens.revision != revision) {
+        return null;
+      }
       _lastError = e.toString();
-      _setState(DeviceConnectionState.error);
-      return null;
+      final saved = await _recordedCache.next();
+      if (_disposed ||
+          api.baseUrl != _recordedOrigin ||
+          api.tokens.revision != revision) {
+        return null;
+      }
+      if (saved == null) {
+        _setState(DeviceConnectionState.error);
+        return null;
+      }
+      _transportModeLabel = 'offline_recorded_replay';
+      final now = DateTime.now();
+      final packet = EegPacket(
+        patientId: patientId,
+        deviceId: 'cached-dataset',
+        timestamp: now,
+        eeg: List<double>.from(
+          (saved['eeg'] as List).map((v) => (v as num).toDouble()),
+        ),
+        ecg: List<double>.from(
+          (saved['ecg'] as List).map((v) => (v as num).toDouble()),
+        ),
+        motion: List<double>.from(
+          (saved['motion'] as List).map((v) => (v as num).toDouble()),
+        ),
+        hr: (saved['hr'] as num).toDouble(),
+        sampleRateHz: sampleRateHz,
+        sequenceNumber: ++_sequenceNumber,
+        isSimulated: true,
+        sourceLabel: 'dataset_cached_replay',
+        precomputedAssessment: RiskAssessment(
+          id: 'replay-${now.microsecondsSinceEpoch}',
+          patientId: patientId,
+          timestamp: now,
+          label: RiskLabel.watch,
+          confidence: 0,
+          processingMs: 0,
+          features: {
+            'assessment_valid': false,
+            'source': 'dataset_cached_replay',
+            'recorded_at': saved['timestamp'],
+          },
+        ),
+        metadata: {
+          'assessment_valid': false,
+          'recorded_at': saved['timestamp'],
+          'offline_replay': true,
+        },
+      );
+      _lastPacketAt = now;
+      _setState(DeviceConnectionState.connected);
+      if (!_packetController.isClosed) _packetController.add(packet);
+      return packet;
     }
   }
 

@@ -58,10 +58,11 @@ abstract final class CarePaths {
 /// 4. **Never throws for a read.** A failed refresh sets [failure] and keeps the
 ///    local data visible. Only explicit user-triggered writes surface an error.
 class CareService extends ChangeNotifier {
-  CareService({required this.api, LocalDatabase? db})
+  CareService({required this.api, LocalDatabase? db, this.telemetryOrigin})
     : db = db ?? LocalDatabase.instance;
 
   final ApiClient api;
+  final String Function()? telemetryOrigin;
   final LocalDatabase db;
   final _uuid = const Uuid();
 
@@ -767,6 +768,8 @@ class CareService extends ChangeNotifier {
     required AdjudicationVerdict verdict,
     String notes = '',
     String doctorId = '',
+    String? seizureType,
+    String? artifactCause,
   }) async {
     final identity = _writeIdentity();
     final row = Adjudication(
@@ -782,7 +785,11 @@ class CareService extends ChangeNotifier {
     await _queue(
       method: 'POST',
       path: CarePaths.outcomes(patientId),
-      body: row.toApiJson(),
+      body: {
+        ...row.toApiJson(),
+        'seizure_type': ?seizureType,
+        'artifact_cause': ?artifactCause,
+      },
       table: 'adjudications',
       rowId: row.id,
       localRow: row.toMap(),
@@ -958,13 +965,35 @@ class CareService extends ChangeNotifier {
     String note = '',
   }) async {
     final pid = _requirePatient();
-    await db.acknowledgeAlert(alertId, by);
-    notifyListeners();
-    await _queue(
+    final identity = _writeIdentity();
+    final generation = _generation;
+    final item = OutboxItem(
+      id: _uuid.v4(),
       method: 'POST',
       path: CarePaths.acknowledgments(pid, alertId),
-      body: {'note': note.trim()},
+      body: {
+        'note': note.trim(),
+        '_ownerId': identity.owner,
+        '_ownerOrigin': identity.origin,
+      },
+      createdAt: DateTime.now(),
     );
+    await db.acknowledgeAndQueueAlert(
+      id: alertId,
+      patientId: pid,
+      by: by,
+      serverOrigin: telemetryOrigin?.call() ?? identity.origin,
+      delivery: item,
+    );
+    if (_disposed ||
+        generation != _generation ||
+        identity.owner != api.tokens.subject ||
+        identity.origin != api.baseUrl) {
+      return;
+    }
+    await refreshOutboxStatus();
+    notifyListeners();
+    unawaited(flushOutbox());
   }
 
   // -------------------------------------------------------- per-patient threshold

@@ -27,7 +27,7 @@ Per official Render documentation and `render.yaml`:
   - Store intervals with UTC/timezone-change recalculation so anti-epileptic drug (AED) pharmacokinetic windows do not drift across DST or timezone changes.
   - On Android 13+/14+ (`pub.dev` `flutter_local_notifications`), configure `POST_NOTIFICATIONS` and handle `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM` permissions (`requestExactAlarmsPermission()`) gracefully; on Windows, ensure desktop AUMID setup for Action Center notifications.
 
-## Hardware Satellite GNSS & Automatic Location Dispatch (Latest Updates)
+## Hardware Satellite GNSS & Automatic Location Dispatch
 
 - **Hardware GNSS Priority**: Enforce `AndroidSettings(forceLocationManager: true, accuracy: LocationAccuracy.best)` on Android in `location_service.dart`. This bypasses Google Play Services Fused Location Provider's cellular/IP geolocation fallback, eliminating international IP transit routing bugs (such as YemenNet/regional traffic resolving to Telecom Egypt gateways in Cairo/Alexandria).
 - **Inaccuracy Filtering & Fallback**: Implement accuracy thresholds (>1000m coarse, >3000m suspicious IP guess). If fresh fix has poor accuracy, check recent high-accuracy (`< 500m`, `< 30min`) satellite fixes from `Geolocator.getLastKnownPosition()`. Surface visual warning banners when Android 12+ approximate location permission is granted.

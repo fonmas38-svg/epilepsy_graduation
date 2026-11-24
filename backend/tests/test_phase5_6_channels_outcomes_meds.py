@@ -1,5 +1,6 @@
 """Phase 5 & Phase 6 backend verification: Care Circle 4-channel messaging, read receipts, outcomes optimistic locking, and prescription adherence sync."""
 from __future__ import annotations
+from tests.account_payloads import doctor_payload, patient_payload
 
 from fastapi.testclient import TestClient
 
@@ -21,7 +22,7 @@ def _setup_care_circle(client: TestClient):
     r_doc = client.post(
         "/admin/doctors",
         headers=admin_headers,
-        json={"username": "dr_p5_care", "name": "د. عادل الشهري", "password": "password123"},
+        json=doctor_payload({"username": "dr_p5_care", "name": "د. عادل الشهري", "password": "password123"}),
     )
     assert r_doc.status_code in (200, 201)
     doc_id = r_doc.json()["user"]["id"]
@@ -32,7 +33,7 @@ def _setup_care_circle(client: TestClient):
     r_pat = client.post(
         "/doctor/patients",
         headers=doc_headers,
-        json={
+        json=patient_payload({
             "username": "pat_p5_care",
             "name": "نواف الحربي",
             "password": "password123",
@@ -40,7 +41,7 @@ def _setup_care_circle(client: TestClient):
             "caregiver_username": "cg_p5_care",
             "caregiver_password": "password123",
             "caregiver_relation": "أب / ولي أمر",
-        },
+        }),
     )
     assert r_pat.status_code in (200, 201)
     pat_id = r_pat.json()["user"]["id"]
@@ -143,6 +144,11 @@ def test_outcomes_optimistic_version_locking_and_conflict():
         },
     )
     assert alert["id"] == "alert-p5-lock-1"
+    for non_clinician in (pat_headers, cg_headers):
+        assert client.post(f"/patients/{pat_id}/outcomes", headers=non_clinician,
+            json={"outcome": "seizure", "occurred_at": "2026-11-22T12:00:00Z",
+                  "alert_id": alert["id"]}).status_code == 403
+
 
     # First adjudication -> version 1
     r1 = client.post(
@@ -196,6 +202,8 @@ def test_phase6_prescription_meal_context_and_patient_only_intake_log():
     client = TestClient(app)
     pat_id, doc_id, cg_id, pat_headers, doc_headers, cg_headers = _setup_care_circle(client)
 
+    assert client.get("/patient/prescriptions?patient_id=unlinked", headers=cg_headers).status_code == 403
+
     # Doctor prescribes with meal/period context
     r_rx = client.post(
         f"/doctor/patients/{pat_id}/prescriptions",
@@ -239,3 +247,56 @@ def test_phase6_prescription_meal_context_and_patient_only_intake_log():
         assert body["totalLogs"] == 1
         assert body["takenCount"] == 1
         assert body["adherenceRate"] == 100.0
+
+
+def test_event_evidence_is_event_scoped_and_doctor_only():
+    from app import cloud_store
+    client = TestClient(app)
+    pid, _, _, pat, doc, caregiver = _setup_care_circle(client)
+    cloud_store.add_alert(pid, {"id": "evidence-event", "timestamp": "2026-11-24T12:00:00Z",
+        "severity": "critical", "message": "event"})
+    for identity, patient, timestamp in [
+        ("before", pid, "2026-11-24T11:59:55Z"),
+        ("after", pid, "2026-11-24T12:00:05+00:00"),
+        ("old", pid, "2026-11-24T11:59:00Z"),
+        ("other", "another-patient", "2026-11-24T12:00:00Z")]:
+        cloud_store.add_reading(patient, {"id": identity, "timestamp": timestamp,
+            "eeg": [0.1, 0.2], "ecg": [], "motion": [], "hr": 70})
+    path = f"/patients/{pid}/alerts/evidence-event/evidence"
+    result = client.get(path, headers=doc)
+    assert result.status_code == 200
+    assert [r["id"] for r in result.json()["readings"]] == ["before", "after"]
+    for headers in (pat, caregiver):
+        assert client.get(path, headers=headers).status_code == 403
+    assert client.get(path).status_code == 401
+    assert client.get(path.replace("evidence-event", "missing"), headers=doc).status_code == 404
+
+
+def test_prescriptions_remain_authoritative_when_legacy_profile_is_stale():
+    from app import cloud_store
+    client = TestClient(app)
+    pid, _, _, pat, doc, _ = _setup_care_circle(client)
+    path = f"/doctor/patients/{pid}/prescriptions"
+    rx = client.post(path, headers=doc, json={"name": "Test medicine", "dose": "1 tablet",
+        "schedule": "daily", "times": ["20:00", "08:00"]}).json()["prescription"]
+    assert rx["times"] == ["08:00", "20:00"]
+    cloud_store.upsert_patient(pid, {"prescriptions": [rx]})
+    assert client.patch(f"{path}/{rx['id']}", headers=doc,
+        json={"dose": "2 tablets", "meal_context": "after_meal"}).status_code == 200
+    current = client.get(f"/patients/{pid}/prescriptions", headers=pat).json()["prescriptions"]
+    assert len(current) == 1 and current[0]["dose"] == "2 tablets"
+    assert current[0]["meal_context"] == "after_meal"
+    assert client.post(path, headers=doc, json={"name": "X", "dose": "Y", "schedule": "daily",
+        "times": ["24:00"]}).status_code == 422
+    empty = client.get(f"/patients/{pid}/adherence", headers=pat).json()
+    assert empty["adherenceRate"] is None and empty["rateBasis"] == "reported_logs"
+
+
+def test_patient_creation_rejects_missing_clinical_fields():
+    client = TestClient(app)
+    _, _, _, _, doc, _ = _setup_care_circle(client)
+    response = client.post("/doctor/patients", headers=doc, json={
+        "username": "incomplete", "name": "Incomplete", "password": "password123"})
+    assert response.status_code == 422
+    missing = {error["loc"][-1] for error in response.json()["detail"]}
+    assert {"phone", "age", "gender", "emergency_contact", "diagnosis"} <= missing

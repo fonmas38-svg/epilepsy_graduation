@@ -241,7 +241,9 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
             ),
             const SizedBox(height: 20),
             SectionCard(
-              title: ar ? 'محرك الإشارات واختبار التنبؤ' : 'Signal Engine & Prediction Testing',
+              title: ar
+                  ? 'محرك الإشارات واختبار التنبؤ'
+                  : 'Signal Engine & Prediction Testing',
               icon: Icons.science_outlined,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -276,10 +278,10 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: const Color(0xFFE4EDF7),
+                  color: Theme.of(context).colorScheme.outlineVariant,
                   width: 1.2,
                 ),
                 boxShadow: const [
@@ -321,9 +323,11 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
                           ar
                               ? 'حالة المعالجة والاتصال'
                               : 'Processing & Connection Status',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
-                            color: Color(0xFF64748B),
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
                           ),
                         ),
                         const SizedBox(height: 2),

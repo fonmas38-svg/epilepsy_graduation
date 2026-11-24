@@ -22,10 +22,11 @@ that is not assigned to them; passwords are always stored hashed (PBKDF2).
 from __future__ import annotations
 
 import time
+from typing import Literal
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app import account_sessions_store, cloud_store, device_store, security, users_store
 from app.database import transaction
@@ -126,16 +127,36 @@ class RefreshResponse(BaseModel):
     user: dict
 
 
-class CreateDoctorRequest(BaseModel):
+class AccountContactFields(BaseModel):
+    @field_validator("phone", "emergency_contact", check_fields=False)
+    @classmethod
+    def valid_phone(cls, value):
+        import re
+        if value is None or not re.fullmatch(r"\+?[0-9]{8,15}", value.strip()):
+            raise ValueError("أدخل رقم هاتف من 8 إلى 15 رقماً مع رمز الدولة اختيارياً")
+        return value.strip()
+
+    @field_validator("email", check_fields=False)
+    @classmethod
+    def valid_email(cls, value):
+        import re
+        if value is None or not value.strip():
+            return None
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value.strip()):
+            raise ValueError("البريد الإلكتروني غير صالح")
+        return value.strip()
+
+
+class CreateDoctorRequest(AccountContactFields):
     username: str = Field(..., min_length=3, max_length=64)
     name: str = Field(..., min_length=1, max_length=120)
     password: str | None = Field(default=None, min_length=6, max_length=128)
     email: str | None = Field(default=None, max_length=254)
-    phone: str | None = Field(default=None, max_length=32)
-    license_number: str | None = Field(default=None, max_length=64)
-    specialization: str | None = Field(default=None, max_length=120)
-    hospital_affiliation: str | None = Field(default=None, max_length=180)
-    national_id: str | None = Field(default=None, max_length=32)
+    phone: str = Field(..., min_length=8, max_length=16)
+    license_number: str = Field(..., min_length=2, max_length=64, pattern=r"\S")
+    specialization: str = Field(..., min_length=1, max_length=120, pattern=r"\S")
+    hospital_affiliation: str = Field(..., min_length=1, max_length=180, pattern=r"\S")
+    national_id: str = Field(..., min_length=3, max_length=32, pattern=r"\S")
     moh_override: bool = False
     idempotency_key: str | None = Field(default=None, max_length=128)
 
@@ -146,19 +167,18 @@ class VerifyMohRequest(BaseModel):
     name: str | None = Field(default=None, max_length=180)
 
 
-class CreatePatientRequest(BaseModel):
+class CreatePatientRequest(AccountContactFields):
     username: str = Field(..., min_length=3, max_length=64)
     name: str = Field(..., min_length=1, max_length=120)
     password: str | None = Field(default=None, min_length=6, max_length=128)
     email: str | None = Field(default=None, max_length=254)
     # admin may target any doctor; ignored (forced to self) for doctor callers.
     doctor_id: str | None = None
-    # Clinical and contact fields (optional)
-    phone: str | None = Field(default=None, max_length=32)
-    age: int | None = Field(default=None, ge=0, le=130)
-    gender: str | None = Field(default=None, max_length=24)
-    emergency_contact: str | None = Field(default=None, max_length=120)
-    diagnosis: str | None = Field(default=None, max_length=200)
+    phone: str = Field(..., min_length=8, max_length=16)
+    age: int = Field(..., ge=0, le=130)
+    gender: Literal["male", "female"]
+    emergency_contact: str = Field(..., min_length=8, max_length=16)
+    diagnosis: str = Field(..., min_length=1, max_length=200, pattern=r"\S")
     notes: str | None = Field(default=None, max_length=500)
     # Optional family / caregiver member created with the patient
     caregiver_name: str | None = Field(default=None, max_length=120)
@@ -176,6 +196,17 @@ class CreateUserRequest(BaseModel):
     password: str | None = Field(default=None, min_length=6, max_length=128)
     email: str | None = Field(default=None, max_length=254)
     doctor_id: str | None = None
+    phone: str | None = None
+    age: int | None = None
+    gender: str | None = None
+    emergency_contact: str | None = None
+    diagnosis: str | None = None
+    license_number: str | None = None
+    specialization: str | None = None
+    hospital_affiliation: str | None = None
+    national_id: str | None = None
+    moh_override: bool = False
+    idempotency_key: str | None = None
 
 
 class UpdateUserRequest(BaseModel):
@@ -309,6 +340,8 @@ def login(body: LoginRequest, request: Request):
 
     _reset_attempts(body.username)
     if user["role"] in ("patient", "caregiver"):
+        if not body.device_id or not body.device_id.strip():
+            raise HTTPException(status_code=422, detail="معرّف تثبيت الجهاز مطلوب لتسجيل الدخول")
         conflicting = account_sessions_store.get_active_session_on_other_device(
             user["id"], body.device_id
         )
@@ -338,6 +371,7 @@ def login(body: LoginRequest, request: Request):
                 "platform": body.platform,
                 "device_id": body.device_id,
                 "is_hardware_bound": bool(body.device_id and user["role"] in ("patient", "caregiver")),
+                "enforce_device_binding": True,
             },
             expected_session_version=int(user["sessionVersion"]))
         users_store.log(
@@ -634,8 +668,15 @@ def admin_create_user(body: CreateUserRequest, actor: dict = Depends(require_adm
     """General-purpose create for admins (any role, incl. caregiver/admin)."""
     if body.role not in users_store.ROLES:
         raise HTTPException(status_code=422, detail="invalid role")
-    if body.role == "patient":
-        return _create_patient_account(CreatePatientRequest(**body.model_dump(exclude={"role"})), actor, body.doctor_id)
+    if body.role in ("patient", "doctor"):
+        try:
+            if body.role == "doctor":
+                request_body = CreateDoctorRequest.model_validate(body.model_dump(exclude={"role"}))
+                return admin_create_doctor(request_body, actor)
+            request_body = CreatePatientRequest.model_validate(body.model_dump(exclude={"role"}))
+        except ValidationError:
+            raise HTTPException(status_code=422, detail="أكمل البيانات الطبية وبيانات الاتصال المطلوبة للحساب") from None
+        return _create_patient_account(request_body, actor, body.doctor_id)
     if users_store.username_taken(body.username):
         raise HTTPException(status_code=409, detail="username already exists")
     if body.role == "patient" and body.doctor_id:

@@ -137,7 +137,7 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
     }
     final pid = args.patientId ?? app.activePatientId;
     if (pid == null || !app.auth.canAccessPatient(pid)) return null;
-    final rows = await app.db.alertsFor(pid, limit: 100);
+    final rows = await app.db.alertsFor(pid, limit: 100, serverOrigin: app.dataOrigin);
     for (final alert in rows) {
       if (alert.id == args.alertId && alert.patientId == pid) return alert;
     }

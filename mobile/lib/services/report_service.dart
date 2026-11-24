@@ -19,7 +19,10 @@ class ReportService {
       ['Patient', patient.name],
       ['Patient ID', patient.patientId],
       ['Diagnosis', patient.diagnosis],
-      ['Generated', DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())],
+      [
+        'Generated',
+        DateFormat('yyyy-MM-dd h:mm a', 'en').format(DateTime.now()),
+      ],
       [],
       ['Assessments'],
       ['Timestamp', 'Label', 'Confidence', 'ProcessingMs'],
@@ -52,14 +55,17 @@ class ReportService {
     required List<AlertItem> alerts,
   }) async {
     final doc = pw.Document();
-    final fmt = DateFormat('yyyy-MM-dd HH:mm');
+    final fmt = DateFormat('yyyy-MM-dd h:mm a', 'en');
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         build: (context) => [
           pw.Header(
             level: 0,
-            child: pw.Text('Epilepsy Monitoring Report', style: pw.TextStyle(fontSize: 22)),
+            child: pw.Text(
+              'Epilepsy Monitoring Report',
+              style: pw.TextStyle(fontSize: 22),
+            ),
           ),
           pw.Text('Patient: ${patient.name}'),
           pw.Text('ID: ${patient.patientId}'),
@@ -88,13 +94,7 @@ class ReportService {
             headers: const ['Time', 'Severity', 'Message'],
             data: alerts
                 .take(20)
-                .map(
-                  (a) => [
-                    fmt.format(a.timestamp),
-                    a.severity,
-                    a.message,
-                  ],
-                )
+                .map((a) => [fmt.format(a.timestamp), a.severity, a.message])
                 .toList(),
           ),
         ],

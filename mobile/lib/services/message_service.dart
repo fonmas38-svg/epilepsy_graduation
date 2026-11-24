@@ -22,6 +22,7 @@ class MessageService extends ChangeNotifier {
   Failure? failure;
   bool _flushing = false;
   String? _patientId;
+  String? _peerUserId;
   int _session = 0;
   int _loadRevision = 0;
   String? get patientId => _patientId;
@@ -76,6 +77,7 @@ class MessageService extends ChangeNotifier {
     _session++;
     _loadRevision++;
     _patientId = null;
+    _peerUserId = null;
     doctorMessages = [];
     familyMessages = [];
     channelMessages.clear();
@@ -85,7 +87,11 @@ class MessageService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadFor(String patientId, {String? channel}) async {
+  Future<void> loadFor(
+    String patientId, {
+    String? channel,
+    String? peerUserId,
+  }) async {
     if (!canAccess(patientId, channel: channel)) {
       clearSession();
       return;
@@ -105,6 +111,17 @@ class MessageService extends ChangeNotifier {
       lastSharedLocation = null;
     }
     _patientId = patientId;
+    _peerUserId = auth.currentUser?.role == UserRole.caregiver
+        ? auth.currentUser!.uid
+        : peerUserId;
+    final privateChannel =
+        channel == 'patient_caregiver' || channel == 'doctor_caregiver';
+    if (privateChannel && _peerUserId == null) {
+      channelMessages[channel!] = [];
+      loading = false;
+      notifyListeners();
+      return;
+    }
     loading = true;
     failure = null;
     notifyListeners();
@@ -114,7 +131,12 @@ class MessageService extends ChangeNotifier {
           channel != 'doctor_patient' &&
           channel != 'family_patient';
       if (isExtraChannel) {
-        final rows = await db.messagesForChannel(patientId, channel);
+        final rows = await db.messagesForChannel(
+          patientId,
+          channel,
+          serverOrigin: origin,
+          peerUserId: _peerUserId,
+        );
         if (!valid()) return;
         channelMessages[channel] = rows;
         notifyListeners();
@@ -124,9 +146,17 @@ class MessageService extends ChangeNotifier {
       } else {
         final doctor = user!.role == UserRole.caregiver
             ? <ChatMessage>[]
-            : await db.messagesForChannel(patientId, 'doctor_patient');
+            : await db.messagesForChannel(
+                patientId,
+                'doctor_patient',
+                serverOrigin: origin,
+              );
         if (!valid()) return;
-        final family = await db.messagesForChannel(patientId, 'family_patient');
+        final family = await db.messagesForChannel(
+          patientId,
+          'family_patient',
+          serverOrigin: origin,
+        );
         if (!valid()) return;
         doctorMessages = doctor;
         familyMessages = family;
@@ -155,23 +185,47 @@ class MessageService extends ChangeNotifier {
 
   Future<void> _pull(String pid, String channel, bool Function() valid) async {
     if (!valid()) return;
+    final origin = api.baseUrl;
+    final peer =
+        (channel == 'patient_caregiver' || channel == 'doctor_caregiver')
+        ? _peerUserId
+        : null;
+    final peerQuery = peer == null
+        ? ''
+        : '&peer_user_id=${Uri.encodeComponent(peer)}';
     final res = await api.sendJson(
       method: 'GET',
       path:
-          '/patients/${Uri.encodeComponent(pid)}/messages?channel_type=$channel&latest=true',
+          '/patients/${Uri.encodeComponent(pid)}/messages?channel_type=$channel&latest=true$peerQuery',
     );
     if (!valid()) return;
     for (final raw in res['messages'] as List? ?? []) {
       if (!valid()) return;
       if (raw is! Map) continue;
-      final msg = ChatMessage.fromMap(Map<String, dynamic>.from(raw));
-      if (msg.patientId != pid || msg.channelType != channel || msg.id.isEmpty) {
+      final msg = ChatMessage.fromMap(
+        Map<String, dynamic>.from(raw),
+      ).copyWith(serverOrigin: origin);
+      if (msg.patientId != pid ||
+          msg.channelType != channel ||
+          msg.id.isEmpty ||
+          (peer != null && msg.peerUserId != peer)) {
         throw StateError('Message identity mismatch');
       }
       await db.insertMessage(msg);
     }
     if (!valid()) return;
-    final rows = await db.messagesForChannel(pid, channel);
+    await api.sendJson(
+      method: 'POST',
+      path: '/patients/${Uri.encodeComponent(pid)}/messages/read',
+      body: {'channel_type': channel, 'peer_user_id': ?peer},
+    );
+    if (!valid()) return;
+    final rows = await db.messagesForChannel(
+      pid,
+      channel,
+      serverOrigin: origin,
+      peerUserId: peer,
+    );
     if (!valid()) return;
     if (channel == 'doctor_patient') {
       doctorMessages = rows;
@@ -187,6 +241,7 @@ class MessageService extends ChangeNotifier {
     required String patientId,
     required String channelType,
     required String content,
+    String? peerUserId,
   }) async {
     final user = auth.currentUser;
     final origin = api.baseUrl;
@@ -200,6 +255,16 @@ class MessageService extends ChangeNotifier {
       );
     }
     bool valid() => _current(user, origin, generation, patientId, channelType);
+    final peer =
+        (channelType == 'patient_caregiver' ||
+            channelType == 'doctor_caregiver')
+        ? (user.role == UserRole.caregiver ? user.uid : peerUserId)
+        : null;
+    if ((channelType == 'patient_caregiver' ||
+            channelType == 'doctor_caregiver') &&
+        peer == null) {
+      throw ArgumentError('Choose a caregiver');
+    }
     final local = ChatMessage(
       id: _uuid.v4(),
       patientId: patientId,
@@ -207,6 +272,8 @@ class MessageService extends ChangeNotifier {
       senderName: user.name,
       senderRole: user.role,
       channelType: channelType,
+      peerUserId: peer,
+      serverOrigin: origin,
       content: content.trim(),
       createdAt: DateTime.now(),
       synced: false,
@@ -252,6 +319,7 @@ class MessageService extends ChangeNotifier {
         'channel_type': local.channelType,
         'client_message_id': local.id,
         'content': local.content,
+        if (local.peerUserId != null) 'peer_user_id': local.peerUserId,
       },
     );
     if (res['message'] is! Map) {
@@ -259,9 +327,10 @@ class MessageService extends ChangeNotifier {
     }
     final server = ChatMessage.fromMap(
       Map<String, dynamic>.from(res['message'] as Map),
-    );
+    ).copyWith(serverOrigin: local.serverOrigin);
     if (server.patientId != local.patientId ||
         server.channelType != local.channelType ||
+        server.peerUserId != local.peerUserId ||
         server.senderId != local.senderId ||
         server.id.isEmpty) {
       throw StateError('Message acknowledgment identity mismatch');
@@ -287,12 +356,12 @@ class MessageService extends ChangeNotifier {
     _flushing = true;
     var count = 0;
     try {
-      final pending = await db.unsyncedMessages(user.uid);
+      final pending = await db.unsyncedMessages(user.uid, serverOrigin: origin);
       for (final row in pending) {
         bool valid() =>
             _current(user, origin, generation, row.patientId, row.channelType);
         if (!valid()) break;
-        if (row.senderId != user.uid) continue;
+        if (row.senderId != user.uid || row.serverOrigin != origin) continue;
         final server = await _post(row);
         if (!valid()) break;
         await db.replacePendingMessage(row.id, server);

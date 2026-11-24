@@ -30,7 +30,9 @@ abstract final class TimeAgo {
     final secs = d.inSeconds.abs();
     if (l.isArabic) {
       if (secs < 45) return _arUnit(secs < 1 ? 1 : secs, _arSeconds);
-      if (secs < 3600) return _arUnit(d.inMinutes.abs().clamp(1, 59), _arMinutes);
+      if (secs < 3600) {
+        return _arUnit(d.inMinutes.abs().clamp(1, 59), _arMinutes);
+      }
       if (secs < 86400) return _arUnit(d.inHours.abs().clamp(1, 23), _arHours);
       return _arUnit(d.inDays.abs().clamp(1, 3650), _arDays);
     }
@@ -51,6 +53,7 @@ abstract final class TimeAgo {
 
   /// Localized 12-hour wall-clock (`h:mm ص/م` in Arabic, `h:mm AM/PM` in English) (#13).
   static String clock(DateTime at, [AppLocalizations? l]) {
+    at = at.toLocal();
     final ar = l?.isArabic ?? true;
     final hour12 = at.hour % 12 == 0 ? 12 : at.hour % 12;
     final minute = at.minute.toString().padLeft(2, '0');
@@ -67,7 +70,9 @@ abstract final class TimeAgo {
     if (parts.length < 2) return hhmm;
     final h = int.tryParse(parts[0]);
     final m = int.tryParse(parts[1]);
-    if (h == null || m == null) return hhmm;
+    if (h == null || m == null || h < 0 || h > 23 || m < 0 || m > 59) {
+      return hhmm;
+    }
     final hour12 = h % 12 == 0 ? 12 : h % 12;
     final minute = m.toString().padLeft(2, '0');
     final period = h < 12 ? (isArabic ? 'ص' : 'AM') : (isArabic ? 'م' : 'PM');
@@ -80,5 +85,5 @@ abstract final class TimeAgo {
 
   /// `yyyy-MM-dd h:mm ص/م` for list rows that span more than one day.
   static String stamp(DateTime at, [AppLocalizations? l]) =>
-      '${isoDate(at)} ${clock(at, l)}';
+      '${isoDate(at.toLocal())} ${clock(at, l)}';
 }

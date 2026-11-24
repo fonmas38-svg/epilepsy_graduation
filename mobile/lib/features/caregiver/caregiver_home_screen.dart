@@ -1,3 +1,5 @@
+import '../shared/clinical_messages_screen.dart';
+import '../shared/account_screen.dart';
 import '../../core/ui/workspace_scaffold.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -45,6 +47,7 @@ class CaregiverHomeScreen extends StatefulWidget {
 
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   bool _loading = true;
+  int _tab = 0;
   bool _busy = false;
   Failure? _failure;
   List<_Row> _rows = const [];
@@ -63,18 +66,27 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
       _loading = true;
       _failure = null;
     });
+    final owner = app.auth.currentUser;
+    final origin = app.api.baseUrl;
+    final revision = app.api.tokens.revision;
+    bool current() =>
+        mounted &&
+        AppUser.sameSessionOwner(owner, app.auth.currentUser) &&
+        origin == app.api.baseUrl &&
+        revision == app.api.tokens.revision;
     try {
+      final patients = app.auth.accessiblePatients();
+      final snapshot = await app.db.dashboardSnapshot(
+        patients.map((p) => p.patientId).toList(),
+        serverOrigin: app.dataOrigin,
+        includeCare: false,
+      );
+      if (!current()) return;
       final rows = <_Row>[];
-      for (final p in app.auth.accessiblePatients()) {
-        final assessments = await app.db.assessmentsFor(p.patientId, limit: 1);
-        final alerts = await app.db.alertsFor(p.patientId, limit: 20);
-        rows.add(
-          _Row(
-            profile: p,
-            latest: assessments.isEmpty ? null : assessments.first,
-            alerts: alerts,
-          ),
-        );
+      for (final p in patients) {
+        final assessment = snapshot.latest[p.patientId];
+        final alerts = snapshot.alerts[p.patientId] ?? <AlertItem>[];
+        rows.add(_Row(profile: p, latest: assessment, alerts: alerts));
       }
       // The one that needs attention first: unacknowledged alerts, then recency.
       rows.sort((a, b) {
@@ -88,13 +100,13 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         if (bt == null) return -1;
         return bt.compareTo(at);
       });
-      if (!mounted) return;
+      if (!current()) return;
       setState(() {
         _rows = rows;
         _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!current()) return;
       setState(() {
         _failure = Failure.from(e);
         _loading = false;
@@ -147,66 +159,80 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     return PopScope(
       canPop: true,
       child: WorkspaceScaffold(
-        appBar: AppBar(
-          title: Text(l.isArabic ? 'مرضاي' : 'My patients'),
-          actions: [
-            IconButton(
-              tooltip: l.refresh,
-              onPressed: _loading || _busy ? null : _refresh,
-              icon: const Icon(Icons.refresh_rounded),
-            ),
-          ],
-        ),
-        body: AsyncView<List<_Row>>(
-          loading: _loading,
-          failure: _failure,
-          value: _rows,
-          isEmpty: (v) => v.isEmpty,
-          onRetry: _load,
-          emptyTitle: l.noLinkedPatients,
-          emptyBody: l.noLinkedPatientsBody,
-          emptyIcon: Icons.people_outline,
-          builder: (context, rows) => RefreshIndicator(
-            onRefresh: _refresh,
-            child: ResponsiveContent(
-              maxWidth: 850,
-              child: ListView(
-                padding: Insets.pageBottomSafe,
-                children: [
-                  OfflineBanner(
-                    visible: !app.apiOnline,
-                    lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
-                    pendingCount: app.care.pendingCount,
+        appBar: _tab == 0
+            ? AppBar(
+                title: Text(l.isArabic ? 'مرضاي' : 'My patients'),
+                actions: [
+                  IconButton(
+                    tooltip: l.refresh,
+                    onPressed: _loading || _busy ? null : _refresh,
+                    icon: const Icon(Icons.refresh_rounded),
                   ),
-                  const _CaregiverLocationTrackerCard(),
-                  Gap.vMd,
-                  SectionCard(
-                    title: l.linkedPatients,
-                    icon: Icons.people_outline,
-                    trailing: Text(
-                      '${rows.length}',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    child: Column(
-                      children: [
-                        for (final r in rows)
-                          _PatientRowTile(
-                            row: r,
-                            enabled: !_busy,
-                            onOpen: () => _open(r),
-                            onRespond: r.newestUnacked == null
-                                ? null
-                                : () => _respond(r.newestUnacked!),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Gap.vMd,
-                  _RecentSection(rows: rows, onRespond: _respond),
                 ],
+              )
+            : null,
+        selectedIndex: _tab,
+        onDestinationSelected: (index) => setState(() => _tab = index),
+        body: IndexedStack(
+          index: _tab,
+          children: [
+            AsyncView<List<_Row>>(
+              loading: _loading,
+              failure: _failure,
+              value: _rows,
+              isEmpty: (v) => v.isEmpty,
+              onRetry: _load,
+              emptyTitle: l.noLinkedPatients,
+              emptyBody: l.noLinkedPatientsBody,
+              emptyIcon: Icons.people_outline,
+              builder: (context, rows) => RefreshIndicator(
+                onRefresh: _refresh,
+                child: ResponsiveContent(
+                  maxWidth: 850,
+                  child: ListView(
+                    padding: Insets.pageBottomSafe,
+                    children: [
+                      OfflineBanner(
+                        visible: !app.apiOnline,
+                        lastUpdateLabel: TimeAgo.since(
+                          app.care.lastSyncedAt,
+                          l,
+                        ),
+                        pendingCount: app.care.pendingCount,
+                      ),
+                      const _CaregiverLocationTrackerCard(),
+                      Gap.vMd,
+                      SectionCard(
+                        title: l.linkedPatients,
+                        icon: Icons.people_outline,
+                        trailing: Text(
+                          '${rows.length}',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        child: Column(
+                          children: [
+                            for (final r in rows)
+                              _PatientRowTile(
+                                row: r,
+                                enabled: !_busy,
+                                onOpen: () => _open(r),
+                                onRespond: r.newestUnacked == null
+                                    ? null
+                                    : () => _respond(r.newestUnacked!),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Gap.vMd,
+                      _RecentSection(rows: rows, onRespond: _respond),
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
+            const ClinicalMessagesScreen(),
+            const AccountScreen(embedded: true),
+          ],
         ),
       ),
     );
@@ -227,9 +253,14 @@ class _Row {
 
   /// The newest assessment wins over `profile.currentStatus`: the profile is
   /// refreshed by a sync, the assessment by the device.
-  RiskLabel? get label => latest?.label ?? profile.currentStatus;
+  bool get hasAssessment =>
+      latest != null &&
+      latest!.confidence > 0 &&
+      latest!.features['assessment_valid'] != false;
 
-  DateTime? get observedAt => latest?.timestamp ?? profile.lastUpdated;
+  RiskLabel? get label => hasAssessment ? latest!.label : null;
+
+  DateTime? get observedAt => hasAssessment ? latest!.timestamp : null;
 
   int get unacked => alerts.where((a) => !a.acknowledged).length;
 
@@ -249,7 +280,10 @@ class _Row {
     // patient. `profile.currentStatus` defaults to `stable` and
     // `profile.lastUpdated` to «now» on a profile this device has never synced,
     // so trusting them would paint a brand-new patient green.
-    dataAvailable: latest != null,
+    dataAvailable:
+        latest != null &&
+        latest!.confidence > 0 &&
+        latest!.features['assessment_valid'] != false,
   );
 }
 

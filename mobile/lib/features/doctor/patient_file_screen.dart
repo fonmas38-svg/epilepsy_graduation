@@ -46,9 +46,10 @@ import 'adjudication_screen.dart' show verdictIcon, verdictLabel, verdictView;
 /// server. Model operating points are not editable until a validated server
 /// contract exists. Nothing here retrains the model.
 class PatientFileScreen extends StatefulWidget {
-  const PatientFileScreen({super.key, this.args});
+  const PatientFileScreen({super.key, this.args, this.embedded = false});
 
   final PatientRouteArgs? args;
+  final bool embedded;
 
   @override
   State<PatientFileScreen> createState() => _PatientFileScreenState();
@@ -117,8 +118,18 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
         await app.care.loadFor(pid);
       }
       if (!current()) return;
+      try {
+        await app.medication.synchronize(pid);
+      } catch (_) {
+        /* Retain cached prescriptions offline. */
+      }
+      if (!current()) return;
       final db = app.db;
-      final readings = await db.recentReadings(pid, limit: 1);
+      final readings = await db.recentReadings(
+        pid,
+        limit: 1,
+        serverOrigin: app.dataOrigin,
+      );
       // Load prescriptions and triggers from API (best-effort).
       List<Map<String, dynamic>> prescriptions = [];
       List<Map<String, dynamic>> triggers = [];
@@ -144,10 +155,22 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
       final data = _FileData(
         patientId: pid,
         profile: app.auth.patientById(pid),
-        assessments: await db.assessmentsFor(pid, limit: 200),
-        alerts: await db.alertsFor(pid, limit: 200),
+        assessments: await db.assessmentsFor(
+          pid,
+          limit: 200,
+          serverOrigin: app.dataOrigin,
+        ),
+        alerts: await db.alertsFor(
+          pid,
+          limit: 200,
+          serverOrigin: app.dataOrigin,
+        ),
         seizures: await db.seizureLogsFor(pid, limit: 200),
-        events: await db.predictionEventsFor(pid, limit: 200),
+        events: await db.predictionEventsFor(
+          pid,
+          limit: 200,
+          serverOrigin: app.dataOrigin,
+        ),
         adjudications: await db.adjudicationsFor(pid, limit: 200),
         notes: notes,
         reading: readings.isEmpty ? null : readings.first,
@@ -307,7 +330,10 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
 
     if (pid == null) {
       return Scaffold(
-        appBar: AppBar(title: Text(l.patientFile)),
+        appBar: AppBar(
+          automaticallyImplyLeading: !widget.embedded,
+          title: Text(l.patientFile),
+        ),
         body: EmptyState(
           title: l.noPatientSelected,
           body: l.noLinkedPatientsBody,
@@ -318,7 +344,10 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
 
     if (!_current(app)) {
       return Scaffold(
-        appBar: AppBar(title: Text(l.patientFile)),
+        appBar: AppBar(
+          automaticallyImplyLeading: !widget.embedded,
+          title: Text(l.patientFile),
+        ),
         body: EmptyState(
           title: l.errSessionExpired,
           body: ar
@@ -343,6 +372,7 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: !widget.embedded,
         title: Text(_data?.profile?.name ?? l.patientFile),
         actions: [
           IconButton(
@@ -710,12 +740,15 @@ class _FileData {
 
   /// The most recent assessment wins over `profile.currentStatus`: the profile
   /// is refreshed by a sync, the assessment by the device.
-  RiskLabel? get latestLabel =>
-      assessments.isNotEmpty ? assessments.first.label : profile?.currentStatus;
+  bool get hasAssessment =>
+      assessments.isNotEmpty &&
+      assessments.first.confidence > 0 &&
+      assessments.first.features['assessment_valid'] != false;
 
-  DateTime? get observedAt => assessments.isNotEmpty
-      ? assessments.first.timestamp
-      : profile?.lastUpdated;
+  RiskLabel? get latestLabel => hasAssessment ? assessments.first.label : null;
+
+  DateTime? get observedAt =>
+      hasAssessment ? assessments.first.timestamp : null;
 }
 
 /// One row of the merged timeline. Built from four different sources, so the
@@ -755,7 +788,7 @@ class _SummarySection extends StatelessWidget {
     final view = RiskViewX.resolve(
       label: d.latestLabel,
       observedAt: d.observedAt,
-      dataAvailable: d.assessments.isNotEmpty || d.profile != null,
+      dataAvailable: d.hasAssessment,
     );
 
     return SectionCard(
@@ -811,10 +844,12 @@ class _SummarySection extends StatelessWidget {
               Expanded(
                 child: _Stat(
                   label: l.adherenceShort,
-                  value: _pct(d.adherence),
+                  value: d.activeMeds == 0 ? l.notSet : _pct(d.adherence),
                   // §3.4's own boundary: below 80 % the doctor should be looking
                   // at the medication list, not at the model.
-                  view: d.adherence >= 0.8 ? RiskView.safe : RiskView.caution,
+                  view: d.activeMeds == 0
+                      ? RiskView.unknown
+                      : (d.adherence >= 0.8 ? RiskView.safe : RiskView.caution),
                 ),
               ),
               Gap.hSm,
@@ -1438,74 +1473,193 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
       text: existing?['notes'] as String? ?? '',
     );
 
+    var period = existing?['period_context'] as String? ?? 'morning';
+    var mealContext = existing?['meal_context'] as String? ?? 'independent';
+    var meal = existing?['meal_type'] as String? ?? 'breakfast';
+    final times = List<String>.from(existing?['times'] as List? ?? const []);
     final result = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          existing == null
-              ? (ar ? 'وصف دواء' : 'Prescribe medication')
-              : (ar ? 'تعديل الوصفة' : 'Edit prescription'),
-        ),
-        content: Form(
-          key: formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'اسم الدواء *',
-                    hintText: 'مثال: Carbamazepine',
-                    border: OutlineInputBorder(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, updateDialog) => AlertDialog(
+          title: Text(
+            existing == null
+                ? (ar ? 'وصف دواء' : 'Prescribe medication')
+                : (ar ? 'تعديل الوصفة' : 'Edit prescription'),
+          ),
+          content: Form(
+            key: formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'اسم الدواء *',
+                      hintText: 'مثال: Carbamazepine',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (v) =>
+                        v?.trim().isEmpty == true ? 'مطلوب' : null,
                   ),
-                  validator: (v) => v?.trim().isEmpty == true ? 'مطلوب' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: doseCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'الجرعة *',
-                    hintText: 'مثال: 200mg',
-                    border: OutlineInputBorder(),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: doseCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'الجرعة *',
+                      hintText: 'مثال: 200mg',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (v) =>
+                        v?.trim().isEmpty == true ? 'مطلوب' : null,
                   ),
-                  validator: (v) => v?.trim().isEmpty == true ? 'مطلوب' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: schedCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'توقيت الأخذ *',
-                    hintText: 'مثال: مرتين يومياً بعد الأكل',
-                    border: OutlineInputBorder(),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: schedCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'توقيت الأخذ *',
+                      hintText: 'مثال: مرتين يومياً بعد الأكل',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (v) =>
+                        v?.trim().isEmpty == true ? 'مطلوب' : null,
                   ),
-                  validator: (v) => v?.trim().isEmpty == true ? 'مطلوب' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: notesCtrl,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'ملاحظات',
-                    border: OutlineInputBorder(),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: period,
+                    decoration: const InputDecoration(labelText: 'الفترة'),
+                    items: const [
+                      DropdownMenuItem(value: 'morning', child: Text('صباحاً')),
+                      DropdownMenuItem(value: 'noon', child: Text('ظهراً')),
+                      DropdownMenuItem(value: 'evening', child: Text('مساءً')),
+                      DropdownMenuItem(
+                        value: 'bedtime',
+                        child: Text('قبل النوم'),
+                      ),
+                    ],
+                    onChanged: (v) => updateDialog(() => period = v!),
                   ),
-                ),
-              ],
+                  DropdownButtonFormField<String>(
+                    initialValue: mealContext,
+                    decoration: const InputDecoration(
+                      labelText: 'العلاقة بالوجبة',
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'independent',
+                        child: Text('غير مرتبط بوجبة'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'before_meal',
+                        child: Text('قبل الوجبة'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'with_meal',
+                        child: Text('مع الوجبة'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'after_meal',
+                        child: Text('بعد الوجبة'),
+                      ),
+                    ],
+                    onChanged: (v) => updateDialog(() => mealContext = v!),
+                  ),
+                  if (mealContext != 'independent')
+                    DropdownButtonFormField<String>(
+                      initialValue: meal,
+                      decoration: const InputDecoration(labelText: 'الوجبة'),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'breakfast',
+                          child: Text('الإفطار'),
+                        ),
+                        DropdownMenuItem(value: 'lunch', child: Text('الغداء')),
+                        DropdownMenuItem(
+                          value: 'dinner',
+                          child: Text('العشاء'),
+                        ),
+                      ],
+                      onChanged: (v) => updateDialog(() => meal = v!),
+                    ),
+                  FormField<List<String>>(
+                    key: ValueKey(times.join(',')),
+                    initialValue: times,
+                    validator: (_) =>
+                        times.isEmpty ? 'حدد وقت جرعة واحداً على الأقل' : null,
+                    builder: (field) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            for (final time in times)
+                              InputChip(
+                                label: Text(
+                                  TimeAgo.formatHhmm12h(time, isArabic: ar),
+                                ),
+                                onDeleted: () =>
+                                    updateDialog(() => times.remove(time)),
+                              ),
+                          ],
+                        ),
+                        TextButton.icon(
+                          icon: const Icon(Icons.add_alarm),
+                          label: const Text('إضافة وقت جرعة'),
+                          onPressed: () async {
+                            final selected = await showTimePicker(
+                              context: ctx,
+                              initialTime: const TimeOfDay(hour: 8, minute: 0),
+                              builder: (context, child) => MediaQuery(
+                                data: MediaQuery.of(
+                                  context,
+                                ).copyWith(alwaysUse24HourFormat: false),
+                                child: child!,
+                              ),
+                            );
+                            if (selected == null || !ctx.mounted) return;
+                            final time =
+                                '${selected.hour.toString().padLeft(2, '0')}:${selected.minute.toString().padLeft(2, '0')}';
+                            updateDialog(() {
+                              if (!times.contains(time)) times.add(time);
+                              times.sort();
+                            });
+                          },
+                        ),
+                        if (field.errorText != null)
+                          Text(
+                            field.errorText!,
+                            style: TextStyle(
+                              color: Theme.of(ctx).colorScheme.error,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  TextFormField(
+                    controller: notesCtrl,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'ملاحظات',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (formKey.currentState!.validate()) Navigator.pop(ctx, true);
+              },
+              child: const Text('حفظ الوصفة'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (formKey.currentState!.validate()) Navigator.pop(ctx, true);
-            },
-            child: const Text('حفظ الوصفة'),
-          ),
-        ],
       ),
     );
 
@@ -1519,6 +1673,10 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
           dose: doseCtrl.text.trim(),
           schedule: schedCtrl.text.trim(),
           notes: notesCtrl.text.trim(),
+          times: times,
+          periodContext: period,
+          mealContext: mealContext,
+          mealType: mealContext == 'independent' ? null : meal,
         );
       } else {
         await app.api.sendJson(
@@ -1530,6 +1688,10 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
             'dose': doseCtrl.text.trim(),
             'schedule': schedCtrl.text.trim(),
             'notes': notesCtrl.text.trim(),
+            'times': times,
+            'period_context': period,
+            'meal_context': mealContext,
+            'meal_type': mealContext == 'independent' ? null : meal,
           },
         );
       }

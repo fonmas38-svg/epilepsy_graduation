@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/enums.dart';
@@ -6,6 +7,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/ui/common.dart';
 import '../../core/ui/states.dart';
 import '../../core/utils/time_ago.dart';
+import '../../core/utils/doctor_title_formatter.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
 import '../../models/models.dart';
@@ -27,13 +29,32 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
   final Map<String, String> _drafts = {};
   String? _selected;
   String _channel = 'doctor_patient';
+  String? _peer;
+  List<Map<String, dynamic>> _peers = [];
+  Timer? _poll;
+  bool get _private =>
+      _channel == 'patient_caregiver' || _channel == 'doctor_caregiver';
   bool _sending = false;
   bool _allowPop = false;
   bool _initialized = false;
   AppUser? _owner;
   String? _origin;
   bool get ar => AppLocalizations.of(context).isArabic;
-  String get _draftKey => '${_selected ?? ''}:$_channel';
+  String get _draftKey => '${_selected ?? ''}:$_channel:${_peer ?? ''}';
+
+  @override
+  void initState() {
+    super.initState();
+    _poll = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted &&
+          ModalRoute.of(context)?.isCurrent == true &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+          !_sending &&
+          !context.read<AppState>().messages.loading) {
+        unawaited(_refresh());
+      }
+    });
+  }
 
   @override
   void didChangeDependencies() {
@@ -48,6 +69,8 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
       _drafts.clear();
       _text.clear();
       _selected = null;
+      _peer = null;
+      _peers = [];
       _allowPop = false;
       _channel = app.auth.currentUser?.role == UserRole.caregiver
           ? 'family_patient'
@@ -69,6 +92,7 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
 
   @override
   void dispose() {
+    _poll?.cancel();
     _text.dispose();
     _search.dispose();
     _scroll.dispose();
@@ -79,6 +103,10 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
     if (_sending) return;
     _drafts[_draftKey] = _text.text;
     setState(() {
+      if (_selected != patient) {
+        _peer = null;
+        _peers = [];
+      }
       _selected = patient;
       _channel = channel ?? _channel;
       _text.text = _drafts[_draftKey] ?? '';
@@ -89,7 +117,45 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
   Future<void> _refresh() async {
     final pid = _selected;
     if (pid != null) {
-      await context.read<AppState>().messages.loadFor(pid, channel: _channel);
+      final app = context.read<AppState>();
+      final owner = app.auth.currentUser;
+      final origin = app.api.baseUrl;
+      if (app.messages.loading) return;
+      try {
+        final response = await app.api.sendJson(
+          method: 'GET',
+          path: '/patients/${Uri.encodeComponent(pid)}/message-peers',
+        );
+        if (!mounted ||
+            _selected != pid ||
+            !AppUser.sameSessionOwner(owner, app.auth.currentUser) ||
+            origin != app.api.baseUrl) {
+          return;
+        }
+        final peers = (response['peers'] as List? ?? [])
+            .whereType<Map>()
+            .map((r) => Map<String, dynamic>.from(r))
+            .toList();
+        setState(() {
+          _peers = peers;
+          if (owner?.role == UserRole.caregiver) _peer = owner!.uid;
+          if (_peer != null && !peers.any((p) => p['id'] == _peer)) {
+            _peer = null;
+          }
+          if (_peer == null && peers.length == 1) {
+            _peer = peers.single['id'] as String;
+          }
+        });
+      } catch (_) {
+        /* Keep the selected cached conversation during an outage. */
+      }
+      if (!mounted ||
+          _selected != pid ||
+          !AppUser.sameSessionOwner(owner, app.auth.currentUser) ||
+          origin != app.api.baseUrl) {
+        return;
+      }
+      await app.messages.loadFor(pid, channel: _channel, peerUserId: _peer);
     }
   }
 
@@ -142,6 +208,7 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
       final message = await app.messages.sendMessage(
         patientId: pid,
         channelType: channel,
+        peerUserId: _peer,
         content: content,
       );
       if (!mounted ||
@@ -191,7 +258,8 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
     final isCaregiver = app.auth.currentUser?.role == UserRole.caregiver;
     final valid =
         _selected != null &&
-        app.messages.canAccess(_selected!, channel: _channel);
+        app.messages.canAccess(_selected!, channel: _channel) &&
+        (!_private || _peer != null);
     final profile = valid ? app.auth.patientById(_selected!) : null;
     return PopScope(
       canPop:
@@ -323,9 +391,12 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                   child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                        width: 1.2,
+                      ),
                       boxShadow: const [
                         BoxShadow(
                           color: Color(0x06000000),
@@ -356,17 +427,21 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                             Expanded(
                               child: Text(
                                 name,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w700,
-                                  color: Color(0xFF0D253C),
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface,
                                 ),
                               ),
                             ),
                             if (!patient)
                               IconButton(
                                 tooltip: ar ? 'تغيير المريض' : 'Change patient',
-                                onPressed: _sending ? null : () => _select(null),
+                                onPressed: _sending
+                                    ? null
+                                    : () => _select(null),
                                 icon: const Icon(
                                   Icons.people_outline_rounded,
                                   color: Color(0xFF0066FF),
@@ -376,7 +451,10 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                         ),
                         const SizedBox(height: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: const Color(0xFFFFF7ED),
                             borderRadius: BorderRadius.circular(8),
@@ -406,7 +484,8 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                                 selected: _channel == 'doctor_patient',
                                 onSelected: _sending
                                     ? null
-                                    : (_) => _select(_selected, 'doctor_patient'),
+                                    : (_) =>
+                                          _select(_selected, 'doctor_patient'),
                               ),
                             ChoiceChip(
                               tooltip: ar
@@ -421,13 +500,17 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                             if (patient || caregiver)
                               ChoiceChip(
                                 label: Text(
-                                  ar ? 'المريض والمرافق' : 'Patient & caregiver',
+                                  ar
+                                      ? 'المريض والمرافق'
+                                      : 'Patient & caregiver',
                                 ),
                                 selected: _channel == 'patient_caregiver',
                                 onSelected: _sending
                                     ? null
-                                    : (_) =>
-                                          _select(_selected, 'patient_caregiver'),
+                                    : (_) => _select(
+                                        _selected,
+                                        'patient_caregiver',
+                                      ),
                               ),
                             if (doctor || caregiver)
                               ChoiceChip(
@@ -437,11 +520,44 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                                 selected: _channel == 'doctor_caregiver',
                                 onSelected: _sending
                                     ? null
-                                    : (_) =>
-                                          _select(_selected, 'doctor_caregiver'),
+                                    : (_) => _select(
+                                        _selected,
+                                        'doctor_caregiver',
+                                      ),
                               ),
                           ],
                         ),
+                        if (_private && !caregiver) ...[
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String>(
+                            key: ValueKey('$_selected:$_channel:$_peer'),
+                            initialValue: _peer,
+                            isExpanded: true,
+                            decoration: InputDecoration(
+                              labelText: ar
+                                  ? 'المرافق في المحادثة الخاصة'
+                                  : 'Caregiver in this private conversation',
+                            ),
+                            items: _peers
+                                .map(
+                                  (p) => DropdownMenuItem(
+                                    value: p['id'] as String,
+                                    child: Text(p['name'] as String),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: _sending
+                                ? null
+                                : (value) {
+                                    _drafts[_draftKey] = _text.text;
+                                    setState(() {
+                                      _peer = value;
+                                      _text.text = _drafts[_draftKey] ?? '';
+                                    });
+                                    unawaited(_refresh());
+                                  },
+                          ),
+                        ],
                         if (loaded && app.messages.loading) ...[
                           const SizedBox(height: 10),
                           const LinearProgressIndicator(),
@@ -452,7 +568,10 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                             ar
                                 ? 'تعذر تحديث المحادثة؛ المعروض هو المحفوظ محليًا.'
                                 : 'Unable to refresh; showing local records.',
-                            style: const TextStyle(fontSize: 13, color: Color(0xFFE11D48)),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFFE11D48),
+                            ),
                           ),
                           TextButton(
                             onPressed: _sending
@@ -519,9 +638,14 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
           ),
         ),
         Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(top: BorderSide(color: Color(0xFFE4EDF7), width: 1.2)),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            border: Border(
+              top: BorderSide(
+                color: Theme.of(context).colorScheme.outlineVariant,
+                width: 1.2,
+              ),
+            ),
           ),
           child: SafeArea(
             top: false,
@@ -550,15 +674,22 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                         ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(22),
-                          borderSide: const BorderSide(color: Color(0xFFE4EDF7)),
+                          borderSide: BorderSide(
+                            color: Theme.of(context).colorScheme.outlineVariant,
+                          ),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(22),
-                          borderSide: const BorderSide(color: Color(0xFFE4EDF7)),
+                          borderSide: BorderSide(
+                            color: Theme.of(context).colorScheme.outlineVariant,
+                          ),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(22),
-                          borderSide: const BorderSide(color: Color(0xFF0066FF), width: 1.5),
+                          borderSide: const BorderSide(
+                            color: Color(0xFF0066FF),
+                            width: 1.5,
+                          ),
                         ),
                       ),
                     ),
@@ -613,14 +744,21 @@ class _MessageBubble extends StatelessWidget {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color: own ? const Color(0xFF0066FF) : Colors.white,
+            color: own
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.surfaceContainerLow,
             borderRadius: BorderRadius.only(
               topLeft: const Radius.circular(18),
               topRight: const Radius.circular(18),
               bottomLeft: Radius.circular(own ? 18 : 4),
               bottomRight: Radius.circular(own ? 4 : 18),
             ),
-            border: own ? null : Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+            border: own
+                ? null
+                : Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                    width: 1.2,
+                  ),
             boxShadow: const [
               BoxShadow(
                 color: Color(0x06000000),
@@ -634,11 +772,17 @@ class _MessageBubble extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                message.senderName,
+                DoctorTitleFormatter.format(
+                  message.senderName,
+                  role: message.senderRole,
+                  isArabic: ar,
+                ),
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
-                  color: own ? const Color(0xFFE0E7FF) : const Color(0xFF0D253C),
+                  color: own
+                      ? Theme.of(context).colorScheme.onPrimary
+                      : Theme.of(context).colorScheme.onSurface,
                 ),
               ),
               const SizedBox(height: 6),
@@ -646,7 +790,9 @@ class _MessageBubble extends StatelessWidget {
                 message.content,
                 style: TextStyle(
                   fontSize: 15,
-                  color: own ? Colors.white : const Color(0xFF1E293B),
+                  color: own
+                      ? Theme.of(context).colorScheme.onPrimary
+                      : Theme.of(context).colorScheme.onSurface,
                   height: 1.35,
                 ),
               ),
@@ -659,19 +805,27 @@ class _MessageBubble extends StatelessWidget {
                     TimeAgo.stamp(message.createdAt),
                     style: TextStyle(
                       fontSize: 11,
-                      color: own ? const Color(0xFFBFDBFE) : const Color(0xFF94A3B8),
+                      color: own
+                          ? Theme.of(
+                              context,
+                            ).colorScheme.onPrimary.withValues(alpha: .8)
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                   if (own)
                     Text(
-                      message.synced
+                      message.readAt != null
+                          ? (ar ? 'قُرئت' : 'Read')
+                          : message.synced
                           ? (ar ? 'قبله الخادم' : 'Accepted by server')
                           : (ar
                                 ? 'محفوظ محليًا · بانتظار الإرسال'
                                 : 'Saved locally · pending'),
                       style: TextStyle(
                         fontSize: 11,
-                        color: own ? const Color(0xFFBFDBFE) : const Color(0xFF94A3B8),
+                        color: own
+                            ? const Color(0xFFBFDBFE)
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                     ),
                 ],

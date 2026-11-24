@@ -50,8 +50,8 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
         !app.auth.accessiblePatients().any((p) => p.patientId == pid)) {
       return const ReportSelection(alerts: [], events: [], medications: []);
     }
-    final alerts = await app.db.alertsFor(pid, limit: 10000);
-    final events = await app.db.predictionEventsFor(pid, limit: 10000);
+    final alerts = await app.db.alertsFor(pid, limit: 10000, serverOrigin: app.dataOrigin);
+    final events = await app.db.predictionEventsFor(pid, limit: 10000, serverOrigin: app.dataOrigin);
     final meds = await app.db.medicationsFor(pid);
     return ReportSelection(alerts: alerts, events: events, medications: meds);
   }
@@ -125,13 +125,20 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                   title: ar ? 'لا يوجد مريض متاح' : 'No accessible patient',
                 ),
               if (patients.isNotEmpty) ...[
-                if (app.auth.currentUser?.role == UserRole.patient || patients.length <= 1)
+                if (app.auth.currentUser?.role == UserRole.patient ||
+                    patients.length <= 1)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                        width: 1.2,
+                      ),
                       boxShadow: const [
                         BoxShadow(
                           color: Color(0x06000000),
@@ -161,26 +168,35 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                ar ? 'ملف المريض المصرح له' : 'Authorized Patient Profile',
-                                style: const TextStyle(
+                                ar
+                                    ? 'ملف المريض المصرح له'
+                                    : 'Authorized Patient Profile',
+                                style: TextStyle(
                                   fontSize: 12,
-                                  color: Color(0xFF64748B),
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
                                 ),
                               ),
                               const SizedBox(height: 2),
                               Text(
                                 name ?? (ar ? 'ملفي الشخصي' : 'My Profile'),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,
-                                  color: Color(0xFF0D253C),
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface,
                                 ),
                               ),
                             ],
                           ),
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: const Color(0xFFECFDF5),
                             borderRadius: BorderRadius.circular(20),
@@ -189,7 +205,11 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.lock_outline, size: 13, color: Color(0xFF059669)),
+                              const Icon(
+                                Icons.lock_outline,
+                                size: 13,
+                                color: Color(0xFF059669),
+                              ),
                               const SizedBox(width: 4),
                               Text(
                                 ar ? 'خاص ومحمي' : 'Private & Secure',
@@ -307,10 +327,10 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
     const SizedBox(height: 10),
     Text(
       name,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 18,
         fontWeight: FontWeight.w800,
-        color: Color(0xFF0D253C),
+        color: Theme.of(context).colorScheme.onSurface,
       ),
     ),
     const SizedBox(height: 12),
@@ -425,7 +445,9 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
               )
             : const Icon(Icons.download_rounded, size: 20),
         label: Text(
-          ar ? 'تصدير النتائج المعروضة (Excel)' : 'Export shown results (Excel)',
+          ar
+              ? 'تصدير النتائج المعروضة (Excel)'
+              : 'Export shown results (Excel)',
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
         ),
       ),
@@ -440,9 +462,12 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            width: 1.2,
+          ),
         ),
         child: Row(
           children: [
@@ -466,18 +491,18 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                 children: [
                   Text(
                     a.message,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF0D253C),
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     TimeAgo.stamp(a.timestamp),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: Color(0xFF64748B),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ],
@@ -492,9 +517,12 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            width: 1.2,
+          ),
         ),
         child: Row(
           children: [
@@ -518,18 +546,18 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                 children: [
                   Text(
                     ar ? 'حدث من النموذج' : 'Model event',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF0D253C),
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     '${TimeAgo.stamp(e.firedAt)} · ${_outcome(e.outcome, ar)}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: Color(0xFF64748B),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ],
@@ -544,9 +572,12 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            width: 1.2,
+          ),
         ),
         child: Row(
           children: [
@@ -570,18 +601,18 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                 children: [
                   Text(
                     m.name,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF0D253C),
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     '${m.dosage} · ${m.schedule}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: Color(0xFF64748B),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ],

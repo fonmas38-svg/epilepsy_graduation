@@ -32,6 +32,7 @@ class SendMessageRequest(BaseModel):
 
 class MarkReadRequest(BaseModel):
     channel_type: ChannelTypeLiteral | None = None
+    peer_user_id: str | None = Field(default=None, max_length=64)
 
 
 class LocationShareRequest(BaseModel):
@@ -65,6 +66,39 @@ def _enforce_channel_rbac(role: str | None, channel_type: str | None, *, is_writ
     return channel_type
 
 
+def _private_peer(patient_id: str, channel: str | None, peer: str | None,
+                  principal: dict, *, required: bool = False) -> str | None:
+    if principal.get("role") == "caregiver":
+        own_id = str(principal["sub"])
+        if peer is not None and peer != own_id:
+            raise HTTPException(status_code=403, detail="Private conversation belongs to another caregiver")
+        return own_id if channel in ("patient_caregiver", "doctor_caregiver") else None
+    if channel not in ("patient_caregiver", "doctor_caregiver"):
+        return None
+    if not peer:
+        if required:
+            raise HTTPException(status_code=422, detail="Choose the caregiver for this private conversation")
+        return None
+    caregiver = users_store.get_user(peer)
+    if (not caregiver or caregiver.get("role") != "caregiver" or caregiver.get("disabled")
+            or not users_store.is_caregiver_linked(patient_id, peer)):
+        raise HTTPException(status_code=403, detail="Caregiver is not linked to this patient")
+    return peer
+
+
+@router.get("/{patient_id}/message-peers")
+def message_peers(patient_id: str, principal: dict = Depends(require_messenger)):
+    authorize_patient_access(patient_id, principal, enforce=True)
+    peers = []
+    for uid in users_store.caregivers_for_patient(patient_id):
+        if principal.get("role") == "caregiver" and uid != principal.get("sub"):
+            continue
+        user = users_store.get_user(uid)
+        if user and not user.get("disabled"):
+            peers.append({"id": uid, "name": user["name"]})
+    return {"peers": peers}
+
+
 @router.get("/{patient_id}/messages")
 def list_messages(
     patient_id: str,
@@ -79,6 +113,7 @@ def list_messages(
     authorize_patient_access(patient_id, principal, enforce=True)
     role = principal.get("role")
     channel_type = _enforce_channel_rbac(role, channel_type, is_write=False)
+    peer_user_id = _private_peer(patient_id, channel_type, peer_user_id, principal)
 
     msgs = messages_store.list_messages(
         patient_id=patient_id,
@@ -87,6 +122,8 @@ def list_messages(
         limit=limit,
         offset=offset,
         latest=latest,
+        viewer_id=str(principal["sub"]),
+        viewer_role=role,
     )
     return {"messages": msgs}
 
@@ -102,6 +139,7 @@ def send_message(
     role = principal.get("role", "patient")
     sub = str(principal.get("sub", ""))
     _enforce_channel_rbac(role, body.channel_type, is_write=True)
+    peer = _private_peer(patient_id, body.channel_type, body.peer_user_id, principal, required=True)
 
     user = users_store.get_user(sub)
     sender_name = user.get("name") if user else (principal.get("name") or "مستخدم")
@@ -115,7 +153,7 @@ def send_message(
             channel_type=body.channel_type,
             content=body.content,
             client_message_id=str(body.client_message_id) if body.client_message_id else None,
-            peer_user_id=body.peer_user_id,
+            peer_user_id=peer,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -141,10 +179,13 @@ def mark_messages_read(
     role = principal.get("role")
     sub = str(principal.get("sub", ""))
     channel_type = _enforce_channel_rbac(role, body.channel_type, is_write=False)
+    peer = _private_peer(patient_id, channel_type, body.peer_user_id, principal)
     updated = messages_store.mark_messages_read(
         patient_id=patient_id,
         reader_id=sub,
         channel_type=channel_type,
+        peer_user_id=peer,
+        viewer_role=role,
     )
     return {"ok": True, "updated": updated}
 

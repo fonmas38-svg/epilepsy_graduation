@@ -170,23 +170,28 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
     if (!_current()) return const SizedBox.shrink();
     final enabled = _loaded && !_busy && !_loading;
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F9FD),
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
         title: Text(
           ar ? 'المرافقون' : 'Caregivers',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: Color(0xFF0D253C),
+            color: Theme.of(context).colorScheme.onSurface,
             fontSize: 19,
           ),
         ),
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Color(0xFF0D253C)),
+        iconTheme: IconThemeData(
+          color: Theme.of(context).colorScheme.onSurface,
+        ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFE4EDF7), height: 1),
+          child: Container(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            height: 1,
+          ),
         ),
         actions: [
           IconButton(
@@ -203,10 +208,10 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
           children: [
             Text(
               ar ? 'قائمة مقدمي الرعاية' : 'Caregiver List',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
-                color: Color(0xFF0D253C),
+                color: Theme.of(context).colorScheme.onSurface,
               ),
             ),
             const SizedBox(height: 4),
@@ -214,9 +219,9 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
               ar
                   ? 'إدارة حسابات المرافقين المرتبطين بك. وصول التنبيهات يعتمد على إعداد القنوات واتصال أجهزتهم.'
                   : 'Manage caregivers linked to you. Notification delivery depends on channel setup and device connectivity.',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
-                color: Color(0xFF64748B),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
                 height: 1.4,
               ),
             ),
@@ -271,176 +276,219 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
                   padding: const EdgeInsets.all(20),
                   child: Center(
                     child: Text(
-                      ar ? 'لا يوجد مرافقون مرتبطون بك' : 'No linked caregivers',
-                      style: const TextStyle(color: Color(0xFF64748B)),
+                      ar
+                          ? 'لا يوجد مرافقون مرتبطون بك'
+                          : 'No linked caregivers',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ),
-              ..._members.map(
-                (member) {
-                  final isDisabled = member['disabled'] == true;
-                  final isAccountDisabled = member['accountDisabled'] == true;
-                  return Container(
-                    margin: const EdgeInsets.only(top: 14),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: const Color(0xFFE4EDF7), width: 1.2),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x06000000),
-                          blurRadius: 8,
-                          offset: Offset(0, 3),
-                        ),
-                      ],
+              ..._members.map((member) {
+                final isDisabled = member['disabled'] == true;
+                final isAccountDisabled = member['accountDisabled'] == true;
+                return Container(
+                  margin: const EdgeInsets.only(top: 14),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surface,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                      width: 1.2,
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 44,
-                              height: 44,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFEFF6FF),
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: const Icon(
-                                Icons.person_rounded,
-                                color: Color(0xFF0066FF),
-                                size: 24,
-                              ),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x06000000),
+                        blurRadius: 8,
+                        offset: Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEFF6FF),
+                              borderRadius: BorderRadius.circular(14),
                             ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '${member['name'] ?? member['username'] ?? ''}',
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF0D253C),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '@${member['username'] ?? ''}'
-                                    '${member['relation'] != null && '${member['relation']}'.isNotEmpty ? ' · ${member['relation']}' : ''}',
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      color: Color(0xFF64748B),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                            child: const Icon(
+                              Icons.person_rounded,
+                              color: Color(0xFF0066FF),
+                              size: 24,
                             ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${member['name'] ?? member['username'] ?? ''}',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurface,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '@${member['username'] ?? ''}'
+                                  '${member['relation'] != null && '${member['relation']}'.isNotEmpty ? ' · ${member['relation']}' : ''}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isAccountDisabled || isDisabled
+                                  ? const Color(0xFFFFF1F2)
+                                  : const Color(0xFFECFDF5),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
                                 color: isAccountDisabled || isDisabled
-                                    ? const Color(0xFFFFF1F2)
-                                    : const Color(0xFFECFDF5),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: isAccountDisabled || isDisabled
-                                      ? const Color(0xFFFECDD3)
-                                      : const Color(0xFFA7F3D0),
-                                ),
-                              ),
-                              child: Text(
-                                isAccountDisabled
-                                    ? (ar ? 'معطل' : 'Disabled')
-                                    : isDisabled
-                                    ? (ar ? 'وصوله إليك متوقف' : 'Access paused')
-                                    : (ar ? 'نشط' : 'Active'),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.bold,
-                                  color: isAccountDisabled || isDisabled
-                                      ? const Color(0xFFE11D48)
-                                      : const Color(0xFF059669),
-                                ),
+                                    ? const Color(0xFFFECDD3)
+                                    : const Color(0xFFA7F3D0),
                               ),
                             ),
-                          ],
-                        ),
-                        if (member['phone'] != null && '${member['phone']}'.isNotEmpty) ...[
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              const Icon(Icons.phone_outlined, size: 16, color: Color(0xFF64748B)),
-                              const SizedBox(width: 6),
-                              Text(
-                                '${member['phone']}',
-                                textDirection: TextDirection.ltr,
-                                style: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+                            child: Text(
+                              isAccountDisabled
+                                  ? (ar ? 'معطل' : 'Disabled')
+                                  : isDisabled
+                                  ? (ar ? 'وصوله إليك متوقف' : 'Access paused')
+                                  : (ar ? 'نشط' : 'Active'),
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: isAccountDisabled || isDisabled
+                                    ? const Color(0xFFE11D48)
+                                    : const Color(0xFF059669),
                               ),
-                            ],
+                            ),
                           ),
                         ],
-                        const SizedBox(height: 14),
-                        const Divider(height: 1, thickness: 1, color: Color(0xFFF1F5F9)),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 8,
+                      ),
+                      if (member['phone'] != null &&
+                          '${member['phone']}'.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        Row(
                           children: [
-                            OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                side: const BorderSide(color: Color(0xFFE4EDF7)),
-                              ),
-                              onPressed: enabled && member['disabled'] != true
-                                  ? () => _edit(member)
-                                  : null,
-                              icon: const Icon(Icons.edit_outlined, size: 16),
-                              label: Text(
-                                ar ? 'تعديل البيانات' : 'Edit details',
-                                style: const TextStyle(fontSize: 13),
-                              ),
+                            Icon(
+                              Icons.phone_outlined,
+                              size: 16,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
                             ),
-                            OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                side: BorderSide(
-                                  color: isDisabled
-                                      ? const Color(0xFF0066FF)
-                                      : const Color(0xFFE4EDF7),
-                                ),
-                              ),
-                              onPressed: enabled && member['accountDisabled'] != true
-                                  ? () => _toggle(member)
-                                  : null,
-                              icon: Icon(
-                                isDisabled ? Icons.play_arrow_rounded : Icons.pause_rounded,
-                                size: 16,
-                                color: isDisabled ? const Color(0xFF0066FF) : null,
-                              ),
-                              label: Text(
-                                isDisabled
-                                    ? (ar ? 'تفعيل الوصول' : 'Enable access')
-                                    : (ar ? 'إيقاف الوصول' : 'Disable access'),
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: isDisabled ? const Color(0xFF0066FF) : null,
-                                ),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${member['phone']}',
+                              textDirection: TextDirection.ltr,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
                               ),
                             ),
                           ],
                         ),
                       ],
-                    ),
-                  );
-                },
-              ),
+                      const SizedBox(height: 14),
+                      Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.surfaceContainerLow,
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 8,
+                        children: [
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              side: BorderSide(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.outlineVariant,
+                              ),
+                            ),
+                            onPressed: enabled && member['disabled'] != true
+                                ? () => _edit(member)
+                                : null,
+                            icon: const Icon(Icons.edit_outlined, size: 16),
+                            label: Text(
+                              ar ? 'تعديل البيانات' : 'Edit details',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              side: BorderSide(
+                                color: isDisabled
+                                    ? const Color(0xFF0066FF)
+                                    : Theme.of(
+                                        context,
+                                      ).colorScheme.outlineVariant,
+                              ),
+                            ),
+                            onPressed:
+                                enabled && member['accountDisabled'] != true
+                                ? () => _toggle(member)
+                                : null,
+                            icon: Icon(
+                              isDisabled
+                                  ? Icons.play_arrow_rounded
+                                  : Icons.pause_rounded,
+                              size: 16,
+                              color: isDisabled
+                                  ? const Color(0xFF0066FF)
+                                  : null,
+                            ),
+                            label: Text(
+                              isDisabled
+                                  ? (ar ? 'تفعيل الوصول' : 'Enable access')
+                                  : (ar ? 'إيقاف الوصول' : 'Disable access'),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: isDisabled
+                                    ? const Color(0xFF0066FF)
+                                    : null,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              }),
             ],
           ],
         ),

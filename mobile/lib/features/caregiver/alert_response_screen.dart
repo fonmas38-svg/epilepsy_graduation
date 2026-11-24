@@ -211,7 +211,7 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
         if (a.id == wanted && a.patientId == pid) return a;
       }
     }
-    final rows = await app.db.alertsFor(pid, limit: 100);
+    final rows = await app.db.alertsFor(pid, limit: 100, serverOrigin: app.dataOrigin);
     if (wanted != null) {
       for (final a in rows) {
         if (a.id == wanted && a.patientId == pid) return a;

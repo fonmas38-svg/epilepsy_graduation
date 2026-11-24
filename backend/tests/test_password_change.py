@@ -1,3 +1,4 @@
+from tests.account_payloads import doctor_payload, patient_payload
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,15 +10,18 @@ from tests.conftest import TEST_ADMIN_PASSWORD, TEST_ADMIN_USERNAME
 def test_password_change_requires_current_secret_and_revokes_old_sessions(role):
     with TestClient(app) as client:
         def login(username, password):
-            return client.post("/auth/login", json={"username": username, "password": password})
+            return client.post("/auth/login", json={"username": username, "password": password, "device_id": "test-installation"})
 
         admin = login(TEST_ADMIN_USERNAME, TEST_ADMIN_PASSWORD).json()["access_token"]
         admin_headers = {"Authorization": f"Bearer {admin}"}
         password = "original-password-123"
         username = f"change-{role}"
-        created = client.post("/admin/users", headers=admin_headers, json={
-            "username": username, "name": "Password test", "role": role, "password": password,
-        })
+        payload = {"username": username, "name": "Password test", "role": role, "password": password}
+        if role == "doctor":
+            payload = doctor_payload(payload)
+        elif role == "patient":
+            payload = patient_payload(payload)
+        created = client.post("/admin/users", headers=admin_headers, json=payload)
         assert created.status_code == 201, created.text
         token = login(username, password).json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}

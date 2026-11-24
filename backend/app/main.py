@@ -24,6 +24,7 @@ from app.routers import (
     auth,
     cloud_dataset,
     clinical,
+    review_queue,
     care,
     privacy,
     device,
@@ -153,6 +154,7 @@ app.include_router(device.router)
 app.include_router(cloud_dataset.router)
 app.include_router(model_info.router)
 app.include_router(clinical.router)
+app.include_router(review_queue.router)
 app.include_router(care.router)
 app.include_router(privacy.router)
 app.include_router(messages.router)

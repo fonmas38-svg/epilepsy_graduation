@@ -1,16 +1,50 @@
 """Patient-scoped clinical feedback and observed outcome endpoints."""
 from typing import Literal
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import DateTime, cast, func, select
 
 from app import cloud_store, outcomes_store, users_store
 from app.auth import authorize_patient_access, get_optional_principal, require_role
 from app.schemas import validate_utc_timestamp
+from app.database import connection, load_json, readings
 
 router = APIRouter(prefix="/patients", tags=["clinical-feedback"])
+
+
+@router.get("/{patient_id}/alerts/{alert_id}/evidence")
+def event_evidence(patient_id: str, alert_id: str,
+                   principal: dict = Depends(require_role("doctor", "admin"))):
+    """Stored telemetry around the event; missing history stays explicitly missing."""
+    authorize_patient_access(patient_id, principal, enforce=True)
+    alert = cloud_store.get_alert(patient_id, alert_id)
+    if alert is None:
+        raise HTTPException(status_code=404, detail="alert not found")
+    try:
+        instant = datetime.fromisoformat(str(alert["timestamp"]).replace("Z", "+00:00"))
+        if instant.tzinfo is None:
+            raise ValueError("missing timezone")
+        instant = instant.astimezone(timezone.utc)
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=422, detail="alert has no valid event timestamp")
+    start, end = instant - timedelta(seconds=10), instant + timedelta(seconds=10)
+    with connection() as conn:
+        if conn.dialect.name == "sqlite":
+            stamp = func.julianday(readings.c.captured_at)
+            lower, upper = func.julianday(start.isoformat()), func.julianday(end.isoformat())
+        else:
+            stamp = cast(readings.c.captured_at, DateTime(timezone=True))
+            lower, upper = start, end
+        rows = conn.execute(select(readings.c.payload_json).where(
+            readings.c.patient_id == patient_id, stamp >= lower, stamp <= upper,
+        ).order_by(stamp, readings.c.sequence).limit(65)).all()
+    return {"alert": alert, "windowStart": start.isoformat(), "windowEnd": end.isoformat(),
+            "readings": [load_json(row[0], {}) for row in rows[:64]],
+            "truncated": len(rows) > 64, "available": bool(rows)}
 
 
 class SeizureLogRequest(BaseModel):
@@ -27,7 +61,7 @@ def _reported_event(row: dict) -> dict:
     return {"id": row["id"], "patientId": row["patientId"],
             "occurredAt": row["occurredAt"], "durationSeconds": row.get("duration_seconds"),
             "type": row.get("seizure_type", "other"), "notes": row.get("notes", ""),
-            "reportedBy": row["recordedBy"], "alertId": row.get("alertId"),
+            "reportedBy": row["recordedBy"], "alertId": row.get("reported_alert_id", row.get("alertId")),
             "clinicallyConfirmed": False}
 
 
@@ -133,7 +167,9 @@ def create_outcome(
     patient_id: str, body: OutcomeRequest,
     principal: dict = Depends(get_optional_principal),
 ):
-    authorize_patient_access(patient_id, principal)
+    authorize_patient_access(patient_id, principal, enforce=True)
+    if body.alert_id and principal.get("role") not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="only a clinician can adjudicate an alert")
     meta = dict(body.metadata or {})
     if body.seizure_type:
         meta["seizure_type"] = body.seizure_type

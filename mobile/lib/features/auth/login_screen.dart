@@ -536,7 +536,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         decoration: BoxDecoration(
                           color: const Color(0xFFEFF6FF),
                           borderRadius: BorderRadius.circular(22),
-                          border: Border.all(color: const Color(0xFFDBEAFE), width: 1.5),
+                          border: Border.all(
+                            color: const Color(0xFFDBEAFE),
+                            width: 1.5,
+                          ),
                           boxShadow: const [
                             BoxShadow(
                               color: Color(0x080066FF),
@@ -557,10 +560,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     ar ? 'مرحبًا بعودتك' : 'Welcome back',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 26,
                       fontWeight: FontWeight.w800,
-                      color: Color(0xFF0D253C),
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -569,9 +572,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         ? 'سجّل الدخول إلى حسابك للمتابعة'
                         : 'Sign in to continue',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
-                      color: Color(0xFF64748B),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                   const SizedBox(height: 32),
@@ -750,7 +753,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             GestureDetector(
-                              onLongPress: () => _showServerSettingsModal(context),
+                              onLongPress: () =>
+                                  _showServerSettingsModal(context),
                               child: Icon(
                                 Icons.monitor_heart_outlined,
                                 size: 100,

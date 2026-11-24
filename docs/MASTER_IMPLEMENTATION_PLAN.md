@@ -1,6 +1,8 @@
 # MASTER ARCHITECTURAL AUDIT & IMPLEMENTATION PLAN (v2.1.0)
 ## Epilepsy Patient Monitoring System (Flutter • FastAPI • Supabase • Render)
 
+> **Latest verification — 2026-11-24:** The phase results below are historical checkpoints, not a declaration that all requirements are complete. See [the current verification and repair report](IMPLEMENTATION_VERIFICATION_2026-11-24.md) for reproduced defects, implemented repairs, current test evidence, and outstanding work. The source request has 19 numbered items because #12 was omitted.
+
 **Document Version**: 2.1.0 — Phase 1, Phase 2 & Phase 3 Completed & Verified; Phases 4–6 Core Checkpoint Saved  
 **Status**: **Phase 1 Completed & Verified** (Backend 231/231 -> 239/239) | **Phase 2 Completed & Verified** (Backend targeted 33/33, Mobile `dart analyze` 0 issues, Mobile `flutter test` 189/189) | **Phase 3 Completed & Verified** (Backend sync-batch & contract 7/7, Mobile hardware emulator & resilience tests all passed) | **Phases 4–6 Core Checkpoint Saved** (Backend MOH/5-channel messaging/optimistic locking/prescriptions tests 6/6 passed, Mobile `dart analyze --fatal-infos lib` 0 issues, onboarding/scope/messaging tests 26/26 passed)  
 **Governing Project Skills**:

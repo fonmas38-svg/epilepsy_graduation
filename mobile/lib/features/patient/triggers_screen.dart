@@ -77,6 +77,8 @@ class TriggersScreen extends StatelessWidget {
           children: [
             OfflineBanner(
               visible: !app.apiOnline,
+              mode: app.operatingMode,
+              onSyncNow: app.syncNow,
               lastUpdateLabel: care.lastSyncedAt == null
                   ? null
                   : TimeAgo.since(care.lastSyncedAt, l),

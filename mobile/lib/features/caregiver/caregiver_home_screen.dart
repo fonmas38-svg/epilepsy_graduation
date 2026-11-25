@@ -194,6 +194,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                     children: [
                       OfflineBanner(
                         visible: !app.apiOnline,
+                        mode: app.operatingMode,
+                        onSyncNow: app.syncNow,
                         lastUpdateLabel: TimeAgo.since(
                           app.care.lastSyncedAt,
                           l,
@@ -600,6 +602,8 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
               children: [
                 OfflineBanner(
                   visible: !app.apiOnline,
+                  mode: app.operatingMode,
+                  onSyncNow: app.syncNow,
                   lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
                   pendingCount: app.care.pendingCount,
                 ),

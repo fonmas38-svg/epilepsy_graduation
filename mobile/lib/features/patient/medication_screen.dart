@@ -371,7 +371,7 @@ class _MedicationScreenState extends State<MedicationScreen> {
           child: ListView(
             padding: Insets.pageBottomSafe,
             children: [
-              OfflineBanner(visible: !app.apiOnline),
+              OfflineBanner(visible: !app.apiOnline, mode: app.operatingMode),
               _AdherenceSection(
                 data: d,
                 onShare: canShareAdherence ? () => _share(d) : null,

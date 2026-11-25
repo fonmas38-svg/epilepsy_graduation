@@ -20,10 +20,16 @@ class MonitoringCapabilityNotice extends StatelessWidget {
         !app.monitoring.deviceConnected;
     final replay = app.monitoring.signalSourceLabel == 'dataset_cached_replay';
     final location = app.location.lastResult?.status;
+    final edgeReady = app.sync.edgeRunner.available;
+    final engine = app.monitoring.latestAssessment?.features['engine'];
     final messages = <String>[
-      ar
-          ? 'النموذج العصبي المحلي غير مفعّل على هذا الإصدار. عند تعذر السحابة تستخدم المحاكاة قواعد تجريبية محدودة؛ لا توفر نفس أداء النموذج السحابي. تحقق من الاتصال والجهاز، ولا تعتمد على غياب التنبيه كدليل سلامة.'
-          : 'This build has no active local neural model. Simulation uses limited experimental rules when cloud analysis fails; it does not provide cloud model parity. Check the connection and device. No alert does not establish safety.',
+      edgeReady
+          ? (ar
+                ? 'دون إنترنت يعمل على جهازك نموذج الكشف المحلي EdgeSeizureNet: يكشف نشاطاً صرعياً جارياً فقط ولا يتنبأ بالنوبة مسبقاً؛ التنبؤ المبكر متاح عبر السحابة فقط. النتائج غير معتمدة سريرياً، ولا تعتمد على غياب التنبيه كدليل سلامة.'
+                : 'Offline, the on-device EdgeSeizureNet detection model runs on this phone: it detects ongoing seizure activity only and does not forecast; early forecasting is cloud-only. Results are not clinically validated. No alert does not establish safety.')
+          : (ar
+                ? 'النموذج العصبي المحلي غير مفعّل على هذا الإصدار. عند تعذر السحابة تستخدم المحاكاة قواعد تجريبية محدودة؛ لا توفر نفس أداء النموذج السحابي. تحقق من الاتصال والجهاز، ولا تعتمد على غياب التنبيه كدليل سلامة.'
+                : 'This build has no active local neural model. Simulation uses limited experimental rules when cloud analysis fails; it does not provide cloud model parity. Check the connection and device. No alert does not establish safety.'),
       if (missingStream)
         ar
             ? 'لا تصل عينات حديثة من الجهاز. لا توجد وصلة EEG محلية مباشرة في هذا الإصدار؛ المراقبة المستمرة غير متاحة حتى عودة مصدر العينات.'
@@ -47,6 +53,14 @@ class MonitoringCapabilityNotice extends StatelessWidget {
               ? (ar
                     ? 'لا تصل بيانات حديثة من الجهاز. تحقق من مصدر المراقبة.'
                     : 'No fresh device data. Check the monitoring source.')
+              : engine == 'edge_onnx'
+              ? (ar
+                    ? '🛡️ المحرك النشط: المحلي (كشف فقط، دون تنبؤ مسبق).'
+                    : '🛡️ Active engine: on-device (detection only, no forecast).')
+              : edgeReady
+              ? (ar
+                    ? '☁️ المحرك النشط: السحابي (تنبؤ مبكر). عند انقطاع الإنترنت يعمل الكشف المحلي.'
+                    : '☁️ Active engine: cloud (early forecast). Offline, on-device detection takes over.')
               : (ar
                     ? 'المراقبة تعتمد على توفر الخادم. النموذج المحلي غير مفعّل.'
                     : 'Monitoring depends on server availability. The local model is not enabled.'),

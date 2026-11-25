@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../core/config.dart';
 import '../core/enums.dart';
 import '../models/models.dart';
+import 'connectivity_coordinator.dart';
 import 'secure_store.dart';
 import 'token_provider.dart';
 
@@ -122,6 +123,45 @@ class ApiClient {
     }
   }
 
+  /// `true` after a request failed in a way that proves the phone has no route
+  /// to the internet (DNS failure, network unreachable). Cleared by the next
+  /// HTTP response of any status. Timeouts leave it unchanged: they happen
+  /// both on captive Wi-Fi and on a slow cold start.
+  final ValueNotifier<bool> noInternetNotifier = ValueNotifier<bool>(false);
+  bool get noInternetDetected => noInternetNotifier.value;
+
+  /// Set by [AppState] from the OS connectivity stream. When it reports the
+  /// device offline, cold-start backoff is skipped entirely: there is no
+  /// server to wake, and sleeping up to 90 s only drains the battery.
+  bool Function()? deviceOffline;
+
+  bool get _deviceOffline {
+    if (noInternetNotifier.value) return true;
+    try {
+      return deviceOffline?.call() ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Only requests to the active server speak for the phone's connectivity:
+  /// a DNS failure while testing a mistyped custom URL must not put the whole
+  /// app into «no internet» mode.
+  bool _isActiveTarget(String? url) =>
+      url == null || url.trim().replaceAll(RegExp(r'/+$'), '') == _baseUrl;
+
+  void _noteResponse([String? target]) {
+    if (!_isActiveTarget(target)) return;
+    if (noInternetNotifier.value) noInternetNotifier.value = false;
+  }
+
+  void _noteError(Object error, [String? target]) {
+    if (!_isActiveTarget(target)) return;
+    if (isNoInternetError(error) && !noInternetNotifier.value) {
+      noInternetNotifier.value = true;
+    }
+  }
+
   void _exitWaking() {
     if (_wakingOps > 0) _wakingOps--;
     if (_wakingOps == 0 && wakingNotifier.value) {
@@ -137,6 +177,7 @@ class ApiClient {
 
   void dispose() {
     wakingNotifier.dispose();
+    noInternetNotifier.dispose();
   }
 
   /// Issues/refreshes the JWT attached to authenticated requests.
@@ -345,12 +386,14 @@ class ApiClient {
           ? Uri.parse('${overrideUrl.replaceAll(RegExp(r"/+$"), "")}/health')
           : _u('/health');
       final r = await _client.get(uri).timeout(timeout);
+      _noteResponse(overrideUrl);
       final ok = r.statusCode == 200;
       debugPrint(
         '[ApiClient] Health check on $uri: ${ok ? "ONLINE (200 OK)" : "STATUS ${r.statusCode}"}',
       );
       return ok;
     } catch (e) {
+      _noteError(e, overrideUrl);
       debugPrint('[ApiClient] Health check failed: $e');
       return false;
     }
@@ -370,6 +413,7 @@ class ApiClient {
         '[ApiClient] Pinging server: $uri (timeout: ${timeout.inSeconds}s)...',
       );
       final r = await _client.get(uri).timeout(timeout);
+      _noteResponse(targetUrl);
       sw.stop();
       if (r.statusCode == 200) {
         debugPrint(
@@ -380,6 +424,7 @@ class ApiClient {
       debugPrint('[ApiClient] Server responded with status ${r.statusCode}');
       return null;
     } catch (e) {
+      _noteError(e, targetUrl);
       debugPrint('[ApiClient] Server ping failed on $targetUrl: $e');
       return null;
     }
@@ -678,7 +723,7 @@ class ApiClient {
       final headers = await _headers();
       checkSession();
       final uri = _u(path);
-      return switch (upper) {
+      final Future<http.Response> request = switch (upper) {
         'GET' => _client.get(uri, headers: headers).timeout(attemptTimeout),
         'PUT' =>
           _client
@@ -697,6 +742,14 @@ class ApiClient {
               .post(uri, headers: headers, body: payload)
               .timeout(attemptTimeout),
       };
+      try {
+        final r = await request;
+        _noteResponse();
+        return r;
+      } catch (e) {
+        _noteError(e);
+        rethrow;
+      }
     }
 
     Future<http.Response> runWith401Refresh(Duration attemptTimeout) async {
@@ -729,11 +782,15 @@ class ApiClient {
         lastResponse = r;
       } catch (e) {
         if (e is ApiException || !_isConnectivityError(e)) rethrow;
+        // No internet on the phone: nothing to wake, fail fast so callers
+        // fall back to local mode immediately.
+        if (_deviceOffline) rethrow;
         lastError = e;
       }
 
       for (final delay in _coldStartBackoff) {
         checkSession();
+        if (_deviceOffline) break;
         final remaining = _coldStartCeiling - _now().difference(startedAt);
         if (remaining <= Duration.zero) break;
         final wait = delay < remaining ? delay : remaining;
@@ -743,6 +800,7 @@ class ApiClient {
         }
         await _sleep(wait);
         checkSession();
+        if (_deviceOffline) break;
         final remainingAfterSleep =
             _coldStartCeiling - _now().difference(startedAt);
         if (remainingAfterSleep <= Duration.zero) break;
@@ -758,6 +816,7 @@ class ApiClient {
           if (e is ApiException || !_isConnectivityError(e)) rethrow;
           lastError = e;
           lastResponse = null;
+          if (_deviceOffline) break;
         }
       }
 

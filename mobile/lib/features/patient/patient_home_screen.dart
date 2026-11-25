@@ -19,6 +19,8 @@ import '../../services/location_service.dart';
 import '../../services/medication_service.dart';
 import '../../services/monitoring_service.dart';
 import '../../widgets/lead_time_card.dart';
+import '../../widgets/battery_exemption_notice.dart';
+import '../../widgets/emergency_contacts_warning.dart';
 import '../../widgets/monitoring_capability_notice.dart';
 import '../../widgets/prediction_gauge.dart';
 import '../../widgets/signal_chart.dart';
@@ -425,10 +427,14 @@ class _DashboardTabState extends State<_DashboardTab> {
                 Gap.vMd,
                 OfflineBanner(
                   visible: !app.apiOnline,
+                  mode: app.operatingMode,
+                  onSyncNow: app.syncNow,
                   lastUpdateLabel: TimeAgo.since(app.lastObservedAt, l),
                   pendingCount: app.care.pendingCount,
                 ),
                 MonitoringCapabilityNotice(app: app),
+                EmergencyContactsWarning(app: app),
+                BatteryExemptionNotice(background: app.background),
                 if (pre != null) ...[
                   Gap.vMd,
                   _PreAlertCard(
@@ -1768,6 +1774,8 @@ class _AlertsTab extends StatelessWidget {
         children: [
           OfflineBanner(
             visible: !app.apiOnline,
+            mode: app.operatingMode,
+            onSyncNow: app.syncNow,
             pendingCount: app.care.pendingCount,
           ),
           Expanded(
@@ -2371,7 +2379,12 @@ class _PatientMonitoringScreenState extends State<PatientMonitoringScreen> {
             if (prediction != null) ...[
               PredictionGauge(prediction: prediction),
               Gap.vMd,
-              LeadTimeCard(prediction: prediction),
+              LeadTimeCard(
+                prediction: prediction,
+                engine:
+                    app.monitoring.latestAssessment?.features['engine']
+                        as String?,
+              ),
               Gap.vMd,
             ],
             _MonitoringEngineCard(app: app),

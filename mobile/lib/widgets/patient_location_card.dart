@@ -6,6 +6,7 @@ import '../core/utils/time_ago.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../providers/app_state.dart';
+import '../services/location_service.dart';
 
 /// Every location is explicitly bound to a patient and timestamp, never "live".
 class PatientLocationCard extends StatefulWidget {
@@ -81,6 +82,8 @@ class _PatientLocationCardState extends State<PatientLocationCard> {
               lat.abs() <= 90 &&
               lon.abs() <= 180;
           final at = DateTime.tryParse('${data?['updatedAt']}');
+          final source = LocationSource.fromWire(data?['source']);
+          final capturedAt = DateTime.tryParse('${data?['capturedAt']}');
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -100,6 +103,19 @@ class _PatientLocationCardState extends State<PatientLocationCard> {
                       ? (ar ? 'وقت المشاركة غير معروف' : 'Share time unknown')
                       : TimeAgo.stamp(at),
                 ),
+                if (source != null)
+                  Text(
+                    source.label(arabic: ar),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                if (capturedAt != null &&
+                    at != null &&
+                    at.difference(capturedAt) >= const Duration(minutes: 2))
+                  Text(
+                    ar
+                        ? 'التُقط الموقع قبل المشاركة بـ ${at.difference(capturedAt).inMinutes} دقيقة'
+                        : 'Captured ${at.difference(capturedAt).inMinutes} min before it was shared',
+                  ),
                 if (accuracy != null && accuracy.isFinite && accuracy >= 0)
                   Text(
                     ar

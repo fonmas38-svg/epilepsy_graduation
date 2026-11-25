@@ -490,7 +490,7 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    a.message,
+                    a.displayMessage,
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,

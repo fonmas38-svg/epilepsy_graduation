@@ -102,7 +102,7 @@ class ReportExportService {
         ),
         TextCellValue(alert.timestamp.toLocal().toString().split('.')[0]),
         TextCellValue(alert.severity),
-        TextCellValue(alert.message),
+        TextCellValue(alert.displayMessage),
         TextCellValue(alert.recipients.join(', ')),
       ]);
     }

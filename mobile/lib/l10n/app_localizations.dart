@@ -113,6 +113,10 @@ class AppLocalizations {
   String get savedLocallyWillSync => _s('savedLocallyWillSync');
   String get pendingSync => _s('pendingSync');
   String get wakingCloudServer => _s('wakingCloudServer');
+  String get offlineLocalMode => _s('offlineLocalMode');
+  String get serverUnreachableMode => _s('serverUnreachableMode');
+  String get syncingNow => _s('syncingNow');
+  String get syncNow => _s('syncNow');
 
   // ------------------------------------------------------ risk states (§3.1)
   String get riskSafeTitle => _s('riskSafeTitle');
@@ -482,6 +486,7 @@ class AppLocalizations {
   String get respond => _s('respond');
   String get noPatientSelected => _s('noPatientSelected');
   String get locationUnavailable => _s('locationUnavailable');
+  String get locationPending => _s('locationPending');
   String get arrived => _s('arrived');
   String get alertTime => _s('alertTime');
   String get lastKnownStatus => _s('lastKnownStatus');
@@ -710,6 +715,12 @@ const Map<String, String> _ar = {
   'savedLocallyWillSync': 'حُفظ على الجهاز، وسيُرسل عند عودة الاتصال.',
   'pendingSync': 'بانتظار المزامنة',
   'wakingCloudServer': 'جاري إيقاظ الخادم السحابي...',
+  'offlineLocalMode':
+      'الوضع المحلي (دون إنترنت): الرصد والمحاكي والحفظ وطوارئ SMS وتحديد الموقع عبر GPS تعمل على جهازك، وستُرسل البيانات عند عودة الاتصال.',
+  'serverUnreachableMode':
+      'الإنترنت متاح لكن تعذّر الوصول إلى الخادم — يعمل التطبيق محلياً وستُرسل البيانات لاحقاً.',
+  'syncingNow': 'عاد الاتصال — جارٍ إرسال البيانات المعلّقة...',
+  'syncNow': 'مزامنة الآن',
 
   'riskSafeTitle': 'الوضع مستقر',
   'riskSafeBody':
@@ -1081,6 +1092,7 @@ const Map<String, String> _ar = {
   'respond': 'استجابة',
   'noPatientSelected': 'لم يُحدَّد مريض.',
   'locationUnavailable': 'الموقع غير متوفر الآن.',
+  'locationPending': 'جارٍ تحديد الموقع، وسيُرسل فور توفره.',
   'arrived': 'وصلت',
   'alertTime': 'وقت التنبيه',
   'lastKnownStatus': 'آخر حالة معروفة',
@@ -1301,6 +1313,12 @@ const Map<String, String> _en = {
       'Saved on this device; it will sync when back online.',
   'pendingSync': 'Pending sync',
   'wakingCloudServer': 'Waking up cloud server...',
+  'offlineLocalMode':
+      'Local mode (no internet): monitoring, simulator, saving, SMS emergency and GPS location work on this device; data is sent when the connection returns.',
+  'serverUnreachableMode':
+      'Internet is available but the server cannot be reached — the app works locally and will send data later.',
+  'syncingNow': 'Back online — sending pending data...',
+  'syncNow': 'Sync now',
 
   'riskSafeTitle': 'Stable',
   'riskSafeBody':
@@ -1676,6 +1694,8 @@ const Map<String, String> _en = {
   'respond': 'Respond',
   'noPatientSelected': 'No patient selected.',
   'locationUnavailable': 'Location is not available right now.',
+  'locationPending':
+      'Locating now; the position will follow as soon as it is available.',
   'arrived': 'Arrived',
   'alertTime': 'Alert time',
   'lastKnownStatus': 'Last known status',

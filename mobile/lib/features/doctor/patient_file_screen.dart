@@ -439,6 +439,8 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
               children: [
                 OfflineBanner(
                   visible: !app.apiOnline,
+                  mode: app.operatingMode,
+                  onSyncNow: app.syncNow,
                   lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
                   pendingCount: app.care.pendingCount,
                 ),
@@ -933,7 +935,7 @@ class _TimelineSection extends StatelessWidget {
         _Event(
           at: a.timestamp,
           title: s.label,
-          subtitle: a.message,
+          subtitle: a.displayMessage,
           icon: Icons.notifications_active_outlined,
           view: s.view,
         ),

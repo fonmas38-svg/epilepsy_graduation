@@ -78,6 +78,7 @@ class _FakeNotificationGateway implements LocalNotificationGateway {
     required String title,
     required String body,
     String? payload,
+    NotificationChannelKind channel = NotificationChannelKind.medication,
   }) async {
     shown.add((id, title, body));
   }
@@ -182,7 +183,7 @@ void main() {
               200,
             );
           }
-          if (request.url.path == '/patient/prescriptions')
+          if (request.url.path == '/patient/prescriptions') {
             return http.Response(
               jsonEncode({
                 'prescriptions': [
@@ -200,8 +201,10 @@ void main() {
               }),
               200,
             );
-          if (request.url.path.endsWith('/adherence'))
+          }
+          if (request.url.path.endsWith('/adherence')) {
             return http.Response('{"logs":[]}', 200);
+          }
           if (request.url.path == '/health') return http.Response('{}', 200);
           return http.Response('{}', 200);
         }),
@@ -312,8 +315,9 @@ void main() {
         sleep: (_) async {},
         client: MockClient((request) async {
           if (!online) return http.Response('{}', 503);
-          if (request.url.path.endsWith('/adherence'))
+          if (request.url.path.endsWith('/adherence')) {
             return http.Response('{"logs":[]}', 200);
+          }
           return http.Response(
             jsonEncode({
               'prescriptions': [

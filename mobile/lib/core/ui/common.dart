@@ -4,6 +4,7 @@ import '../../l10n/app_localizations.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/risk_view.dart';
+import '../../services/connectivity_coordinator.dart';
 
 /// A titled card. Used everywhere so section headings share one type scale and
 /// one padding, instead of each screen inventing its own.
@@ -34,7 +35,9 @@ class SectionCard extends StatelessWidget {
         color: isDark ? theme.colorScheme.surfaceContainerLow : Colors.white,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: isDark ? theme.colorScheme.outlineVariant : const Color(0xFFE4EDF7),
+          color: isDark
+              ? theme.colorScheme.outlineVariant
+              : const Color(0xFFE4EDF7),
           width: 1.2,
         ),
         boxShadow: const [
@@ -76,7 +79,9 @@ class SectionCard extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
-                          color: isDark ? theme.colorScheme.onSurface : const Color(0xFF0D253C),
+                          color: isDark
+                              ? theme.colorScheme.onSurface
+                              : const Color(0xFF0D253C),
                         ),
                       ),
                       if (subtitle != null) ...[
@@ -236,8 +241,11 @@ class OfflineBanner extends StatelessWidget {
     this.lastUpdateLabel,
     this.pendingCount = 0,
     this.waking = false,
+    this.mode,
+    this.onSyncNow,
   });
 
+  /// Legacy switch used when [mode] is not given.
   final bool visible;
 
   /// Already-formatted age of the newest data we hold, or null if we hold none.
@@ -247,18 +255,56 @@ class OfflineBanner extends StatelessWidget {
   final int pendingCount;
 
   /// True while [ApiClient] is backing off during a Render cold start.
+  /// Ignored when [mode] is given.
   final bool waking;
+
+  /// The unified connectivity state. When set it decides visibility and text,
+  /// so a phone without internet never shows «waking the server».
+  final AppOperatingMode? mode;
+
+  /// Shown as a «sync now» button while the server is reachable and items wait.
+  final Future<bool> Function()? onSyncNow;
 
   @override
   Widget build(BuildContext context) {
-    if (!visible && !waking) return const SizedBox.shrink();
     final l = AppLocalizations.of(context);
+    final effective =
+        mode ??
+        (waking
+            ? AppOperatingMode.wakingServer
+            : visible
+            ? AppOperatingMode.offlineLocal
+            : AppOperatingMode.onlineFull);
+    final online = effective == AppOperatingMode.onlineFull;
+    if (online && (pendingCount == 0 || onSyncNow == null)) {
+      return const SizedBox.shrink();
+    }
     final tone = AppColors.of(context, RiskView.unknown);
-    final text = waking
-        ? l.wakingCloudServer
-        : lastUpdateLabel == null
+    final offlineDetail = lastUpdateLabel == null
         ? l.offlineNoData
         : l.offlineSince(lastUpdateLabel!);
+    final text = switch (effective) {
+      AppOperatingMode.wakingServer => l.wakingCloudServer,
+      AppOperatingMode.reconnectingSyncing => l.syncingNow,
+      AppOperatingMode.serverUnreachable =>
+        mode == null ? offlineDetail : l.serverUnreachableMode,
+      AppOperatingMode.offlineLocal =>
+        mode == null ? offlineDetail : '${l.offlineLocalMode}\n$offlineDetail',
+      AppOperatingMode.onlineFull => '${l.pendingSync} ($pendingCount)',
+    };
+    final busy =
+        effective == AppOperatingMode.wakingServer ||
+        effective == AppOperatingMode.reconnectingSyncing;
+    final canSync =
+        onSyncNow != null &&
+        pendingCount > 0 &&
+        (effective == AppOperatingMode.onlineFull ||
+            effective == AppOperatingMode.serverUnreachable);
+    final icon = switch (effective) {
+      AppOperatingMode.offlineLocal => Icons.wifi_off_outlined,
+      AppOperatingMode.serverUnreachable => Icons.cloud_off_outlined,
+      _ => Icons.cloud_upload_outlined,
+    };
     return Material(
       color: tone.container,
       child: SafeArea(
@@ -270,7 +316,7 @@ class OfflineBanner extends StatelessWidget {
           ),
           child: Row(
             children: [
-              if (waking)
+              if (busy)
                 SizedBox(
                   width: 16,
                   height: 16,
@@ -280,7 +326,7 @@ class OfflineBanner extends StatelessWidget {
                   ),
                 )
               else
-                Icon(Icons.wifi_off_outlined, size: 18, color: tone.foreground),
+                Icon(icon, size: 18, color: tone.foreground),
               Gap.hSm,
               Expanded(
                 child: Text(
@@ -292,7 +338,8 @@ class OfflineBanner extends StatelessWidget {
                   ),
                 ),
               ),
-              if (pendingCount > 0)
+              // Online the text already says «pending sync»; no duplicate badge.
+              if (pendingCount > 0 && !online)
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: Gap.sm,
@@ -307,6 +354,13 @@ class OfflineBanner extends StatelessWidget {
                     style: TextStyle(color: tone.onSolid, fontSize: 11),
                   ),
                 ),
+              if (canSync) ...[
+                Gap.hSm,
+                TextButton(
+                  onPressed: () => onSyncNow!(),
+                  child: Text(l.syncNow),
+                ),
+              ],
             ],
           ),
         ),

@@ -94,7 +94,7 @@ class AlertCard extends StatelessWidget {
                 ],
               ),
               Gap.vSm,
-              Text(alert.message, style: theme.textTheme.bodyMedium),
+              Text(alert.displayMessage, style: theme.textTheme.bodyMedium),
               if (alert.details['forecast_status'] != null) ...[
                 Gap.vSm,
                 Text(

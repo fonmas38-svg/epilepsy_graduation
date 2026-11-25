@@ -268,6 +268,8 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
                     children: [
                       OfflineBanner(
                         visible: !app.apiOnline,
+                        mode: app.operatingMode,
+                        onSyncNow: app.syncNow,
                         lastUpdateLabel: TimeAgo.since(
                           app.care.lastSyncedAt,
                           l,

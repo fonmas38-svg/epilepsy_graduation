@@ -25,6 +25,8 @@ import 'features/patient/patient_home_screen.dart';
 import 'l10n/app_localizations.dart';
 import 'models/models.dart';
 import 'providers/app_state.dart';
+import 'services/edge_onnx_backend_ort.dart';
+import 'services/edge_onnx_runner.dart';
 import 'widgets/animated_splash_screen.dart';
 import 'widgets/inactivity_watcher.dart';
 
@@ -58,6 +60,14 @@ Future<void> main() async {
       // is absent or invalid. NotificationService will skip token registration.
       debugPrint('Firebase initialization skipped: $error');
     }
+  }
+  // On-device EdgeSeizureNet (detection only). The plugin ships native
+  // ONNX Runtime for Android (arm32/arm64) and Windows; elsewhere the runner
+  // reports «unavailable» instead of guessing.
+  if (!kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.windows)) {
+    edgeInferenceBackendFactory = OrtEdgeBackend.new;
   }
   final appState = AppState();
   runApp(EpilepsyApp(appState: appState));

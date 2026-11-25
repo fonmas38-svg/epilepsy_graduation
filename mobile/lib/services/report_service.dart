@@ -41,7 +41,7 @@ class ReportService {
         (a) => [
           a.timestamp.toIso8601String(),
           a.severity,
-          a.message,
+          a.displayMessage,
           a.acknowledged,
         ],
       ),
@@ -94,7 +94,13 @@ class ReportService {
             headers: const ['Time', 'Severity', 'Message'],
             data: alerts
                 .take(20)
-                .map((a) => [fmt.format(a.timestamp), a.severity, a.message])
+                .map(
+                  (a) => [
+                    fmt.format(a.timestamp),
+                    a.severity,
+                    a.displayMessage,
+                  ],
+                )
                 .toList(),
           ),
         ],

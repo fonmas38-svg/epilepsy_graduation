@@ -63,6 +63,10 @@ class AppUser {
   );
 }
 
+/// `data_source` values that mean «not a live measurement».
+bool isSimulatedSource(Object? value) =>
+    value == 'simulation' || value == 'dataset';
+
 class VitalReading {
   VitalReading({
     required this.id,
@@ -148,6 +152,9 @@ class RiskAssessment {
   final RiskLabel label;
   final double confidence;
   final Map<String, dynamic> features;
+
+  /// From simulator or recorded-dataset signals (`features.data_source`).
+  bool get isSimulated => isSimulatedSource(features['data_source']);
   final double processingMs;
 
   RiskAssessment withOrigin(String origin) =>
@@ -201,10 +208,19 @@ class AlertItem {
   final bool acknowledged;
   final String? acknowledgedBy;
 
+  /// Raised from simulator or recorded-dataset signals, not a live sensor.
+  /// Carried in [details] (`data_source`) so no schema change is needed.
+  bool get isSimulated => isSimulatedSource(details['data_source']);
+
+  /// `[محاكاة] ` prefix for lists and reports so simulated events never mix
+  /// with clinical ones in a doctor's file.
+  String get displayMessage => isSimulated ? '[محاكاة] $message' : message;
+
   AlertItem copyWith({
     bool? acknowledged,
     String? acknowledgedBy,
     String? serverOrigin,
+    Map<String, dynamic>? details,
   }) => AlertItem(
     id: id,
     patientId: patientId,
@@ -213,7 +229,7 @@ class AlertItem {
     severity: severity,
     message: message,
     recipients: recipients,
-    details: details,
+    details: details ?? this.details,
     acknowledged: acknowledged ?? this.acknowledged,
     acknowledgedBy: acknowledgedBy ?? this.acknowledgedBy,
   );

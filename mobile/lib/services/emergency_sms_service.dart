@@ -20,6 +20,16 @@ class EmergencySmsService {
       .toSet()
       .toList();
 
+  /// Phone-local date and 12-hour time, e.g. `2026/11/25 3:07 م`.
+  /// Caregivers read this on their own phone; UTC ISO strings confused them.
+  static String formatLocal12h(DateTime at) {
+    final t = at.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final hour = t.hour % 12 == 0 ? 12 : t.hour % 12;
+    final period = t.hour < 12 ? 'ص' : 'م';
+    return '${t.year}/${two(t.month)}/${two(t.day)} $hour:${two(t.minute)} $period';
+  }
+
   Future<SmsOutcome> composeEmergencySms({
     required List<String> phoneNumbers,
     required String patientName,
@@ -29,11 +39,12 @@ class EmergencySmsService {
   }) async {
     final recipients = normalizeRecipients(phoneNumbers);
     if (recipients.isEmpty) return SmsOutcome.noRecipients;
+    final quality = fix?.describe(arabic: true) ?? '';
     final location = fix != null && fix.valid
-        ? 'الإحداثيات: $fix. الموقع: ${fix.mapsUrl}${fix.accuracy == null ? '' : '. دقة تقريبية: ${fix.accuracy!.round()} متر'}'
+        ? 'الإحداثيات: $fix. الموقع: ${fix.mapsUrl}${quality.isEmpty ? '' : '. $quality'}'
         : 'تعذر الحصول على موقع حديث؛ لا توجد إحداثيات مؤكدة.';
     final text =
-        'طلب مساعدة — المريض ($patientName). الوقت: ${(occurredAt ?? DateTime.now()).toUtc().toIso8601String()}. $location${eventId == null ? '' : ' مرجع الحدث: $eventId'}';
+        'طلب مساعدة — المريض ($patientName). الوقت: ${formatLocal12h(occurredAt ?? DateTime.now())}. $location${eventId == null ? '' : ' مرجع الحدث: $eventId'}';
     final separator = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
         ? '&'
         : '?';

@@ -13,12 +13,35 @@ import '../models/prediction_state.dart';
 import 'api_client.dart';
 import 'auth_service.dart';
 import 'edge_model_service.dart';
+import 'edge_onnx_runner.dart';
 import 'local_database.dart';
 import 'location_service.dart';
 
 /// Syncs local SQLite readings/assessments/alerts to cloud store (Firestore when configured).
 class SyncService {
-  SyncService({required this.db, required this.api, required this.auth});
+  SyncService({
+    required this.db,
+    required this.api,
+    required this.auth,
+    EdgeOnnxRunner? edgeRunner,
+  }) : edgeRunner = edgeRunner ?? EdgeOnnxRunner.instance;
+
+  /// On-device EdgeSeizureNet (detection only). Used offline for every
+  /// account when a native runtime is available.
+  final EdgeOnnxRunner edgeRunner;
+
+  /// Where the current readings come from: `simulation`, `dataset` or
+  /// `device`. Set by [MonitoringService]; stamped on every assessment and
+  /// monitoring alert so simulated data is never mistaken for clinical data.
+  String? Function()? dataSourceOf;
+
+  String? get _dataSource {
+    try {
+      return dataSourceOf?.call();
+    } catch (_) {
+      return null;
+    }
+  }
 
   final LocalDatabase db;
   final ApiClient api;
@@ -72,10 +95,10 @@ class SyncService {
           await api.health(null, const Duration(seconds: 7))) {
         result = await api.analyze(reading).timeout(const Duration(seconds: 5));
       } else {
-        result = _offlineEdgeInference(reading);
+        result = await _offlineEdgeInference(reading);
       }
     } catch (_) {
-      result = _offlineEdgeInference(reading);
+      result = await _offlineEdgeInference(reading);
     }
 
     if (!current()) throw StateError('Session changed during analysis');
@@ -86,7 +109,11 @@ class SyncService {
       timestamp: reading.timestamp,
       label: result.label,
       confidence: result.confidence,
-      features: {...result.features, 'reading_id': reading.id},
+      features: {
+        ...result.features,
+        'reading_id': reading.id,
+        'data_source': ?_dataSource,
+      },
       processingMs: result.processingMs,
     );
     await db.insertAssessment(
@@ -194,13 +221,18 @@ class SyncService {
     String patientId, {
     GpsFix? fix,
     String? patientName,
+    bool locationExpected = true,
   }) async {
     final who = (patientName == null || patientName.isEmpty)
         ? _l10n.thePatient
         : patientName;
-    final location = fix == null
-        ? _l10n.locationUnavailable
-        : _l10n.locationIs(fix.mapsUrl);
+    // SOS goes out before a GPS fix exists; the position is shared separately
+    // as soon as it is acquired, so «unavailable» here would be misleading.
+    final location = fix != null
+        ? _l10n.locationIs(fix.mapsUrl)
+        : locationExpected
+        ? _l10n.locationPending
+        : _l10n.locationUnavailable;
     final alert = AlertItem(
       id: _uuid.v4(),
       patientId: patientId,
@@ -287,7 +319,14 @@ class SyncService {
     if (origin != dataOrigin || owner == null) {
       throw StateError('Alert source changed');
     }
-    alert = alert.copyWith(serverOrigin: origin);
+    // Tag alerts derived from signals (not SOS, whose beacon has no EEG).
+    final source = _dataSource;
+    alert = alert.copyWith(
+      serverOrigin: origin,
+      details: source != null && reading.eeg.isNotEmpty
+          ? {...alert.details, 'data_source': source}
+          : null,
+    );
     final delivery = OutboxItem(
       id: 'monitoring-${alert.id}',
       method: 'POST',
@@ -508,11 +547,31 @@ class SyncService {
     }
   }
 
-  AnalyzeResult _offlineEdgeInference(VitalReading reading) {
-    // Real patients must not silently receive demo rules as a neural fallback.
+  /// Offline scoring, in order:
+  /// 1. EdgeSeizureNet via ONNX — all accounts (`engine: edge_onnx`,
+  ///    detection only, never a forecast).
+  /// 2. Demo accounts only: the arithmetic heuristic (`engine: edge_heuristic`).
+  ///    Real patients never silently receive demo rules as a neural fallback.
+  /// 3. Otherwise an explicit «not assessed» result with the reason.
+  Future<AnalyzeResult> _offlineEdgeInference(VitalReading reading) async {
+    try {
+      final neural = await edgeRunner.detect(reading.eeg);
+      if (neural != null) return neural;
+    } catch (_) {
+      // Fall through: a runtime error must not stop monitoring.
+    }
     if (auth.isDemoSession) {
       try {
-        return EdgeModelService.instance.infer(reading, horizonMin: horizonMin);
+        final r = EdgeModelService.instance.infer(
+          reading,
+          horizonMin: horizonMin,
+        );
+        return AnalyzeResult(
+          label: r.label,
+          confidence: r.confidence,
+          features: {...r.features, 'engine': 'edge_heuristic'},
+          processingMs: r.processingMs,
+        );
       } catch (_) {}
     }
     return AnalyzeResult(
@@ -524,7 +583,9 @@ class SyncService {
         'model_executed': false,
         'clinically_validated': false,
         'engine': 'unavailable',
-        'capability_reason': 'local_neural_runtime_not_integrated',
+        'capability_reason':
+            edgeRunner.unavailableReason ??
+            'local_neural_runtime_not_integrated',
       },
       processingMs: 0,
     );

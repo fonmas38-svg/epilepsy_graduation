@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../../services/api_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +20,8 @@ import '../../l10n/app_localizations.dart';
 import '../../models/care_models.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
+import '../../services/connectivity_coordinator.dart';
+import '../../services/emergency_sms_service.dart';
 import 'alerts_list.dart';
 import 'first_aid_view.dart';
 
@@ -73,6 +77,50 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
   List<AlertResponse> _responses = const [];
   Failure? _failure;
 
+  /// Caregiver responses are re-read while this screen is open. The mobile
+  /// app has no Supabase Realtime subscriber (custom JWT auth), so a bounded
+  /// poll is the honest «live» view. Paused offline; backs off on failure.
+  Timer? _poll;
+  int _pollFailures = 0;
+  static const _pollEvery = Duration(seconds: 10);
+
+  void _schedulePoll() {
+    _poll?.cancel();
+    final factor = 1 << _pollFailures.clamp(0, 3); // 10 s … 80 s
+    _poll = Timer(_pollEvery * factor, _refreshResponses);
+  }
+
+  Future<void> _refreshResponses() async {
+    final alert = _alert;
+    if (!_current || alert == null) return;
+    final mode = _app.operatingMode;
+    final online =
+        mode == AppOperatingMode.onlineFull ||
+        mode == AppOperatingMode.reconnectingSyncing;
+    if (online) {
+      try {
+        final fresh = await _app.care.responsesFor(
+          alert.id,
+          patientId: alert.patientId,
+          refreshRemote: true,
+        );
+        _pollFailures = 0;
+        if (_current) setState(() => _responses = fresh);
+      } catch (_) {
+        _pollFailures++;
+      }
+    }
+    if (_current) _schedulePoll();
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    // The alert has been seen: stop showing the app over the lock screen.
+    unawaited(_app.background.releaseLockScreen());
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -108,6 +156,7 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
         _responses = responses;
         _loading = false;
       });
+      if (found != null) _schedulePoll();
       if (found?.severity == 'critical') {
         HapticFeedback.heavyImpact();
       }
@@ -137,7 +186,11 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
     }
     final pid = args.patientId ?? app.activePatientId;
     if (pid == null || !app.auth.canAccessPatient(pid)) return null;
-    final rows = await app.db.alertsFor(pid, limit: 100, serverOrigin: app.dataOrigin);
+    final rows = await app.db.alertsFor(
+      pid,
+      limit: 100,
+      serverOrigin: app.dataOrigin,
+    );
     for (final alert in rows) {
       if (alert.id == args.alertId && alert.patientId == pid) return alert;
     }
@@ -334,8 +387,16 @@ class _Body extends StatelessWidget {
           )
         else
           _ResponderActions(alert: alert, onRespond: onRespond),
+        if (role == UserRole.patient) ...[
+          Gap.vMd,
+          _EmergencyChannels(alert: alert),
+        ],
         Gap.vMd,
-        _NotifiedSection(alert: alert, responses: responses),
+        _NotifiedSection(
+          alert: alert,
+          responses: responses,
+          offline: app.operatingMode == AppOperatingMode.offlineLocal,
+        ),
         Gap.vMd,
         // Ends with «اتصل بالإسعاف إذا …» from inside the view itself, so the
         // ambulance rule is not repeated twice on one screen.
@@ -536,7 +597,9 @@ class _LocationNavigationCard extends StatelessWidget {
                     ),
                     Text(
                       app.messages.lastSharedLocation?['accuracy'] != null &&
-                              (app.messages.lastSharedLocation!['accuracy'] as num) > 1000
+                              (app.messages.lastSharedLocation!['accuracy']
+                                      as num) >
+                                  1000
                           ? 'اضغط للملاحة (⚠️ موقع تقريبي عبر شبكة الإنترنت ±${((app.messages.lastSharedLocation!['accuracy'] as num) / 1000).toStringAsFixed(1)} كم)'
                           : 'اضغط للبدء في الملاحة اللحظية والوصول للمريض عبر خرائط Google',
                       style: TextStyle(
@@ -727,8 +790,10 @@ class _PatientActions extends StatelessWidget {
             child: FilledButton.icon(
               onPressed: busy || acknowledged ? null : () => onImOk(),
               style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF2A9D8F),
-                foregroundColor: Colors.white,
+                // Theme «safe» tone: 5.4:1 contrast (the former #2A9D8F was
+                // 3.3:1, below WCAG AA for this 17 px label).
+                backgroundColor: AppColors.of(context, RiskView.safe).solid,
+                foregroundColor: AppColors.of(context, RiskView.safe).onSolid,
                 shape: const RoundedRectangleBorder(borderRadius: Radii.rMd),
                 textStyle: const TextStyle(
                   fontSize: 17,
@@ -819,10 +884,18 @@ class _ResponderActions extends StatelessWidget {
 /// has seen it. Conflating the two would let a screen imply help is on the way
 /// when nobody has looked at their phone.
 class _NotifiedSection extends StatelessWidget {
-  const _NotifiedSection({required this.alert, required this.responses});
+  const _NotifiedSection({
+    required this.alert,
+    required this.responses,
+    this.offline = false,
+  });
 
   final AlertItem alert;
   final List<AlertResponse> responses;
+
+  /// No internet on this phone: caregiver responses cannot be checked, so an
+  /// empty list must not read as «nobody answered».
+  final bool offline;
 
   static String _statusLabel(ResponseStatus s, AppLocalizations l) =>
       switch (s) {
@@ -851,7 +924,16 @@ class _NotifiedSection extends StatelessWidget {
             view: RiskView.unknown,
           ),
           Gap.vSm,
-          if (responses.isEmpty)
+          if (offline)
+            InfoNote(
+              text: l.isArabic
+                  ? 'أنت في الوضع المحلي (دون إنترنت): لا يمكن التحقق من استجابة المرافقين سحابياً حالياً — تم تحويل الاستغاثة إلى الرسائل النصية (SMS). ستظهر الردود عند عودة الاتصال.'
+                  : 'You are in local mode (no internet): caregiver responses cannot be checked right now — the emergency was switched to SMS. Responses will appear when the connection returns.',
+              icon: Icons.sms_outlined,
+              view: RiskView.caution,
+            ),
+          if (offline && responses.isNotEmpty) Gap.vSm,
+          if (responses.isEmpty && !offline)
             EmptyState(
               title: l.noRespondersYet,
               body: l.respondersHint,
@@ -876,4 +958,122 @@ class _NotifiedSection extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Direct channels the patient controls: (re)open the SMS composer, call the
+/// first emergency contact, and send a refined position found after the
+/// alert. Shown offline, or whenever an SMS attempt has been made.
+class _EmergencyChannels extends StatelessWidget {
+  const _EmergencyChannels({required this.alert});
+
+  final AlertItem alert;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final ar = AppLocalizations.of(context).isArabic;
+    final offline = app.operatingMode == AppOperatingMode.offlineLocal;
+    final outcome = app.lastSmsOutcome;
+    final refined = app.refinedFixFor(alert.id);
+    if (!offline && outcome == null && refined == null) {
+      return const SizedBox.shrink();
+    }
+
+    Future<void> resend() async {
+      final r = await app.resendEmergencySms(alert);
+      if (!context.mounted) return;
+      if (r == SmsOutcome.noRecipients) {
+        AppSnack.warn(
+          context,
+          ar
+              ? 'لا توجد أرقام طوارئ صالحة. أضفها من الإعدادات.'
+              : 'No valid emergency numbers. Add them in settings.',
+        );
+      }
+    }
+
+    Future<void> call() async {
+      final ok = await app.callFirstEmergencyContact();
+      if (!ok && context.mounted) {
+        AppSnack.warn(
+          context,
+          ar
+              ? 'تعذّر فتح الاتصال: لا يوجد رقم طوارئ صالح أو لا يدعم الجهاز الاتصال.'
+              : 'Could not start a call: no valid emergency number or no dialer.',
+        );
+      }
+    }
+
+    return SectionCard(
+      title: ar ? 'التواصل المباشر' : 'Direct contact',
+      icon: Icons.phone_in_talk_outlined,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (outcome != null) ...[
+            InfoNote(
+              text: _smsText(outcome, ar),
+              icon: Icons.sms_outlined,
+              view: outcome == SmsOutcome.composerOpened
+                  ? RiskView.unknown
+                  : RiskView.caution,
+            ),
+            Gap.vSm,
+          ],
+          if (refined != null) ...[
+            FilledButton.icon(
+              onPressed: resend,
+              icon: const Icon(Icons.my_location_outlined),
+              label: Text(
+                ar
+                    ? 'إرسال SMS بالموقع المحدّث (${refined.describe(arabic: true)})'
+                    : 'Send SMS with updated location (${refined.describe(arabic: false)})',
+              ),
+            ),
+            Gap.vSm,
+          ],
+          SizedBox(
+            height: A11y.minTouchTarget,
+            child: OutlinedButton.icon(
+              onPressed: resend,
+              icon: const Icon(Icons.sms_outlined),
+              label: Text(ar ? 'إعادة فتح رسالة SMS' : 'Reopen SMS message'),
+            ),
+          ),
+          Gap.vSm,
+          SizedBox(
+            height: A11y.minTouchTarget,
+            child: OutlinedButton.icon(
+              onPressed: call,
+              icon: const Icon(Icons.call_outlined),
+              label: Text(
+                ar
+                    ? 'اتصال هاتفي مباشر بأقرب مرافق'
+                    : 'Call the first emergency contact',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _smsText(SmsOutcome o, bool ar) => switch (o) {
+    SmsOutcome.composerOpened =>
+      ar
+          ? 'فُتح محرر الرسائل. تأكد من الضغط على «إرسال»؛ التطبيق لا يستطيع التأكد من الإرسال أو الوصول.'
+          : 'The SMS composer opened. Make sure you pressed Send; the app cannot confirm sending or delivery.',
+    SmsOutcome.noRecipients =>
+      ar
+          ? 'لا توجد أرقام طوارئ صالحة لإرسال الرسالة.'
+          : 'There are no valid emergency numbers to message.',
+    SmsOutcome.unsupported =>
+      ar
+          ? 'لا يوجد تطبيق رسائل على هذا الجهاز — استخدم الاتصال المباشر.'
+          : 'No SMS app on this device — use a direct call.',
+    SmsOutcome.failed =>
+      ar
+          ? 'تعذّر فتح محرر الرسائل — أعد المحاولة أو اتصل مباشرة.'
+          : 'The SMS composer could not open — retry or call directly.',
+  };
 }

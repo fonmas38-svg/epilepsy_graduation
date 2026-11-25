@@ -30,7 +30,13 @@ class MonitoringService {
     this.useBackgroundIsolate = true,
   }) : simulator = simulator ?? SignalSimulator(),
        _injectedDevice = device,
-       _deviceFactory = deviceFactory;
+       _deviceFactory = deviceFactory {
+    sync.dataSourceOf = () => switch (source) {
+      SignalSource.simulator => 'simulation',
+      SignalSource.dataset => 'dataset',
+      SignalSource.headDevice => 'device',
+    };
+  }
 
   final LocalDatabase db;
   final SignalSimulator simulator;

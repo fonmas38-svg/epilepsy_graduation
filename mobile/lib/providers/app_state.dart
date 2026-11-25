@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart' show LocationPermission;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/config.dart';
@@ -9,7 +11,9 @@ import '../core/enums.dart';
 import '../core/errors/failure.dart';
 import '../core/security/password_hasher.dart';
 import '../core/theme/risk_view.dart';
+import '../core/utils/external_actions.dart';
 import '../l10n/app_localizations.dart';
+import '../models/care_models.dart';
 import '../models/models.dart';
 import '../models/prediction_state.dart';
 import '../services/api_client.dart';
@@ -23,7 +27,9 @@ import '../services/message_service.dart';
 import '../services/monitoring_service.dart';
 import '../services/notification_service.dart';
 import '../services/prealert_controller.dart';
+import '../services/background_service.dart';
 import '../services/biometric_service.dart';
+import '../services/connectivity_coordinator.dart';
 import '../services/emergency_sms_service.dart';
 import '../services/report_export_service.dart';
 import '../services/settings_service.dart';
@@ -67,9 +73,23 @@ class AppState extends ChangeNotifier {
     monitoring.onUpdate = notifyListeners;
     try {
       api.wakingNotifier.addListener(_onWakingChanged);
+      api.noInternetNotifier.addListener(_onWakingChanged);
+      api.deviceOffline = () => !deviceHasNetwork;
     } catch (_) {}
+    location.hasInternet = () => operatingMode != AppOperatingMode.offlineLocal;
     monitoring.onAlert = (alert) {
       lastAlert = alert;
+      // Own channel: muting medication reminders must never mute this.
+      unawaited(
+        notifications.showLocal(
+          l10n.activeAlertTitle,
+          alert.message,
+          id: alert.id.hashCode & 0x7fffffff,
+          // `alert:` lets MainActivity show this over the lock screen.
+          payload: 'alert:${alert.id}',
+          channel: NotificationChannelKind.seizureAlert,
+        ),
+      );
       unawaited(_prepareEmergencySms(alert));
       if (settings.shareLocationOnAlert) {
         unawaited(_shareLocationOnAlert(alert));
@@ -82,7 +102,11 @@ class AppState extends ChangeNotifier {
       // log (#19) can record what we predicted, regardless of outcome.
       _preAlertPrediction = monitoring.latestPrediction;
       // Surface as an OS/local notification too (degrades to in-app banner).
-      notifications.showLocal(l10n.severityPreAlert, pre.message);
+      notifications.showLocal(
+        l10n.severityPreAlert,
+        pre.message,
+        channel: NotificationChannelKind.preAlert,
+      );
       preAlerts.start(pre);
       if (settings.shareLocationOnAlert) {
         unawaited(_shareLocationOnPreAlert(pre, assessment));
@@ -92,24 +116,23 @@ class AppState extends ChangeNotifier {
     preAlerts.onEscalate = (pre) async {
       final reading = _preAlertReading;
       if (reading != null) {
-        final fix = await location.currentFix();
+        // Escalate first: waiting for GPS (up to the location timeout) must
+        // never delay the critical alert itself.
         final escalated = await sync.escalatePreAlert(reading, pre);
         lastAlert = escalated;
+        notifyListeners();
         if (escalated.severity == 'critical') {
           unawaited(_prepareEmergencySms(escalated));
         }
-        if (fix != null) {
-          try {
-            await messages.shareLocation(
-              patientId: reading.patientId,
-              latitude: fix.latitude,
-              longitude: fix.longitude,
-              accuracy: fix.accuracy,
-              note:
-                  '⚠️ تصعيد طارئ: لم يستجب المريض لإنذار ما قبل النوبة، الموقع الحالي مرفق فوراً.',
-            );
-          } catch (_) {}
-        }
+        unawaited(() async {
+          final fix = await _fixForAlert(escalated.id);
+          const note =
+              '⚠️ تصعيد طارئ: لم يستجب المريض لإنذار ما قبل النوبة، الموقع الحالي مرفق فوراً.';
+          if (fix != null) await _shareFix(reading.patientId, fix, note);
+          unawaited(
+            _refineAndShare(reading.patientId, escalated.id, fix, note),
+          );
+        }());
       }
       await _logPredictionEvent('escalated');
       notifyListeners();
@@ -175,6 +198,40 @@ class AppState extends ChangeNotifier {
   /// Secure biometric authentication service.
   final BiometricService biometrics = BiometricService();
 
+  /// Android foreground service, battery exemption and lock-screen alerts.
+  final BackgroundService background = BackgroundService();
+
+  /// Keep the persistent «monitoring active» notification in step with the
+  /// real monitoring state. Called on every state change; does work only on
+  /// a transition.
+  void _syncBackgroundService() {
+    if (!background.supported) return;
+    final shouldRun =
+        monitoring.running && auth.currentUser?.role == UserRole.patient;
+    if (shouldRun == background.serviceRunning) return;
+    if (shouldRun && background.startFailed) return;
+    if (shouldRun) {
+      unawaited(
+        background.startMonitoring(
+          title: _l10n.isArabic
+              ? 'المراقبة العصبية نشطة'
+              : 'Seizure monitoring active',
+          text: _l10n.isArabic
+              ? 'يستمر الرصد والشاشة مغلقة. يتوقف إذا أُغلق التطبيق من قائمة التطبيقات الحديثة.'
+              : 'Keeps running with the screen off. Stops if the app is removed from recents.',
+        ),
+      );
+    } else {
+      unawaited(background.stopMonitoring());
+    }
+  }
+
+  @override
+  void notifyListeners() {
+    _syncBackgroundService();
+    super.notifyListeners();
+  }
+
   /// Emergency SMS fallback service with GPS fix.
   final EmergencySmsService emergencySms = const EmergencySmsService();
   SmsOutcome? lastSmsOutcome;
@@ -191,11 +248,70 @@ class AppState extends ChangeNotifier {
 
   void _onWakingChanged() => notifyListeners();
 
-  bool get isWakingServer {
+  /// True only while the phone has internet and the backend is being woken.
+  /// A phone without internet is [AppOperatingMode.offlineLocal], never this.
+  bool get isWakingServer => operatingMode == AppOperatingMode.wakingServer;
+
+  /// OS-level network presence from `connectivity_plus`. It does not prove
+  /// internet access (captive Wi-Fi), which is why [ApiClient] also reports
+  /// DNS/route failures through `noInternetNotifier`.
+  bool deviceHasNetwork = true;
+
+  int _syncOps = 0;
+  bool _syncProbing = false;
+
+  /// True while the outbox is being flushed after a reconnect or «sync now».
+  bool get isSyncing => _syncOps > 0;
+
+  /// The single connectivity state every banner and decision should use.
+  AppOperatingMode get operatingMode {
+    bool waking = false;
+    bool noInternet = false;
     try {
-      return api.isWakingServer;
-    } catch (_) {
+      waking = api.isWakingServer;
+      noInternet = api.noInternetDetected;
+    } catch (_) {}
+    return resolveOperatingMode(
+      deviceHasNetwork: deviceHasNetwork,
+      noInternetDetected: noInternet,
+      serverReachable: apiOnline,
+      waking: waking,
+      syncing: isSyncing,
+    );
+  }
+
+  /// Re-check the backend and flush every pending queue (readings, alerts,
+  /// care writes, messages). Returns false when the server is not reachable.
+  /// Safe to call repeatedly: overlapping calls are ignored.
+  Future<bool> syncNow() async {
+    if (_syncOps > 0 || _syncProbing) return false;
+    // Probe first: «syncing» must not be shown before the server answered.
+    _syncProbing = true;
+    final bool ok;
+    try {
+      ok = await api.health(null, const Duration(seconds: 10), true);
+    } finally {
+      _syncProbing = false;
+    }
+    apiOnline = ok;
+    if (!ok) {
+      notifyListeners();
       return false;
+    }
+    _syncOps++;
+    notifyListeners();
+    try {
+      final pid = monitoring.activePatientId ?? auth.currentUser?.uid;
+      if (pid != null) await sync.syncPending(pid);
+      await care.flushOutbox();
+      await messages.flushPendingMessages();
+      return true;
+    } catch (e) {
+      failure = Failure.from(e);
+      return false;
+    } finally {
+      _syncOps--;
+      notifyListeners();
     }
   }
 
@@ -289,6 +405,22 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Quick (≤1 s) check that a position can be obtained at all, so an SOS
+  /// never promises «location will follow» when permission is denied or
+  /// location services are off.
+  Future<bool> _locationLikely() async {
+    try {
+      return await () async {
+        if (!await location.isServiceEnabled()) return false;
+        final p = await location.checkPermission();
+        return p == LocationPermission.always ||
+            p == LocationPermission.whileInUse;
+      }().timeout(const Duration(seconds: 1));
+    } catch (_) {
+      return true; // Unknown: keep the softer wording.
+    }
+  }
+
   /// True while an SOS is being sent (used to disable the button briefly).
   bool sosInProgress = false;
 
@@ -306,7 +438,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     try {
       final fixFuture = location.currentFix();
-      final saved = await sync.sendSos(pid, patientName: user?.name);
+      final saved = await sync.sendSos(
+        pid,
+        patientName: user?.name,
+        locationExpected: await _locationLikely(),
+      );
       if (auth.currentUser?.uid != user?.uid) return;
       lastAlert = saved;
       notifyListeners();
@@ -314,17 +450,11 @@ class AppState extends ChangeNotifier {
       if (auth.currentUser?.uid != user?.uid) return;
 
       // Broadcast live location to family & cloud channels
-      if (fix != null) {
-        try {
-          await api.sharePatientLocation(
-            patientId: pid,
-            latitude: fix.latitude,
-            longitude: fix.longitude,
-            accuracy: fix.accuracy,
-            note: 'نداء استغاثة طارئ (SOS)',
-          );
-        } catch (_) {}
-      }
+      const sosNote = 'نداء استغاثة طارئ (SOS)';
+      if (fix != null) await _shareFix(pid, fix, sosNote);
+      // Indoors the first fix is often missing or coarse: keep trying the
+      // device GPS quietly and send a better position if one arrives.
+      unawaited(_refineAndShare(pid, saved.id, fix, sosNote));
 
       final alert = lastAlert;
       if (alert != null) {
@@ -338,8 +468,113 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  bool _preparingEmergencySms = false;
+  /// Alerts whose SMS composer is being prepared. Per alert (not a single
+  /// flag) so a second concurrent alert is never silently dropped.
+  final Set<String> _preparingEmergencySms = {};
   final Set<String> _smsPrepared = {};
+
+  /// One GPS acquisition per alert, shared by SMS, auto-share and escalation,
+  /// so a single event does not start several parallel GNSS sessions.
+  final Map<String, Future<GpsFix?>> _alertFixes = {};
+
+  /// Fixes that have already resolved, so a patient-initiated SMS never waits
+  /// for a fresh acquisition when one is known.
+  final Map<String, GpsFix> _knownFixes = {};
+
+  Future<GpsFix?> _fixForAlert(String alertId) {
+    final existing = _alertFixes[alertId];
+    if (existing != null) return existing;
+    final future = location
+        .currentFix()
+        .then<GpsFix?>((fix) {
+          if (fix != null) {
+            _knownFixes[alertId] = fix;
+          } else {
+            // A failure is not cached: the next caller may try again.
+            _alertFixes.remove(alertId);
+          }
+          return fix;
+        })
+        .catchError((Object _) {
+          _alertFixes.remove(alertId);
+          return null;
+        });
+    _alertFixes[alertId] = future;
+    if (_alertFixes.length > 32) _alertFixes.remove(_alertFixes.keys.first);
+    if (_knownFixes.length > 32) _knownFixes.remove(_knownFixes.keys.first);
+    return future;
+  }
+
+  /// Position found by background refinement, tied to the alert it belongs
+  /// to. Offline it cannot be sent automatically (an SMS composer needs the
+  /// patient's tap), so the emergency UI offers to send it — for that alert
+  /// only, never for a later one or another session.
+  ({String alertId, GpsFix fix})? _refined;
+
+  /// The refined fix for [alertId], if any.
+  GpsFix? refinedFixFor(String alertId) =>
+      _refined?.alertId == alertId ? _refined!.fix : null;
+
+  /// Send [fix] to the care circle with its source, accuracy and age appended
+  /// to [note], so caregivers can judge how far to trust it. Returns false
+  /// (or throws, with [throwOnFailure]) when it could not be sent.
+  Future<bool> _shareFix(
+    String patientId,
+    GpsFix fix,
+    String note, {
+    bool throwOnFailure = false,
+  }) async {
+    if (!api.tokens.hasSession) {
+      if (throwOnFailure) throw StateError('No session');
+      return false;
+    }
+    final quality = fix.describe(arabic: true);
+    try {
+      final saved = await messages.shareLocation(
+        patientId: patientId,
+        latitude: fix.latitude,
+        longitude: fix.longitude,
+        accuracy: fix.accuracy,
+        note: quality.isEmpty ? note : '$note ($quality)',
+        source: fix.source?.wireName,
+        capturedAt: fix.capturedAt,
+      );
+      return saved != null;
+    } catch (_) {
+      if (throwOnFailure) rethrow;
+      return false;
+    }
+  }
+
+  final Set<String> _refining = {};
+
+  /// Up to 45 s of quiet device-GPS attempts after an event whose first fix
+  /// was missing or imprecise. Sends the better fix when online; offline it
+  /// is kept for that alert ([refinedFixFor]) for the emergency screen.
+  Future<void> _refineAndShare(
+    String patientId,
+    String alertId,
+    GpsFix? initial,
+    String note,
+  ) async {
+    if (initial != null && initial.isPrecise) return;
+    if (!_refining.add(patientId)) return;
+    final owner = auth.currentUser?.uid;
+    try {
+      final better = await location.refine(initial);
+      if (better == null || auth.currentUser?.uid != owner) return;
+      _refined = (alertId: alertId, fix: better);
+      _knownFixes[alertId] = better;
+      notifyListeners();
+      if (operatingMode != AppOperatingMode.offlineLocal) {
+        await _shareFix(patientId, better, '📍 تحديث أدق للموقع — $note');
+      }
+    } catch (_) {
+      // Best effort: the original alert already went out.
+    } finally {
+      _refining.remove(patientId);
+    }
+  }
 
   Future<void> _prepareEmergencySms(
     AlertItem alert, {
@@ -347,17 +582,22 @@ class AppState extends ChangeNotifier {
     bool locate = true,
   }) async {
     final owner = auth.currentUser;
-    if (_preparingEmergencySms ||
+    if (_preparingEmergencySms.contains(alert.id) ||
         owner?.role != UserRole.patient ||
         owner?.uid != alert.patientId ||
         _smsPrepared.contains(alert.id)) {
       return;
     }
-    _preparingEmergencySms = true;
+    _preparingEmergencySms.add(alert.id);
     try {
-      if (await api.health(null, const Duration(seconds: 4))) return;
+      // No internet on the phone: go straight to SMS without a probe that
+      // can only fail. Otherwise confirm the cloud path is really up.
+      if (operatingMode != AppOperatingMode.offlineLocal &&
+          await api.health(null, const Duration(seconds: 4))) {
+        return;
+      }
       if (auth.currentUser?.uid != owner!.uid) return;
-      final actualFix = fix ?? (locate ? await location.currentFix() : null);
+      final actualFix = fix ?? (locate ? await _fixForAlert(alert.id) : null);
       final contacts = await db.emergencyContactsFor(alert.patientId);
       if (auth.currentUser?.uid != owner.uid) return;
       lastSmsOutcome = await emergencySms.composeEmergencySms(
@@ -374,9 +614,61 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       lastSmsOutcome = SmsOutcome.failed;
     } finally {
-      _preparingEmergencySms = false;
+      _preparingEmergencySms.remove(alert.id);
       notifyListeners();
     }
+  }
+
+  /// Patient-initiated SMS (re)open for [alert]: after the composer was closed,
+  /// failed, or a better position arrived. Unlike the automatic path it skips
+  /// the de-duplication and the cloud check — the patient asked for it.
+  Future<SmsOutcome> resendEmergencySms(AlertItem alert) async {
+    final owner = auth.currentUser;
+    if (owner?.role != UserRole.patient || owner?.uid != alert.patientId) {
+      return lastSmsOutcome = SmsOutcome.failed;
+    }
+    try {
+      // Never make the patient wait for a full GPS acquisition here: use a
+      // known fix for this alert, else a short attempt, else no location.
+      final fix =
+          refinedFixFor(alert.id) ??
+          _knownFixes[alert.id] ??
+          await location.currentFix(timeout: const Duration(seconds: 6));
+      final contacts = await db.emergencyContactsFor(alert.patientId);
+      if (auth.currentUser?.uid != owner!.uid) return SmsOutcome.failed;
+      lastSmsOutcome = await emergencySms.composeEmergencySms(
+        phoneNumbers: contacts.map((c) => c.phone).toList(),
+        patientName: owner.name,
+        fix: fix,
+        eventId: alert.id,
+        occurredAt: alert.timestamp,
+      );
+    } catch (_) {
+      lastSmsOutcome = SmsOutcome.failed;
+    }
+    notifyListeners();
+    return lastSmsOutcome!;
+  }
+
+  /// Emergency contacts of the signed-in patient whose numbers can actually
+  /// receive an SMS / call, highest priority first.
+  Future<List<EmergencyContact>> validEmergencyContacts() async {
+    final user = auth.currentUser;
+    if (user?.role != UserRole.patient) return const [];
+    final all = await db.emergencyContactsFor(user!.uid);
+    return all
+        .where(
+          (c) => EmergencySmsService.normalizeRecipients([c.phone]).isNotEmpty,
+        )
+        .toList();
+  }
+
+  /// Opens the phone dialer for the highest-priority valid contact. The call
+  /// itself still needs the patient's tap; returns false if none exists.
+  Future<bool> callFirstEmergencyContact() async {
+    final contacts = await validEmergencyContacts();
+    if (contacts.isEmpty) return false;
+    return ExternalActions.dial(contacts.first.phone);
   }
 
   /// Automatically broadcasts the patient's coordinates to caregivers immediately
@@ -389,28 +681,11 @@ class AppState extends ChangeNotifier {
       return;
     }
     try {
-      final fix = await location.currentFix(
-        timeout: const Duration(seconds: 15),
-      );
-      if (fix == null || !fix.valid) return;
-
-      final accuracyDesc = fix.accuracy != null
-          ? (fix.isCoarse
-                ? ' (موقع تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم)'
-                : ' (دقة GPS: ±${fix.accuracy!.round()} م)')
-          : '';
-      final note =
-          '🚨 تنبيه تلقائي: تم رصد نوبة صرع محتملة، وتم إرسال الموقع الجغرافي للمريض فوراً للمرافقين$accuracyDesc.';
-
-      if (api.tokens.hasSession) {
-        await messages.shareLocation(
-          patientId: alert.patientId,
-          latitude: fix.latitude,
-          longitude: fix.longitude,
-          accuracy: fix.accuracy,
-          note: note,
-        );
-      }
+      final fix = await _fixForAlert(alert.id);
+      const note =
+          '🚨 تنبيه تلقائي: تم رصد نوبة صرع محتملة، وتم إرسال الموقع الجغرافي للمريض فوراً للمرافقين.';
+      if (fix != null && fix.valid) await _shareFix(alert.patientId, fix, note);
+      unawaited(_refineAndShare(alert.patientId, alert.id, fix, note));
       notifyListeners();
     } catch (_) {
       // Best-effort automatic dispatch on alert
@@ -430,32 +705,16 @@ class AppState extends ChangeNotifier {
       return;
     }
     try {
-      final fix = await location.currentFix(
-        timeout: const Duration(seconds: 15),
-      );
+      final fix = await location.currentFix();
       if (fix == null || !fix.valid) return;
 
       final lead = assessment.features['lead_time_min'] as num?;
       final timeStr = (lead != null && lead > 0)
           ? ' (الوقت المتوقع للنوبة: خلال ${lead >= 10 ? lead.toStringAsFixed(0) : lead.toStringAsFixed(1)} دقيقة)'
           : '';
-      final accuracyDesc = fix.accuracy != null
-          ? (fix.isCoarse
-                ? ' - موقع تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم'
-                : ' - دقة GPS: ±${fix.accuracy!.round()} م')
-          : '';
       final note =
-          '⚠️ إنذار مبكر: احتمالية حدوث نوبة صرع$timeStr. تم إرسال موقع المريض تلقائياً للمرافقين$accuracyDesc.';
-
-      if (api.tokens.hasSession) {
-        await messages.shareLocation(
-          patientId: pre.patientId,
-          latitude: fix.latitude,
-          longitude: fix.longitude,
-          accuracy: fix.accuracy,
-          note: note,
-        );
-      }
+          '⚠️ إنذار مبكر: احتمالية حدوث نوبة صرع$timeStr. تم إرسال موقع المريض تلقائياً للمرافقين.';
+      await _shareFix(pre.patientId, fix, note);
       notifyListeners();
     } catch (_) {
       // Best-effort automatic dispatch on pre-alert
@@ -529,6 +788,16 @@ class AppState extends ChangeNotifier {
         customMessage: _l10n.isArabic
             ? 'سجّل الخروج قبل تغيير الخادم، ثم سجّل الدخول بحساب الخادم الجديد.'
             : 'Sign out before changing servers, then sign in to the new server.',
+      );
+    }
+    // Release builds cannot reach http:// (cleartext is debug-only in the
+    // Android manifest); say so instead of failing later as «unreachable».
+    if (kReleaseMode && proposed.trim().toLowerCase().startsWith('http://')) {
+      throw Failure(
+        FailureKind.validation,
+        customMessage: _l10n.isArabic
+            ? 'الإصدار النهائي يقبل خوادم HTTPS فقط. استخدم رابطاً يبدأ بـ https://'
+            : 'Release builds accept HTTPS servers only. Use a URL starting with https://',
       );
     }
     serverMode = mode;
@@ -671,6 +940,9 @@ class AppState extends ChangeNotifier {
     try {
       await EdgeModelService.instance.initialize();
     } catch (_) {}
+    // Load the on-device model early so the first offline window is scored
+    // without a cold-load delay. Failure is recorded, never thrown.
+    unawaited(sync.edgeRunner.ensureLoaded());
     // Load persisted prediction settings (SPH/horizon, #21) and apply them to
     // the offline forecast heuristic. Best-effort — defaults stay on failure.
     try {
@@ -774,6 +1046,13 @@ class AppState extends ChangeNotifier {
       await _startForUser();
     }
 
+    try {
+      final initial = await Connectivity().checkConnectivity();
+      deviceHasNetwork = initial.any((r) => r != ConnectivityResult.none);
+    } catch (_) {
+      // Unknown platform state: assume a network and let requests decide.
+    }
+
     // Initialize server connection asynchronously in background without blocking initial UI
     _initServerConnection();
 
@@ -783,20 +1062,24 @@ class AppState extends ChangeNotifier {
       results,
     ) async {
       final isNowConnected = results.any((r) => r != ConnectivityResult.none);
-      final health = isNowConnected
-          ? await api.health(null, const Duration(seconds: 10), true)
-          : false;
-      if (health != apiOnline) {
+      final wasOnline = apiOnline;
+      deviceHasNetwork = isNowConnected;
+      if (!isNowConnected) {
+        apiOnline = false;
+        notifyListeners();
+        return;
+      }
+      // A new network: forget the previous DNS failure and probe again.
+      try {
+        api.noInternetNotifier.value = false;
+      } catch (_) {}
+      notifyListeners();
+      final health = await api.health(null, const Duration(seconds: 10), true);
+      if (health && !wasOnline) {
+        await syncNow();
+      } else if (health != apiOnline) {
         apiOnline = health;
         notifyListeners();
-        if (apiOnline) {
-          final pid = monitoring.activePatientId ?? auth.currentUser?.uid;
-          if (pid != null) {
-            await sync.syncPending(pid);
-          }
-          await care.flushOutbox();
-          await messages.flushPendingMessages();
-        }
       }
     });
   }
@@ -1183,6 +1466,9 @@ class AppState extends ChangeNotifier {
     currentSessionUsername = null;
     lastSmsOutcome = null;
     _smsPrepared.clear();
+    _alertFixes.clear();
+    _knownFixes.clear();
+    _refined = null;
     location.lastResult = null;
     monitoring.activePatientId = null;
     await medication.cancelAllReminders();
@@ -1219,7 +1505,10 @@ class AppState extends ChangeNotifier {
   void dispose() {
     try {
       api.wakingNotifier.removeListener(_onWakingChanged);
+      api.noInternetNotifier.removeListener(_onWakingChanged);
+      api.deviceOffline = null;
     } catch (_) {}
+    unawaited(background.stopMonitoring());
     unawaited(_connectivitySub?.cancel());
     unawaited(monitoring.dispose());
     notifications.dispose();
@@ -1415,20 +1704,14 @@ class AppState extends ChangeNotifier {
         notifyListeners();
         return false;
       }
-      final effectiveNote =
-          note ??
-          (fix.isCoarse
-              ? '📍 مشاركة يدوية للموقع (تقريبي عبر الشبكة ±${(fix.accuracy! / 1000).toStringAsFixed(1)} كم)'
-              : '📍 تم إرسال وتحديث الموقع الجغرافي للمريض (دقة GPS: ±${fix.accuracy?.round() ?? 0} م)');
-      await messages.shareLocation(
-        patientId: pid,
-        latitude: fix.latitude,
-        longitude: fix.longitude,
-        accuracy: fix.accuracy,
-        note: effectiveNote,
+      final shared = await _shareFix(
+        pid,
+        fix,
+        note ?? '📍 تم إرسال وتحديث الموقع الجغرافي للمريض',
+        throwOnFailure: true,
       );
       notifyListeners();
-      return true;
+      return shared;
     } catch (_) {
       return false;
     }
@@ -1569,7 +1852,11 @@ class AppState extends ChangeNotifier {
     if (preAlert != null) {
       _preAlertReading = reading;
       _preAlertPrediction = prediction;
-      notifications.showLocal(_l10n.severityPreAlert, preAlert.message);
+      notifications.showLocal(
+        _l10n.severityPreAlert,
+        preAlert.message,
+        channel: NotificationChannelKind.preAlert,
+      );
       preAlerts.start(preAlert);
     }
     notifyListeners();

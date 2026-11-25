@@ -199,10 +199,9 @@ jobs:
       - name: Install packages
         run: flutter pub get
 
-      # Advisory: the mobile app belongs to another team member, so analyzer
-      # warnings there must not block backend work from merging.
-      - name: Analyze (advisory)
-        continue-on-error: true
+      # Mandatory: the analyzer is clean (0 issues), so any new warning or
+      # info is a regression and must be fixed before merging.
+      - name: Analyze
         run: flutter analyze
 
       - name: Test

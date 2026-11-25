@@ -47,8 +47,9 @@ class ScopeDb extends CareDb {
 Future<AppState> stateFor(ScopeDb db, UserRole role) async {
   final api = QueueApi()
     ..respond = (path) async {
-      if (path.startsWith('/doctor/review-queue'))
+      if (path.startsWith('/doctor/review-queue')) {
         throw ApiException('Not available', statusCode: 404);
+      }
     };
   final app = AppState(database: db, apiClient: api);
   await app.auth.applyBackendSession({

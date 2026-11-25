@@ -79,19 +79,26 @@ def deliver(payload: dict) -> dict:
 
     messaging = _firebase_messaging()
     severity = str(payload.get("severity") or "critical")
+    details = payload.get("details") or {}
+    data_source = str(details.get("data_source") or "")
+    # Alerts raised from the in-app simulator or a recorded dataset must never
+    # read like a live seizure on a caregiver's lock screen.
+    simulated = data_source in ("simulation", "dataset")
+    title = "[محاكاة] Patient alert" if simulated else "Patient alert"
     success_count, failure_count = 0, 0
     invalid = []
     for offset in range(0, len(tokens), 500):
         batch = tokens[offset:offset + 500]
         message = messaging.MulticastMessage(
             notification=messaging.Notification(
-                title="Patient alert",
+                title=title,
                 body="Open the app to review the alert securely.",
             ),
             data={
                 "patient_id": patient_id, "alert_id": str(payload.get("id") or ""),
                 "severity": severity,
-                "event_kind": str((payload.get("details") or {}).get("event_kind") or "alert"),
+                "event_kind": str(details.get("event_kind") or "alert"),
+                "data_source": data_source,
             },
             tokens=batch,
         )

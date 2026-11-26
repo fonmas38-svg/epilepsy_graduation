@@ -49,6 +49,50 @@ class FlutterLocalNotificationsGateway implements LocalNotificationGateway {
 
   static bool _tzInitialized = false;
 
+  AndroidFlutterLocalNotificationsPlugin? get _android =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+      ? _plugin
+            ?.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >()
+      : null;
+
+  /// Whether the OS lets this app post notifications; null when unknown
+  /// (not Android, or the plugin is unavailable).
+  Future<bool?> notificationsEnabled() async {
+    try {
+      return await _android?.areNotificationsEnabled();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Whether reminders can fire at the exact minute; null when unknown.
+  Future<bool?> canScheduleExact() async {
+    try {
+      return await _android?.canScheduleExactNotifications();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Shows the system notification prompt; null when Android cannot ask
+  /// (refused before: only settings can re-enable it).
+  Future<bool?> requestNotifications() async {
+    try {
+      return await _android?.requestNotificationsPermission();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Opens the system «Alarms & reminders» page for this app (Android 12+).
+  Future<void> requestExactAlarms() async {
+    try {
+      await _android?.requestExactAlarmsPermission();
+    } catch (_) {}
+  }
+
   static void ensureTimeZonesInitialized() {
     if (_tzInitialized) return;
     tz_data.initializeTimeZones();
@@ -154,7 +198,10 @@ class FlutterLocalNotificationsGateway implements LocalNotificationGateway {
               AndroidFlutterLocalNotificationsPlugin
             >();
         await android?.requestNotificationsPermission();
-        await android?.requestExactAlarmsPermission();
+        // Not the exact-alarm permission: on Android 14+ it starts denied and
+        // the request opens a system settings page, which would throw the
+        // user out of the app on every launch. Reminders fall back to inexact
+        // timing; the permissions screen offers it with an explanation.
       } else if (defaultTargetPlatform == TargetPlatform.iOS) {
         await plugin
             .resolvePlatformSpecificImplementation<
@@ -276,6 +323,22 @@ class NotificationService {
   final DateTime Function() _now;
 
   LocalNotificationGateway get gateway => _gateway;
+
+  FlutterLocalNotificationsGateway? get _os {
+    final gateway = _gateway;
+    return gateway is FlutterLocalNotificationsGateway ? gateway : null;
+  }
+
+  /// Real OS state for the permissions screen; null when it cannot be read.
+  Future<bool?> notificationsEnabled() async =>
+      await _os?.notificationsEnabled();
+
+  Future<bool?> canScheduleExact() async => await _os?.canScheduleExact();
+
+  Future<bool?> requestNotifications() async =>
+      await _os?.requestNotifications();
+
+  Future<void> requestExactAlarms() async => await _os?.requestExactAlarms();
 
   /// The patient whose alerts this session should receive.
   /// Set by AppState immediately after login and cleared on sign-out.

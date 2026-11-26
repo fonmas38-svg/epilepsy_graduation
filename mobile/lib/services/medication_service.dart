@@ -555,6 +555,14 @@ class MedicationService {
   }
 
   /// Adherence over the last [days] days = taken doses / doses already due, in [0,1].
+  /// Like [adherence], but null when no dose has been due in the window, so
+  /// a new or dose-free plan is shown as «not set» rather than 100 %.
+  Future<double?> adherenceIfDue(String patientId, {int days = 7}) async {
+    final meds = await forPatient(patientId, activeOnly: true);
+    if (meds.isEmpty || _elapsedDoses(meds, days, _now()) == 0) return null;
+    return adherence(patientId, days: days);
+  }
+
   Future<double> adherence(String patientId, {int days = 7}) async {
     final meds = await forPatient(patientId, activeOnly: true);
     if (meds.isEmpty) return 1.0;

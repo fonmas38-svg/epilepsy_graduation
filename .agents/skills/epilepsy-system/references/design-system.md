@@ -91,3 +91,57 @@ Official visual and interaction design specification for the `epilepsy_graduatio
 5. **Touch Target Dimensions:**
    - Minimum standard interactive target: 48×48dp (`A11y.minTouchTarget`).
    - Emergency SOS target: Minimum 72dp (`A11y.emergencyTouchTarget`) so it can be pressed during auras or trembling.
+
+---
+
+## 4. Decorative Accent Tones (`AppColors.accent` / `ToneIcon`)
+
+Pastel squircles behind icons (quick actions, menu rows, avatars) carry **no clinical meaning**, so they are separate from the risk palette in §1.2. Use `AppColors.accent(context, AccentTone.x)` or the `ToneIcon` widget (`core/ui/common.dart`); never a raw pastel hex in a screen. Every pair is ≥ 4.5:1 in both themes.
+
+| Tone | Light container / foreground | Dark container / foreground | Typical use |
+|---|---|---|---|
+| `blue` | `#EBF3FF` / `#1565C0` | `#15294A` / `#8AB8FF` | Add record, reports, profile avatar |
+| `indigo` | `#EEF0FA` / `#3949AB` | `#1E2347` / `#AFB8F6` | History, diary |
+| `red` | `#FFEEEE` / `#C62828` | `#3A1416` / `#FF9A92` | Emergency plan, alerts entry points |
+| `orange` | `#FFF3E0` / `#A35200` | `#33260A` / `#FCC366` | Triggers, notes |
+| `green` | `#E8F5E9` / `#2E7D32` | `#10301F` / `#7BE3AE` | Device, confirmations |
+| `slate` | `#F0F4F8` / `#455A64` | `#232B36` / `#BCC5D2` | More / neutral tools |
+
+Rules:
+- A filled `colorScheme.primary` surface always takes `colorScheme.onPrimary` text/icons. Dark primary is `#91C0FF`; white on it is 1.9:1 (fails).
+- Fixed-colour exceptions are allowed only on the brand hero gradient (§2.1) and in theme-preview swatches, with white text.
+- In widget tests, `debugDisableShadows` draws elevation as a solid outline; a black ring in a test capture is not a real border.
+
+## 5. Button Hierarchy
+
+| Level | Widget | Use | Per screen |
+|---|---|---|---|
+| Emergency | `EmergencyButton` (72dp, danger solid) | SOS only | 1, pinned |
+| Primary | `FilledButton` (52dp, radius 16) | The single main action of the task (save, take dose, start monitoring) | 1 per card/flow |
+| Secondary | `FilledButton.tonal` / `OutlinedButton` | Alternatives (retry, reopen SMS, call) | Any |
+| Tertiary | `TextButton` | Low-emphasis links (later, view all) | Any |
+
+- Never two `FilledButton`s side by side with equal weight; demote one to tonal/outlined.
+- Icon-only buttons need a `tooltip` (and therefore a semantic label).
+- Tappable tiles use `InkWell` + `Semantics(button: true, label: …)`, not a bare `GestureDetector` (no ripple, no screen-reader role).
+
+## 6. Placement Rules (Patient)
+
+1. **SOS is always visible**: pinned at the bottom of the patient Home tab, outside the scroll view, above the navigation bar. It is never placed inside a scrolling list or behind a menu.
+2. **No floating action button on Home**: it competes with SOS and covers content. "Add record" is the first quick action.
+3. **Quick actions never duplicate the navigation bar** (Home, Alerts, Medication, History, Account are tabs). Home quick actions are: Add record, Emergency plan, Triggers, More.
+4. **Home ordering** (top → bottom): header → connection banner (only when not `onlineFull`) → active pre-alert → actionable warnings (no emergency contacts, battery exemption) → monitoring hero with explicit Start/Stop button → next dose with "Take dose" → risk card → quick actions → recent activity → family location → simulator banner.
+5. **At most two notices above the hero card.** Explanatory notices (model/server capability, monitoring limits) belong on the Monitoring screen, not Home.
+6. **One-handed reach**: primary and emergency actions sit in the lower half of the screen.
+7. **Status text never contradicts data**: no green "live"/"active" indicator while monitoring is stopped, no default confidence (e.g. 95 %) or "normal EEG" without an actual reading, and recorded/simulated data is labelled as such.
+
+## 7. Spacing & Type Scale
+
+- Spacing tokens only (`Gap` / `Insets`, `core/theme/app_spacing.dart`): 2, 4, 8, 12, 16, 24, 32, 48. No ad-hoc values in new code.
+- Type sizes: 12 (labels/captions, minimum), 14 (body), 16 (buttons, emphasized body), 17–20 (card titles), 22–28 (screen headings). Below 12 px is not allowed for readable text.
+- Mixed Arabic/English titles: keep the English part in its own `Text`/`TextSpan` or wrap it with directional marks so parentheses do not flip.
+
+## 8. Required States & Verification
+
+- Every data card distinguishes **loading, empty, offline, stale, failure and forbidden**; none may fall back to invented values.
+- Before merging UI changes, render the affected screens with `test/visual/patient_screens_capture_test.dart` (`CAPTURE_SCREENS=1`) in **light and dark**, at **360 dp width**, and at **200 % text scale**; zero layout exceptions are allowed.

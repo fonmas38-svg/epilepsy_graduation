@@ -507,3 +507,48 @@ class ResponsiveContent extends StatelessWidget {
     );
   }
 }
+
+/// An icon inside a pastel squircle (or circle) whose colours follow the
+/// theme: [AppColors.accent] gives a light pastel in light mode and a tinted
+/// dark container in dark mode, both ≥ 4.5:1 against the icon.
+class ToneIcon extends StatelessWidget {
+  const ToneIcon({
+    super.key,
+    required this.icon,
+    required this.tone,
+    this.size = 22,
+    this.padding = 8,
+    this.radius = 10,
+    this.circle = false,
+    this.dimension,
+  });
+
+  final IconData icon;
+  final AccentTone tone;
+  final double size;
+  final double padding;
+  final double radius;
+  final bool circle;
+
+  /// Fixed square size; otherwise the box wraps the icon plus [padding].
+  final double? dimension;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.accent(context, tone);
+    return Container(
+      width: dimension,
+      height: dimension,
+      padding: dimension == null ? EdgeInsets.all(padding) : null,
+      // Only centre inside a fixed box: an aligned Container without a size
+      // expands to all available width (breaks ListTile.leading).
+      alignment: dimension == null ? null : Alignment.center,
+      decoration: BoxDecoration(
+        color: c.container,
+        shape: circle ? BoxShape.circle : BoxShape.rectangle,
+        borderRadius: circle ? null : BorderRadius.circular(radius),
+      ),
+      child: Icon(icon, color: c.foreground, size: size),
+    );
+  }
+}

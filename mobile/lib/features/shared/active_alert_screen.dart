@@ -227,6 +227,37 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
           ),
         ],
       ),
+      // Patient: SOS pinned at the bottom, never scrolled away (design §6).
+      bottomNavigationBar:
+          _alert != null && app.auth.currentUser?.role == UserRole.patient
+          ? Material(
+              color: Theme.of(context).colorScheme.surface,
+              elevation: 3,
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    Gap.lg,
+                    Gap.sm,
+                    Gap.lg,
+                    Gap.md,
+                  ),
+                  child: Center(
+                    // heightFactor 1: in a bottom bar an unbounded Center fills the
+                    // whole screen and hides the page.
+                    heightFactor: 1,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 850),
+                      child: EmergencyButton(
+                        busy: app.sosInProgress,
+                        onPressed: app.sosInProgress ? null : () => _sos(app),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            )
+          : null,
       body: AsyncView<AlertItem>(
         loading: _loading,
         failure: _failure,
@@ -363,6 +394,64 @@ class _Body extends StatelessWidget {
     final pre = app.preAlert;
     final counting = pre != null && pre.id == alert.id;
 
+    if (role == UserRole.patient) {
+      // «Next step first» (design canvas, option A): what is happening, how
+      // long until caregivers are told, then the one action that matters.
+      // Detail sits below; SOS is pinned by the Scaffold, not in this list.
+      return ListView(
+        padding: Insets.pageBottomSafe,
+        children: [
+          _Headline(alert: alert),
+          if (counting) ...[
+            Gap.vMd,
+            _Countdown(secondsLeft: app.preAlertSecondsLeft),
+          ],
+          Gap.vMd,
+          _PatientActions(
+            busy: busy,
+            acknowledged: alert.acknowledged,
+            counting: counting,
+            onImOk: onImOk,
+            onFalseAlarm: onFalseAlarm,
+            onNeedHelp: onNeedHelp,
+          ),
+          Gap.vMd,
+          const _Steps(),
+          Gap.vMd,
+          _EmergencyChannels(alert: alert),
+          _LocationNavigationCard(alert: alert),
+          Gap.vMd,
+          _NotifiedSection(
+            alert: alert,
+            responses: responses,
+            offline: app.operatingMode == AppOperatingMode.offlineLocal,
+          ),
+          Gap.vMd,
+          // For whoever is with the patient; folded so it does not push the
+          // patient's own actions down.
+          Card(
+            margin: EdgeInsets.zero,
+            clipBehavior: Clip.antiAlias,
+            child: ExpansionTile(
+              leading: const Icon(Icons.medical_services_outlined),
+              title: Text(
+                AppLocalizations.of(context).isArabic
+                    ? 'خطوات الإسعاف للمرافق'
+                    : 'First aid steps for a companion',
+              ),
+              childrenPadding: const EdgeInsets.fromLTRB(
+                Gap.md,
+                0,
+                Gap.md,
+                Gap.md,
+              ),
+              children: const [FirstAidView()],
+            ),
+          ),
+        ],
+      );
+    }
+
     return ListView(
       padding: Insets.pageBottomSafe,
       children: [
@@ -406,16 +495,28 @@ class _Body extends StatelessWidget {
   }
 }
 
-String _friendlyAlertMessage(String msg) {
+bool _ar(BuildContext context) =>
+    Localizations.localeOf(context).languageCode == 'ar';
+
+/// A manual «I need help» alert, not a model prediction.
+bool _isSos(AlertItem alert) => alert.message.trimLeft().startsWith('SOS');
+
+String _friendlyAlertMessage(String msg, {required bool ar}) {
   final m = msg.trim();
   if (m.contains('High seizure risk detected') || m.contains('high_risk')) {
-    return 'رصد احتمال نوبة محتملة: يرجى الجلوس والاسترخاء وتجنب أي مجهود، النظام يراقبك باستمرار.';
+    return ar
+        ? 'رصد احتمال نوبة محتملة: يرجى الجلوس والاسترخاء وتجنب أي مجهود، النظام يراقبك باستمرار.'
+        : 'Possible seizure detected: sit down, relax and avoid effort; the system keeps watching.';
   }
   if (m.contains('Patient needs closer monitoring') || m.contains('watch')) {
-    return 'ملاحظة سريرية: المؤشرات الحيوية بحاجة لمتابعة هادئة.';
+    return ar
+        ? 'ملاحظة سريرية: المؤشرات الحيوية بحاجة لمتابعة هادئة.'
+        : 'Clinical note: vital signs need calm follow-up.';
   }
   if (m.contains('Patient vitals look stable')) {
-    return 'المؤشرات الحيوية مستقرة وطبيعية تماماً والحمد لله.';
+    return ar
+        ? 'المؤشرات الحيوية مستقرة وطبيعية.'
+        : 'Vital signs are stable and normal.';
   }
   return m;
 }
@@ -456,31 +557,40 @@ class _Headline extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          // Wrap, not Row: at large text sizes the badges move to a second
+          // line instead of squeezing the severity label letter by letter.
+          Wrap(
+            spacing: Gap.sm,
+            runSpacing: Gap.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Icon(
                 AppColors.iconFor(s.view),
                 color: colors.foreground,
                 size: 22,
               ),
-              Gap.hSm,
-              Expanded(
-                child: RiskBadge(view: s.view, labelOverride: s.label),
-              ),
+              RiskBadge(view: s.view, labelOverride: s.label),
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
                   vertical: 4,
                 ),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+                  color: AppColors.accent(context, AccentTone.blue).container,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Text(
-                  'درع الأعصاب الذكي',
+                child: Text(
+                  _isSos(alert)
+                      ? (_ar(context) ? 'طلب يدوي' : 'Manual request')
+                      : (_ar(context)
+                            ? 'درع الأعصاب الذكي'
+                            : 'Smart neuro shield'),
                   style: TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF38BDF8),
+                    fontSize: 12,
+                    color: AppColors.accent(
+                      context,
+                      AccentTone.blue,
+                    ).foreground,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -489,7 +599,10 @@ class _Headline extends StatelessWidget {
           ),
           Gap.vMd,
           Text(
-            lead == null || lead <= 0
+            // A pressed «I need help» is not a prediction: say what it is.
+            _isSos(alert)
+                ? (_ar(context) ? 'طلب مساعدة (SOS)' : 'Help requested (SOS)')
+                : lead == null || lead <= 0
                 ? l.activeAlertHeadlineNoLead
                 : l.activeAlertHeadline(lead.round()),
             style: theme.textTheme.titleLarge?.copyWith(
@@ -499,7 +612,7 @@ class _Headline extends StatelessWidget {
           ),
           Gap.vSm,
           Text(
-            _friendlyAlertMessage(alert.message),
+            _friendlyAlertMessage(alert.message, ar: _ar(context)),
             style: theme.textTheme.bodyMedium?.copyWith(
               height: 1.5,
               fontSize: 14.5,
@@ -512,7 +625,7 @@ class _Headline extends StatelessWidget {
             children: [
               LabeledValue(
                 label: l.alertTime,
-                value: TimeAgo.stamp(alert.timestamp),
+                value: TimeAgo.stamp(alert.timestamp, l),
                 icon: Icons.schedule_outlined,
               ),
               if (profile != null)
@@ -589,10 +702,15 @@ class _LocationNavigationCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'الموقع الجغرافي للمريض متاح فوراً',
+                      (_ar(context)
+                          ? 'الموقع الجغرافي للمريض متاح'
+                          : 'Patient location available'),
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        color: Colors.blue.shade900,
+                        color: AppColors.accent(
+                          context,
+                          AccentTone.blue,
+                        ).foreground,
                       ),
                     ),
                     Text(
@@ -600,8 +718,12 @@ class _LocationNavigationCard extends StatelessWidget {
                               (app.messages.lastSharedLocation!['accuracy']
                                       as num) >
                                   1000
-                          ? 'اضغط للملاحة (⚠️ موقع تقريبي عبر شبكة الإنترنت ±${((app.messages.lastSharedLocation!['accuracy'] as num) / 1000).toStringAsFixed(1)} كم)'
-                          : 'اضغط للبدء في الملاحة اللحظية والوصول للمريض عبر خرائط Google',
+                          ? (_ar(context)
+                                ? 'اضغط للملاحة (⚠️ موقع تقريبي ±${((app.messages.lastSharedLocation!['accuracy'] as num) / 1000).toStringAsFixed(1)} كم)'
+                                : 'Tap to navigate (⚠️ approximate ±${((app.messages.lastSharedLocation!['accuracy'] as num) / 1000).toStringAsFixed(1)} km)')
+                          : (_ar(context)
+                                ? 'اضغط للملاحة إلى المريض عبر خرائط Google'
+                                : 'Tap to navigate to the patient in Google Maps'),
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.blue.shade800,
@@ -628,7 +750,11 @@ class _LocationNavigationCard extends StatelessWidget {
               }
             },
             icon: const Icon(Icons.navigation_outlined),
-            label: const Text('فتح الملاحة اللحظية (خرائط Google)'),
+            label: Text(
+              (_ar(context)
+                  ? 'فتح الملاحة (خرائط Google)'
+                  : 'Open navigation (Google Maps)'),
+            ),
           ),
         ],
       ),
@@ -701,16 +827,24 @@ class _Steps extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final steps = [
-      'تنفس بعمق وبطء: خذ شهيقاً هادئاً لـ 4 ثوانٍ ثم زفيراً مسترخياً لتهدئة جهازك العصبي.',
-      'اجلس أو استلقِ برفق على جنبك في مكان مريح وآمن بعيداً عن أي أطراف حادة.',
-      'أنت بأمان تام ومحاط بالرعاية؛ ومرافقك السريري على تواصل لمساندتك دائماً.',
-    ];
+    final steps = _ar(context)
+        ? const [
+            'تنفس بعمق وبطء: خذ شهيقاً هادئاً لـ 4 ثوانٍ ثم زفيراً مسترخياً لتهدئة جهازك العصبي.',
+            'اجلس أو استلقِ برفق على جنبك في مكان مريح وآمن بعيداً عن أي أطراف حادة.',
+            'إن شعرت بأن الأعراض تشتد فاضغط «أحتاج مساعدة» أسفل الشاشة؛ يصل التنبيه لمرافقيك عبر الإنترنت أو برسالة SMS.',
+          ]
+        : const [
+            'Breathe slowly: in for 4 seconds, then a relaxed breath out to calm your nervous system.',
+            'Sit or lie gently on your side somewhere comfortable and safe, away from sharp edges.',
+            'If symptoms get worse, press «I need help» at the bottom; your caregivers are alerted online or by SMS.',
+          ];
     final colors = AppColors.of(context, RiskView.safe);
     final theme = Theme.of(context);
 
     return SectionCard(
-      title: 'إرشادات الاسترخاء والسلامة الوقائية',
+      title: (_ar(context)
+          ? 'إرشادات الاسترخاء والسلامة'
+          : 'Calming and safety guidance'),
       icon: Icons.self_improvement_outlined,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -776,10 +910,10 @@ class _PatientActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
-
     return SectionCard(
-      title: 'إجراءات السلامة والاطمئنان',
+      title: (_ar(context)
+          ? 'إجراءات السلامة والاطمئنان'
+          : 'Safety and reassurance'),
       icon: Icons.health_and_safety_outlined,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -803,8 +937,12 @@ class _PatientActions extends StatelessWidget {
               icon: const Icon(Icons.check_circle_outline, size: 24),
               label: Text(
                 acknowledged
-                    ? 'تم تسجيل استقرارك والحمد لله'
-                    : 'أنا بخير تماماً والحمد لله (إلغاء التنبيه)',
+                    ? (_ar(context)
+                          ? 'تم تسجيل أنك بخير'
+                          : 'Recorded that you are OK')
+                    : (_ar(context)
+                          ? 'أنا بخير (إلغاء التنبيه)'
+                          : 'I am OK (cancel alert)'),
               ),
             ),
           ),
@@ -817,23 +955,21 @@ class _PatientActions extends StatelessWidget {
               onPressed: busy ? null : () => onFalseAlarm(),
               icon: Icon(
                 counting ? Icons.cancel_outlined : Icons.report_off_outlined,
-                color: const Color(0xFFE76F51),
+                color: AppColors.of(context, RiskView.caution).foreground,
               ),
-              label: const Text('إنذار غير صحيح / لا أشعر بأي أعراض'),
+              label: Text(
+                (_ar(context)
+                    ? 'إنذار غير صحيح / لا أشعر بأعراض'
+                    : 'False alarm / no symptoms'),
+              ),
             ),
           ),
-          Gap.vMd,
-
-          // 3. Emergency Help Button (available whenever genuinely needed)
-          EmergencyButton(
-            label: 'طلب مساندة طارئة (SOS)',
-            busy: app.sosInProgress,
-            onPressed: () => onNeedHelp(),
-          ),
           Gap.vSm,
-          const InfoNote(
-            text:
-                'اطمئن تماماً: النظام يراقب نشاطك باستمرار؛ إذا كان هذا التنبيه عارضاً فإن الضغط على «أنا بخير» يلغيه فوراً دون إقلاق أسرتك.',
+          // SOS is pinned at the bottom of the screen (always visible).
+          InfoNote(
+            text: _ar(context)
+                ? 'إذا كان هذا التنبيه عارضاً فإن «أنا بخير» يلغيه فوراً دون إقلاق أسرتك. وإن احتجت مساعدة فزر «أحتاج مساعدة» ثابت أسفل الشاشة.'
+                : 'If this alert is a false start, «I am OK» cancels it without worrying your family. If you need help, «I need help» stays at the bottom of the screen.',
             icon: Icons.spa_outlined,
             view: RiskView.safe,
           ),
@@ -950,7 +1086,7 @@ class _NotifiedSection extends StatelessWidget {
                   r.responderName.isEmpty ? l.caregiverLabel : r.responderName,
                 ),
                 subtitle: Text(
-                  '${_statusLabel(r.status, l)} · ${TimeAgo.stamp(r.at)}',
+                  '${_statusLabel(r.status, l)} · ${TimeAgo.stamp(r.at, l)}',
                   style: theme.textTheme.labelSmall,
                 ),
               ),
@@ -1032,27 +1168,43 @@ class _EmergencyChannels extends StatelessWidget {
             ),
             Gap.vSm,
           ],
-          SizedBox(
-            height: A11y.minTouchTarget,
-            child: OutlinedButton.icon(
-              onPressed: resend,
-              icon: const Icon(Icons.sms_outlined),
-              label: Text(ar ? 'إعادة فتح رسالة SMS' : 'Reopen SMS message'),
-            ),
-          ),
-          Gap.vSm,
-          SizedBox(
-            height: A11y.minTouchTarget,
-            child: OutlinedButton.icon(
-              onPressed: call,
-              icon: const Icon(Icons.call_outlined),
-              label: Text(
-                ar
-                    ? 'اتصال هاتفي مباشر بأقرب مرافق'
-                    : 'Call the first emergency contact',
+          // With no usable number, resend/call would only fail: offer the
+          // one action that helps instead.
+          if (outcome == SmsOutcome.noRecipients)
+            SizedBox(
+              height: A11y.minTouchTarget,
+              child: OutlinedButton.icon(
+                onPressed: () =>
+                    Navigator.pushNamed(context, Routes.patientEmergency),
+                icon: const Icon(Icons.add_call),
+                label: Text(
+                  ar ? 'إضافة أرقام الطوارئ' : 'Add emergency numbers',
+                ),
+              ),
+            )
+          else ...[
+            SizedBox(
+              height: A11y.minTouchTarget,
+              child: OutlinedButton.icon(
+                onPressed: resend,
+                icon: const Icon(Icons.sms_outlined),
+                label: Text(ar ? 'إعادة فتح رسالة SMS' : 'Reopen SMS message'),
               ),
             ),
-          ),
+            Gap.vSm,
+            SizedBox(
+              height: A11y.minTouchTarget,
+              child: OutlinedButton.icon(
+                onPressed: call,
+                icon: const Icon(Icons.call_outlined),
+                label: Text(
+                  ar
+                      ? 'اتصال هاتفي مباشر بأقرب مرافق'
+                      : 'Call the first emergency contact',
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

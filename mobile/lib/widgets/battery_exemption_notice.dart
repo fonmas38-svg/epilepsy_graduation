@@ -81,19 +81,22 @@ class _BatteryExemptionNoticeState extends State<BatteryExemptionNotice>
             icon: Icons.battery_alert_outlined,
             view: RiskView.caution,
           ),
+          // Same quiet text actions as the other setup notice: a warning
+          // card should not carry the screen's heaviest button.
           Wrap(
             alignment: WrapAlignment.end,
-            spacing: Gap.sm,
+            spacing: Gap.xs,
             children: [
               TextButton(
                 onPressed: _dismiss,
                 child: Text(ar ? 'لاحقاً' : 'Later'),
               ),
-              FilledButton.tonal(
+              TextButton.icon(
                 onPressed: () async {
                   await widget.background.requestIgnoreBatteryOptimizations();
                 },
-                child: Text(ar ? 'استثناء التطبيق' : 'Exempt the app'),
+                icon: const Icon(Icons.battery_charging_full_outlined),
+                label: Text(ar ? 'استثناء التطبيق' : 'Exempt the app'),
               ),
             ],
           ),

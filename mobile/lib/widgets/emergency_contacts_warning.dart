@@ -10,10 +10,18 @@ import '../providers/app_state.dart';
 /// Warns the patient *before* any seizure that the offline SMS/call fallback
 /// has nobody to reach: no emergency contacts, or none with a usable number.
 /// Re-checks whenever the care store changes (a contact added or edited).
+///
+/// [otherwise] is shown instead while there is no such problem, so the home
+/// screen raises one setup warning at a time, the most important first.
 class EmergencyContactsWarning extends StatefulWidget {
-  const EmergencyContactsWarning({super.key, required this.app});
+  const EmergencyContactsWarning({
+    super.key,
+    required this.app,
+    this.otherwise,
+  });
 
   final AppState app;
+  final Widget? otherwise;
 
   @override
   State<EmergencyContactsWarning> createState() =>
@@ -52,7 +60,7 @@ class _EmergencyContactsWarningState extends State<EmergencyContactsWarning> {
 
   @override
   Widget build(BuildContext context) {
-    if (_hasValid != false) return const SizedBox.shrink();
+    if (_hasValid != false) return widget.otherwise ?? const SizedBox.shrink();
     final ar = AppLocalizations.of(context).isArabic;
     return Padding(
       padding: const EdgeInsets.only(top: Gap.md),

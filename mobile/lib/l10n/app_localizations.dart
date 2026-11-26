@@ -711,14 +711,14 @@ const Map<String, String> _ar = {
   'errorTitle': 'تعذّر إكمال العملية',
   'offlineTitle': 'غير متصل',
   'offlineSince': 'غير متصل — آخر تحديث {v}',
-  'offlineNoData': 'غير متصل ولا توجد بيانات محفوظة.',
+  'offlineNoData': 'غير متصل — لم تتم المزامنة بعد.',
   'savedLocallyWillSync': 'حُفظ على الجهاز، وسيُرسل عند عودة الاتصال.',
   'pendingSync': 'بانتظار المزامنة',
   'wakingCloudServer': 'جاري إيقاظ الخادم السحابي...',
   'offlineLocalMode':
-      'الوضع المحلي (دون إنترنت): الرصد والمحاكي والحفظ وطوارئ SMS وتحديد الموقع عبر GPS تعمل على جهازك، وستُرسل البيانات عند عودة الاتصال.',
+      'الوضع المحلي (دون إنترنت): التطبيق يعمل على جهازك، وتُرسل البيانات عند عودة الاتصال.',
   'serverUnreachableMode':
-      'الإنترنت متاح لكن تعذّر الوصول إلى الخادم — يعمل التطبيق محلياً وستُرسل البيانات لاحقاً.',
+      'تعذّر الوصول إلى الخادم — يعمل التطبيق محلياً وتُرسل البيانات لاحقاً.',
   'syncingNow': 'عاد الاتصال — جارٍ إرسال البيانات المعلّقة...',
   'syncNow': 'مزامنة الآن',
 
@@ -826,7 +826,7 @@ const Map<String, String> _ar = {
   'triggerIntensity': 'الشدة',
   'correlationTitle': 'تزامن المحفزات مع الأحداث',
   'correlationDisclaimer':
-      'ما يظهر هنا **تزامن** لا **سبب**. لا يصلح لاتخاذ قرار دوائي؛ اعرضه على طبيبك.',
+      'ما يظهر هنا «تزامن» لا «سبب». لا يصلح لاتخاذ قرار دوائي؛ اعرضه على طبيبك.',
   'coOccurrence': 'لوحظ تزامن في {n} حالة',
   'exportPdf': 'تصدير PDF',
   'exportCsv': 'تصدير CSV',
@@ -1308,15 +1308,15 @@ const Map<String, String> _en = {
   'errorTitle': 'Could not complete that',
   'offlineTitle': 'Offline',
   'offlineSince': 'Offline — last update {v}',
-  'offlineNoData': 'Offline, and nothing stored locally.',
+  'offlineNoData': 'Offline — not synced yet.',
   'savedLocallyWillSync':
       'Saved on this device; it will sync when back online.',
   'pendingSync': 'Pending sync',
   'wakingCloudServer': 'Waking up cloud server...',
   'offlineLocalMode':
-      'Local mode (no internet): monitoring, simulator, saving, SMS emergency and GPS location work on this device; data is sent when the connection returns.',
+      'Local mode (no internet): the app keeps working on this device; data is sent when the connection returns.',
   'serverUnreachableMode':
-      'Internet is available but the server cannot be reached — the app works locally and will send data later.',
+      'Server unreachable — the app works locally and sends data later.',
   'syncingNow': 'Back online — sending pending data...',
   'syncNow': 'Sync now',
 
@@ -1425,7 +1425,7 @@ const Map<String, String> _en = {
   'triggerIntensity': 'Intensity',
   'correlationTitle': 'Triggers alongside events',
   'correlationDisclaimer':
-      'This shows **co-occurrence**, not **cause**. Do not change medication from it; show it to your doctor.',
+      'This shows co-occurrence, not cause. Do not change medication from it; show it to your doctor.',
   'coOccurrence': 'Co-occurred in {n} case(s)',
   'exportPdf': 'Export PDF',
   'exportCsv': 'Export CSV',

@@ -1,3 +1,4 @@
+import '../../core/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -309,7 +310,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   subtitle:
                       'يتصل بالسحابة (Render Cloud)، وينتقل فوراً للمحلي عند تعذر الإنترنت',
                   badge: 'موصى به للمناقشة ⭐',
-                  badgeColor: const Color(0xFF00796B),
+                  badgeColor: AppColors.accent(
+                    context,
+                    AccentTone.green,
+                  ).foreground,
                   onSelect: () async {
                     Navigator.pop(ctx);
                     await app.applyServerMode(ServerMode.auto);
@@ -326,7 +330,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   badge: probeResults?['cloud'] != null
                       ? '⚡ ${probeResults!['cloud']} ms'
                       : 'سحابي عالمي',
-                  badgeColor: const Color(0xFF1565C0),
+                  badgeColor: AppColors.accent(
+                    context,
+                    AccentTone.blue,
+                  ).foreground,
                   onSelect: () async {
                     Navigator.pop(ctx);
                     await app.applyServerMode(ServerMode.cloud);
@@ -343,7 +350,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   badge: probeResults?['local'] != null
                       ? '⚡ ${probeResults!['local']} ms'
                       : 'أوفلاين سريع 💻',
-                  badgeColor: const Color(0xFFE65100),
+                  badgeColor: AppColors.accent(
+                    context,
+                    AccentTone.orange,
+                  ).foreground,
                   onSelect: () async {
                     Navigator.pop(ctx);
                     await app.applyServerMode(ServerMode.local);
@@ -358,7 +368,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   title: 'عنوان مخصص (Custom LAN IP)',
                   subtitle: app.customServerUrl ?? 'http://192.168.x.x:8000',
                   badge: 'شبكة محلية',
-                  badgeColor: Colors.blueGrey,
+                  badgeColor: AppColors.accent(
+                    context,
+                    AccentTone.slate,
+                  ).foreground,
                   onSelect: () {
                     showDialog(
                       context: modalCtx,
@@ -534,10 +547,13 @@ class _LoginScreenState extends State<LoginScreen> {
                         width: 76,
                         height: 76,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFEFF6FF),
+                          color: AppColors.accent(
+                            context,
+                            AccentTone.blue,
+                          ).container,
                           borderRadius: BorderRadius.circular(22),
                           border: Border.all(
-                            color: const Color(0xFFDBEAFE),
+                            color: Theme.of(context).colorScheme.outlineVariant,
                             width: 1.5,
                           ),
                           boxShadow: const [
@@ -548,10 +564,10 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ],
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.monitor_heart_rounded,
                           size: 42,
-                          color: Color(0xFF0066FF),
+                          color: Theme.of(context).colorScheme.primary,
                         ),
                       ),
                     ),
@@ -640,7 +656,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     height: 52,
                     child: FilledButton(
                       style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF0066FF),
+                        backgroundColor: Theme.of(context).colorScheme.primary,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
@@ -653,12 +669,12 @@ class _LoginScreenState extends State<LoginScreen> {
                           ? null
                           : () => _submitAccount(),
                       child: _loading
-                          ? const SizedBox(
+                          ? SizedBox(
                               width: 22,
                               height: 22,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                color: Colors.white,
+                                color: Theme.of(context).colorScheme.onPrimary,
                               ),
                             )
                           : Text(
@@ -716,7 +732,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             Text(
                               l.wakingCloudServer,
                               style: theme.textTheme.bodySmall?.copyWith(
-                                color: const Color(0xFF0066FF),
+                                color: Theme.of(context).colorScheme.primary,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),

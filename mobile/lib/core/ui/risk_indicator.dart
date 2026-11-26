@@ -158,9 +158,13 @@ class RiskGauge extends StatelessWidget {
     this.freshnessLabel,
     this.reasonLabel,
     this.trailing,
+    this.eyebrow,
   });
 
   final RiskView view;
+
+  /// Small title above the state; defaults to the patient's «my status now».
+  final String? eyebrow;
 
   /// Minutes of warning, when the forecast layer produced one.
   final double? leadTimeMin;
@@ -185,7 +189,7 @@ class RiskGauge extends StatelessWidget {
       // One label for the whole card: a screen reader should announce the state
       // as a sentence, not read out three disconnected fragments.
       label: [
-        l.myStatusNow,
+        eyebrow ?? l.myStatusNow,
         title,
         body,
         if (view.isUnknown) ?reasonLabel,
@@ -222,7 +226,7 @@ class RiskGauge extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          l.myStatusNow,
+                          eyebrow ?? l.myStatusNow,
                           style: theme.textTheme.labelLarge?.copyWith(
                             color: tone.foreground.withValues(alpha: 0.85),
                           ),

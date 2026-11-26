@@ -1,3 +1,5 @@
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/risk_view.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -414,12 +416,15 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                               width: 38,
                               height: 38,
                               decoration: BoxDecoration(
-                                color: const Color(0xFFEFF6FF),
+                                color: AppColors.accent(
+                                  context,
+                                  AccentTone.blue,
+                                ).container,
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              child: const Icon(
+                              child: Icon(
                                 Icons.person_rounded,
-                                color: Color(0xFF0066FF),
+                                color: Theme.of(context).colorScheme.primary,
                                 size: 22,
                               ),
                             ),
@@ -442,9 +447,9 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                                 onPressed: _sending
                                     ? null
                                     : () => _select(null),
-                                icon: const Icon(
+                                icon: Icon(
                                   Icons.people_outline_rounded,
-                                  color: Color(0xFF0066FF),
+                                  color: Theme.of(context).colorScheme.primary,
                                 ),
                               ),
                           ],
@@ -456,9 +461,17 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                             vertical: 4,
                           ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFFFF7ED),
+                            color: AppColors.accent(
+                              context,
+                              AccentTone.orange,
+                            ).container,
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: const Color(0xFFFFEDD5)),
+                            border: Border.all(
+                              color: AppColors.of(
+                                context,
+                                RiskView.caution,
+                              ).border,
+                            ),
                           ),
                           child: Text(
                             ar
@@ -568,9 +581,12 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                             ar
                                 ? 'تعذر تحديث المحادثة؛ المعروض هو المحفوظ محليًا.'
                                 : 'Unable to refresh; showing local records.',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 13,
-                              color: Color(0xFFE11D48),
+                              color: AppColors.of(
+                                context,
+                                RiskView.danger,
+                              ).foreground,
                             ),
                           ),
                           TextButton(
@@ -586,16 +602,16 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                         if (_channel == 'family_patient') ...[
                           const SizedBox(height: 6),
                           TextButton.icon(
-                            icon: const Icon(
+                            icon: Icon(
                               Icons.location_on_rounded,
-                              color: Color(0xFF0066FF),
+                              color: Theme.of(context).colorScheme.primary,
                               size: 20,
                             ),
                             label: Text(
                               ar ? 'آخر موقع مشترك' : 'Last shared location',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w600,
-                                color: Color(0xFF0066FF),
+                                color: Theme.of(context).colorScheme.primary,
                               ),
                             ),
                             onPressed: () => showModalBottomSheet<void>(
@@ -667,7 +683,16 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                         labelText: ar ? 'اكتب رسالة' : 'Write a message',
                         counterText: '',
                         filled: true,
-                        fillColor: const Color(0xFFF8FAFC),
+                        // Theme-aware fill (was a fixed near-white #F8FAFC
+                        // that stayed bright in dark mode).
+                        fillColor:
+                            Theme.of(context).brightness == Brightness.dark
+                            ? Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerHighest
+                            : Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerLowest,
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 16,
                           vertical: 12,
@@ -686,8 +711,8 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(22),
-                          borderSide: const BorderSide(
-                            color: Color(0xFF0066FF),
+                          borderSide: BorderSide(
+                            color: Theme.of(context).colorScheme.primary,
                             width: 1.5,
                           ),
                         ),
@@ -701,7 +726,7 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                     decoration: BoxDecoration(
                       color: _sending || _text.text.trim().isEmpty
                           ? const Color(0xFFCBD5E1)
-                          : const Color(0xFF0066FF),
+                          : Theme.of(context).colorScheme.primary,
                       shape: BoxShape.circle,
                     ),
                     child: IconButton(
@@ -712,7 +737,7 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
                           : _send,
                       icon: Icon(
                         _sending ? Icons.hourglass_top : Icons.send_rounded,
-                        color: Colors.white,
+                        color: Theme.of(context).colorScheme.onPrimary,
                         size: 20,
                       ),
                     ),

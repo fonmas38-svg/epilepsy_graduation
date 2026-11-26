@@ -42,8 +42,9 @@ def register(user_id: str, token: str, platform: str = "unknown", *, session_id:
             set_={"user_id": user_id, "platform": platform, "session_id": session_id, "updated_at": now},
             where=or_(push_tokens.c.session_id.is_(None), push_tokens.c.session_id == session_id,
                       previous_issued_at <= active.created_at),
-        ))
-        if not result.rowcount:
+        ).returning(push_tokens.c.id))
+        # RETURNING is empty when the conflict WHERE refused the update.
+        if result.first() is None:
             raise ValueError("A newer session owns this notification route")
 
 

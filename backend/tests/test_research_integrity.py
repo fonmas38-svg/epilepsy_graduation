@@ -179,6 +179,8 @@ def test_neural_preprocessing_never_stretches_unknown_time_axis():
 
 
 def test_training_does_not_claim_event_alarm_rate():
+    # The research trainer needs PyTorch, which the API's CI image omits.
+    pytest.importorskip("torch")
     from train import clinical_metrics
     report = clinical_metrics(np.array([0, 1]), np.array([0.8, 0.9]), 256, 5)
     assert report["fpr_per_hour"] is None

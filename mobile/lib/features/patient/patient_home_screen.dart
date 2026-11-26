@@ -391,18 +391,19 @@ class _DashboardTabState extends State<_DashboardTab> {
                           onOpen: () => _openAlert(pre),
                         ),
                       ],
-                      // Only actionable notices on Home. The model/server capability
-                      // explanation lives on the Monitoring screen, where it applies.
-                      EmergencyContactsWarning(
-                        app: app,
-                        otherwise: BatteryExemptionNotice(
-                          background: app.background,
-                        ),
-                      ),
-                      Gap.vSm,
-                      _SmartMonitoringHeroCard(
-                        monitoring: app.monitoring,
-                        onTap: () => Navigator.pushNamed(
+                      Gap.vMd,
+                      // One hero answers «how am I now?»: the status in its
+                      // risk colour, with monitoring state and control.
+                      _StatusHeroCard(
+                        view: app.riskView,
+                        running: app.monitoring.running,
+                        replay:
+                            app.monitoring.signalSourceLabel ==
+                            'dataset_cached_replay',
+                        observedAt: app.lastObservedAt,
+                        probability: prediction?.preictalProb,
+                        leadTimeMin: prediction?.leadTimeMin,
+                        onOpen: () => Navigator.pushNamed(
                           context,
                           Routes.patientMonitoring,
                         ),
@@ -415,12 +416,13 @@ class _DashboardTabState extends State<_DashboardTab> {
                         enabled: !_busy,
                         onTake: _takeDose,
                       ),
-                      Gap.vMd,
-                      _SeizureProbabilityCard(
-                        riskView: app.riskView,
-                        observedAt: app.lastObservedAt,
-                        probability: prediction?.preictalProb,
-                        leadTimeMin: prediction?.leadTimeMin,
+                      // Setup notices after the status, not above it: they
+                      // matter, but they must not push «how am I» off screen.
+                      EmergencyContactsWarning(
+                        app: app,
+                        otherwise: BatteryExemptionNotice(
+                          background: app.background,
+                        ),
                       ),
                       Gap.vMd,
                       // Daily actions not already in the bottom bar (history and
@@ -450,14 +452,6 @@ class _DashboardTabState extends State<_DashboardTab> {
                           }
                         },
                       ),
-                      if (app.monitoring.alerts.isNotEmpty) ...[
-                        Gap.vMd,
-                        _RecentAlertsSection(
-                          alerts: app.monitoring.alerts,
-                          onAcknowledge: app.acknowledgeAlert,
-                          onOpen: _openAlert,
-                        ),
-                      ],
                       Gap.vMd,
                       const _FamilyLocationCard(),
                       Gap.vMd,
@@ -535,7 +529,7 @@ class _DashboardTopHeader extends StatelessWidget {
                   color: Theme.of(context).colorScheme.onSurface,
                   letterSpacing: -0.5,
                 ),
-                maxLines: 1,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 2),
@@ -578,185 +572,211 @@ class _DashboardTopHeader extends StatelessWidget {
   }
 }
 
-class _SmartMonitoringHeroCard extends StatelessWidget {
-  const _SmartMonitoringHeroCard({
-    required this.monitoring,
-    required this.onTap,
-    this.onToggle,
+/// Home's single hero: the patient's current status (in its risk colour),
+/// the forecast when one exists, and the monitoring state with its control.
+class _StatusHeroCard extends StatelessWidget {
+  const _StatusHeroCard({
+    required this.view,
+    required this.running,
+    required this.replay,
+    required this.observedAt,
+    required this.probability,
+    required this.leadTimeMin,
+    required this.onOpen,
+    required this.onToggle,
   });
 
-  final MonitoringService monitoring;
-  final VoidCallback onTap;
-
-  /// Starts/stops monitoring. A visible labelled button: the card itself only
-  /// opens the monitoring screen, which was easy to miss as «how to start».
-  final Future<void> Function(bool enable)? onToggle;
+  final RiskView view;
+  final bool running;
+  final bool replay;
+  final DateTime? observedAt;
+  final double? probability;
+  final double? leadTimeMin;
+  final VoidCallback onOpen;
+  final Future<void> Function(bool enable) onToggle;
 
   @override
   Widget build(BuildContext context) {
-    final ar = Localizations.localeOf(context).languageCode == 'ar';
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF003B94), Color(0xFF0056D2), Color(0xFF0070F3)],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF0056D2).withValues(alpha: 0.28),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+    final l = AppLocalizations.of(context);
+    final ar = l.isArabic;
+    final known = running && !view.isUnknown;
+    // Brand blue when there is no status to colour; the risk tone otherwise.
+    final base = known
+        ? AppColors.of(context, view).solid
+        : const Color(0xFF0B4FB3);
+    final deep = Color.lerp(base, Colors.black, 0.32)!;
+    final title = !running
+        ? (ar ? 'المراقبة متوقفة' : 'Monitoring is off')
+        : RiskCopy.title(view, l);
+    final body = !running
+        ? (ar
+              ? 'ابدأ المراقبة لمعرفة حالتك الآن.'
+              : 'Start monitoring to see how you are now.')
+        : RiskCopy.body(view, l, leadTimeMin: leadTimeMin);
+    final p = probability;
+    final hasForecast = known && p != null && p.isFinite && p >= 0 && p <= 1;
+    final stateLabel = !running
+        ? (ar ? 'متوقفة' : 'Off')
+        : replay
+        ? (ar ? 'إعادة عرض محلية' : 'Offline replay')
+        : (ar ? 'المراقبة نشطة' : 'Monitoring on');
+
+    return Semantics(
+      container: true,
+      label: '$stateLabel. $title. $body',
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          gradient: LinearGradient(
+            begin: AlignmentDirectional.topStart,
+            end: AlignmentDirectional.bottomEnd,
+            colors: [deep, base],
           ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(22),
-          child: Stack(
-            children: [
-              Positioned.directional(
-                textDirection: Directionality.of(context),
-                end: -10,
-                bottom: -10,
-                top: -10,
-                width: 170,
-                child: IgnorePointer(
-                  child: CustomPaint(painter: BrainEegPainter(isArabic: ar)),
+          boxShadow: [
+            BoxShadow(
+              color: base.withValues(alpha: 0.30),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onOpen,
+            borderRadius: BorderRadius.circular(24),
+            child: Stack(
+              children: [
+                PositionedDirectional(
+                  end: -14,
+                  top: -6,
+                  bottom: -6,
+                  width: 150,
+                  child: IgnorePointer(
+                    child: Opacity(
+                      opacity: 0.55,
+                      child: CustomPaint(
+                        painter: BrainEegPainter(isArabic: ar),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            // Green «live» dot only while monitoring really
-                            // runs; a static grey dot (no glow) when stopped.
-                            color: monitoring.running
-                                ? const Color(0xFF00E676)
-                                : const Color(0xFFB0BEC5),
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              if (monitoring.running)
-                                BoxShadow(
-                                  color: const Color(
-                                    0xFF00E676,
-                                  ).withValues(alpha: 0.8),
-                                  blurRadius: 8,
-                                  spreadRadius: 2,
-                                ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        // Expanded: long titles (English, large text) wrap
-                        // instead of overflowing past the arrow.
-                        Expanded(
-                          child: Text(
-                            ar
-                                ? (monitoring.signalSourceLabel ==
-                                          'dataset_cached_replay'
-                                      ? 'إعادة عرض محلية'
-                                      : monitoring.running
-                                      ? 'المراقبة الذكية نشطة'
-                                      : 'المراقبة متوقفة')
-                                : (monitoring.signalSourceLabel ==
-                                          'dataset_cached_replay'
-                                      ? 'Offline replay'
-                                      : monitoring.running
-                                      ? 'Smart Monitoring Active'
-                                      : 'Monitoring stopped'),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 17,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.2,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.surface.withValues(alpha: 0.18),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          _LivePill(label: stateLabel, live: running),
+                          const Spacer(),
+                          Icon(
                             ar
                                 ? Icons.chevron_left_rounded
                                 : Icons.chevron_right_rounded,
                             color: Colors.white,
-                            size: 22,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      Text(
+                        ar ? 'حالتي الآن' : 'My status now',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.85),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w800,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      // Narrower than the card so it never runs under the
+                      // illustration on the end side.
+                      FractionallySizedBox(
+                        widthFactor: 0.78,
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text(
+                          body,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.93),
+                            fontSize: 14,
+                            height: 1.45,
+                          ),
+                        ),
+                      ),
+                      if (known) ...[
+                        const SizedBox(height: 14),
+                        _ScaleBar(step: RiskCopy.step(view)),
+                      ],
+                      if (hasForecast) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          ar
+                              ? 'احتمال التنبؤ ${(p * 100).round()}%'
+                              : 'Forecast ${(p * 100).round()}%',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 24),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 190),
-                      child: Text(
-                        ar
-                            ? (monitoring.signalSourceLabel ==
-                                      'dataset_cached_replay'
-                                  ? 'إشارات محفوظة سابقاً\nدون توقع حالي'
-                                  : monitoring.running
-                                  ? 'يتم تحليل إشارات EEG\nفي الوقت الحقيقي'
-                                  : 'ابدأ المراقبة لعرض\nالبيانات المتاحة')
-                            : (monitoring.signalSourceLabel ==
-                                      'dataset_cached_replay'
-                                  ? 'Previously recorded signals\nno current forecast'
-                                  : monitoring.running
-                                  ? 'Analyzing EEG signals\nin real time'
-                                  : 'Start monitoring to see\navailable data'),
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.92),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          height: 1.45,
+                      if (known && observedAt != null) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.schedule_rounded,
+                              size: 15,
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                '${ar ? 'آخر تحديث' : 'Updated'} ${TimeAgo.since(observedAt, l)}',
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                    ),
-                    if (onToggle != null) ...[
-                      const SizedBox(height: 12),
+                      ],
+                      const SizedBox(height: 16),
                       FilledButton.icon(
                         style: FilledButton.styleFrom(
-                          // White on the fixed brand gradient in both themes.
                           backgroundColor: Colors.white,
-                          foregroundColor: const Color(0xFF003B94),
+                          foregroundColor: deep,
                           minimumSize: const Size(0, A11y.minTouchTarget),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
                           ),
                         ),
-                        onPressed: () => onToggle!(!monitoring.running),
+                        onPressed: () => onToggle(!running),
                         icon: Icon(
-                          monitoring.running
+                          running
                               ? Icons.stop_circle_outlined
                               : Icons.play_circle_outline_rounded,
                         ),
                         label: Text(
-                          monitoring.running
+                          running
                               ? (ar ? 'إيقاف المراقبة' : 'Stop monitoring')
                               : (ar ? 'ابدأ المراقبة' : 'Start monitoring'),
                         ),
                       ),
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -764,191 +784,73 @@ class _SmartMonitoringHeroCard extends StatelessWidget {
   }
 }
 
-class _SeizureProbabilityCard extends StatelessWidget {
-  const _SeizureProbabilityCard({
-    required this.riskView,
-    required this.probability,
-    this.leadTimeMin,
-    this.observedAt,
-  });
+/// «Monitoring on» pill with a live dot (static and grey when off).
+class _LivePill extends StatelessWidget {
+  const _LivePill({required this.label, required this.live});
 
-  final RiskView riskView;
-  final double? probability;
-  final double? leadTimeMin;
-  final DateTime? observedAt;
+  final String label;
+  final bool live;
 
   @override
   Widget build(BuildContext context) {
-    final ar = Localizations.localeOf(context).languageCode == 'ar';
-
-    final noProbability =
-        probability == null ||
-        !probability!.isFinite ||
-        probability! < 0 ||
-        probability! > 1;
-    // A classification without a forecast percentage (e.g. recorded data) is
-    // still the patient's current status: show it, never «waiting» while the
-    // monitoring screen says «high likelihood».
-    if (noProbability && !riskView.isUnknown) {
-      final l = AppLocalizations.of(context);
-      return RiskGauge(
-        view: riskView,
-        freshnessLabel: observedAt == null
-            ? null
-            : TimeAgo.since(observedAt, l),
-      );
-    }
-    if (noProbability) {
-      return Card(
-        child: ListTile(
-          leading: const Icon(Icons.monitor_heart_outlined),
-          title: Text(
-            ar
-                ? 'بانتظار تحليل إشارة صالحة'
-                : 'Waiting for a valid signal analysis',
-          ),
-          subtitle: Text(
-            ar
-                ? 'لا توجد نتيجة متاحة لحساب احتمال النوبة.'
-                : 'No prediction probability is available.',
-          ),
-        ),
-      );
-    }
-    final double rawProb = probability!;
-    final int percent = (rawProb * 100).round();
-
-    final Color statusColor;
-    final String statusLabel;
-    final String description;
-
-    switch (riskView) {
-      case RiskView.danger:
-        statusColor = const Color(0xFFE53935);
-        statusLabel = ar ? 'مرتفعة جداً' : 'Very High';
-        description = ar
-            ? 'احتمالية نوبة وشيكة، يرجى الاستلقاء وطلب المساعدة'
-            : 'Imminent seizure risk detected, please sit or lie down';
-        break;
-      case RiskView.caution:
-        statusColor = const Color(0xFFFF9800);
-        statusLabel = ar ? 'متوسطة' : 'Moderate';
-        description = ar
-            ? (leadTimeMin != null && leadTimeMin! > 0
-                  ? 'نشاط عصبي غير معتاد خلال ~${leadTimeMin!.round()} دقيقة'
-                  : 'رصد تذبذب عصبي، ننصح بالراحة والاسترخاء')
-            : 'Unusual neural fluctuations detected, please relax';
-        break;
-      case RiskView.safe:
-      case RiskView.unknown:
-        statusColor = const Color(0xFF009688);
-        statusLabel = ar ? 'منخفضة' : 'Low';
-        description = ar
-            ? 'لم يتم اكتشاف أي نشاط\nغير طبيعي حاليًا'
-            : 'No abnormal activity\ndetected currently';
-        break;
-    }
-
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outlineVariant,
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Theme.of(
-              context,
-            ).colorScheme.onSurface.withValues(alpha: 0.04),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: Colors.white.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(20),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              const ToneIcon(
-                icon: Icons.stacked_bar_chart_rounded,
-                tone: AccentTone.blue,
-                size: 18,
-                padding: 5,
-                radius: 8,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                ar ? 'احتمالية حدوث نوبة' : 'Seizure Probability',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  color: Theme.of(context).colorScheme.onSurface,
-                ),
-              ),
-            ],
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: live ? const Color(0xFF69F0AE) : const Color(0xFFCFD8DC),
+              shape: BoxShape.circle,
+            ),
           ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              SizedBox(
-                width: 78,
-                height: 78,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CustomPaint(
-                      size: const Size(78, 78),
-                      painter: DonutGaugePainter(
-                        progress: rawProb,
-                        activeColor: statusColor,
-                        strokeWidth: 8,
-                      ),
-                    ),
-                    Text(
-                      '$percent%',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                        color: Theme.of(context).colorScheme.onSurface,
-                      ),
-                    ),
-                  ],
-                ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 12.5,
               ),
-              const SizedBox(width: 18),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      statusLabel,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: statusColor,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      description,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w500,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        height: 1.4,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Four-step scale in white; only the current step is filled, as in
+/// [RiskStrip], so the level reads from position, not just colour.
+class _ScaleBar extends StatelessWidget {
+  const _ScaleBar({required this.step});
+
+  final int step;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        for (var i = 0; i < 4; i++) ...[
+          if (i > 0) const SizedBox(width: 5),
+          Expanded(
+            child: Container(
+              height: 6,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: i == step ? 0.95 : 0.28),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -1775,38 +1677,6 @@ class _SignalSection extends StatelessWidget {
                 ),
               ],
             ),
-    );
-  }
-}
-
-/// The three most recent alerts, with the full list one tap away.
-///
-/// Three, not all of them: this section exists to answer «هل فاتني شيء؟». The
-/// «التنبيهات» destination is where the record lives.
-class _RecentAlertsSection extends StatelessWidget {
-  const _RecentAlertsSection({
-    required this.alerts,
-    required this.onAcknowledge,
-    required this.onOpen,
-  });
-
-  final List<AlertItem> alerts;
-  final Future<void> Function(String id) onAcknowledge;
-  final void Function(AlertItem alert) onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    return SectionCard(
-      title: l.alertsTitle,
-      icon: Icons.notifications_none_outlined,
-      child: AlertsList(
-        alerts: alerts.take(3).toList(),
-        onAcknowledge: onAcknowledge,
-        onOpen: onOpen,
-        padding: EdgeInsets.zero,
-        shrinkWrap: true,
-      ),
     );
   }
 }

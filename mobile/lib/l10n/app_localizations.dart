@@ -1385,7 +1385,7 @@ const Map<String, String> _en = {
   'tabDevice': 'Device',
   'tabAlerts': 'Alerts',
   'tabHistory': 'History',
-  'tabMeds': 'Medication',
+  'tabMeds': 'Meds',
   'tabEmergency': 'Emergency',
 
   'activeAlertTitle': 'Active alert',

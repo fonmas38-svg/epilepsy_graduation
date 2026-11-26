@@ -151,7 +151,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('تسجيل الخروج؟'), findsOneWidget);
     expect(
-      find.text('ستتوقف المراقبة المحلية المرتبطة بحسابك على هذا الجهاز.'),
+      find.text('ستتوقف المراقبة على هذا الجهاز حتى تسجّل الدخول مجددًا.'),
       findsOneWidget,
     );
     await tester.tap(find.text('البقاء'));

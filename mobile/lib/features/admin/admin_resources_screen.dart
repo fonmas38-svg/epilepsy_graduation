@@ -321,7 +321,13 @@ class _AdminResourcesScreenState extends State<AdminResourcesScreen> {
           'admin' => 'مشرف',
           _ => value,
         }
-      : value;
+      : switch (value) {
+          'patient' => 'Patient',
+          'doctor' => 'Doctor',
+          'caregiver' => 'Caregiver',
+          'admin' => 'Administrator',
+          _ => value,
+        };
   @override
   Widget build(BuildContext context) {
     final query = _search.text.trim().toLowerCase();

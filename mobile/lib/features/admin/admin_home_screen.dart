@@ -573,7 +573,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           runSpacing: 8,
           children: [
             FilledButton.icon(
-              onPressed: _openAddDoctorDialog,
+              // Creating an account needs the server; offline it could only
+              // fail after the security check (same rule as «Create account»).
+              onPressed: context.read<AppState>().apiOnline
+                  ? _openAddDoctorDialog
+                  : null,
               icon: const Icon(Icons.person_add_outlined),
               label: Text(ar ? 'طبيب جديد' : 'New doctor'),
             ),

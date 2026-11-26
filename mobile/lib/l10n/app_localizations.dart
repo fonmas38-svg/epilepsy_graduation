@@ -685,7 +685,7 @@ const Map<String, String> _ar = {
   'agoLabel': 'قبل {v}',
   'justNow': 'الآن',
 
-  'errNoConnection': 'لا يوجد اتصال. سنحاول تلقائياً.',
+  'errNoConnection': 'لا يوجد اتصال. تحقق من الإنترنت ثم أعد المحاولة.',
   'errTimeout': 'الخادم بطيء الاستجابة.',
   'errSessionExpired': 'انتهت الجلسة. سجّل الدخول مرة أخرى.',
   'errInvalidCredentials': 'اسم المستخدم أو كلمة المرور غير صحيحة.',
@@ -1282,7 +1282,7 @@ const Map<String, String> _en = {
   'agoLabel': '{v} ago',
   'justNow': 'just now',
 
-  'errNoConnection': 'No connection. We will retry automatically.',
+  'errNoConnection': 'No connection. Check your internet and try again.',
   'errTimeout': 'The server is slow to respond.',
   'errSessionExpired': 'Your session expired. Please sign in again.',
   'errInvalidCredentials': 'Invalid username or password.',

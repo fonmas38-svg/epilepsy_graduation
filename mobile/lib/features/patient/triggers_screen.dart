@@ -57,8 +57,8 @@ class TriggersScreen extends StatelessWidget {
       appBar: AppBar(title: Text(l.triggersTitle)),
       floatingActionButton: FloatingActionButton.extended(
         heroTag: null,
-        backgroundColor: const Color(0xFF0066FF),
-        foregroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Theme.of(context).colorScheme.onPrimary,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         elevation: 2,
         onPressed: care.patientId == null
@@ -77,6 +77,8 @@ class TriggersScreen extends StatelessWidget {
           children: [
             OfflineBanner(
               visible: !app.apiOnline,
+              mode: app.operatingMode,
+              onSyncNow: app.syncNow,
               lastUpdateLabel: care.lastSyncedAt == null
                   ? null
                   : TimeAgo.since(care.lastSyncedAt, l),
@@ -115,15 +117,15 @@ class TriggersScreen extends StatelessWidget {
               title: l.triggerHistory,
               icon: Icons.edit_note_outlined,
               child: triggers.isEmpty
+                  // One add button: the floating one stays on screen, so the
+                  // empty state only explains what to do.
                   ? EmptyState(
                       title: l.emptyTitle,
-                      body: l.emptyBody,
+                      body: l.isArabic
+                          ? 'اضغط «إضافة محفّز» لتسجيل قلة نوم أو توتر أو غيرها.'
+                          : 'Tap «Add trigger» to log poor sleep, stress or others.',
                       icon: Icons.event_note_outlined,
                       compact: true,
-                      actionLabel: l.addTrigger,
-                      action: care.patientId == null
-                          ? null
-                          : () => _openSheet(context, app),
                     )
                   : Column(
                       children: [
@@ -326,7 +328,7 @@ class _TriggerRow extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final subtitle = [
       '${l.triggerIntensity} ${entry.intensity}/5',
-      TimeAgo.stamp(entry.occurredAt),
+      TimeAgo.stamp(entry.occurredAt, AppLocalizations.of(context)),
       if (!entry.synced) l.pendingSync,
     ].join(' · ');
 

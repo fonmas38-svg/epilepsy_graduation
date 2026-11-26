@@ -389,6 +389,8 @@ class MessageService extends ChangeNotifier {
     required double longitude,
     double? accuracy,
     String? note,
+    String? source,
+    DateTime? capturedAt,
   }) async {
     final user = auth.currentUser;
     final origin = api.baseUrl;
@@ -414,6 +416,8 @@ class MessageService extends ChangeNotifier {
         'longitude': longitude,
         'accuracy': accuracy,
         'note': note,
+        'source': ?source,
+        'captured_at': ?capturedAt?.toUtc().toIso8601String(),
       },
     );
     if (!valid()) return null;

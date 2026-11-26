@@ -133,12 +133,14 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
       // Load prescriptions and triggers from API (best-effort).
       List<Map<String, dynamic>> prescriptions = [];
       List<Map<String, dynamic>> triggers = [];
+      // «Not loaded» is not «none»: offline, an empty list would tell the
+      // doctor the patient has no prescriptions or triggers.
+      var serverListsLoaded = false;
       if (app.apiOnline) {
         try {
           prescriptions = await app.api.getDoctorPrescriptions(pid);
-        } catch (_) {}
-        try {
           triggers = await app.api.getDoctorPatientTriggers(pid);
+          serverListsLoaded = true;
         } catch (_) {}
       }
       List<ClinicalNote> notes = const [];
@@ -174,13 +176,14 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
         adjudications: await db.adjudicationsFor(pid, limit: 200),
         notes: notes,
         reading: readings.isEmpty ? null : readings.first,
-        adherence: await app.medication.adherence(pid),
+        adherence: await app.medication.adherenceIfDue(pid),
         activeMeds: (await app.medication.forPatient(
           pid,
           activeOnly: true,
         )).length,
         prescriptions: prescriptions,
         triggers: triggers,
+        serverListsLoaded: serverListsLoaded,
       );
       if (!current()) return;
       setState(() {
@@ -439,7 +442,11 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
               children: [
                 OfflineBanner(
                   visible: !app.apiOnline,
-                  lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
+                  mode: app.operatingMode,
+                  onSyncNow: app.syncNow,
+                  lastUpdateLabel: app.care.lastSyncedAt == null
+                      ? null
+                      : TimeAgo.since(app.care.lastSyncedAt, l),
                   pendingCount: app.care.pendingCount,
                 ),
                 _SummarySection(data: d, onManageMeds: medications),
@@ -454,11 +461,15 @@ class _PatientFileScreenState extends State<PatientFileScreen> {
                 _PrescriptionSection(
                   patientId: d.patientId,
                   prescriptions: d.prescriptions,
+                  loaded: d.serverListsLoaded,
                   onRefresh: _load,
                 ),
                 Gap.vMd,
                 // ─── Trigger Diary ────────────────────────────────────
-                _TriggersSection(triggers: d.triggers),
+                _TriggersSection(
+                  triggers: d.triggers,
+                  loaded: d.serverListsLoaded,
+                ),
                 Gap.vMd,
                 _NotesSection(
                   notes: d.notes,
@@ -689,6 +700,7 @@ class _FileData {
     required this.activeMeds,
     this.prescriptions = const [],
     this.triggers = const [],
+    this.serverListsLoaded = true,
   });
 
   final String patientId;
@@ -704,8 +716,12 @@ class _FileData {
   /// shows the evidence behind the last assessment, not a scrolling monitor.
   final VitalReading? reading;
 
-  final double adherence;
+  /// Null when no dose was due yet: «100 %» of nothing is not adherence.
+  final double? adherence;
   final int activeMeds;
+
+  /// False when prescriptions and triggers could not be fetched (offline).
+  final bool serverListsLoaded;
 
   /// Prescriptions issued by the doctor for this patient (from backend API).
   final List<Map<String, dynamic>> prescriptions;
@@ -731,6 +747,7 @@ class _FileData {
     activeMeds: activeMeds,
     prescriptions: prescriptions,
     triggers: triggers,
+    serverListsLoaded: serverListsLoaded,
   );
 
   int get alerts7d {
@@ -798,7 +815,14 @@ class _SummarySection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          RiskGauge(view: view, freshnessLabel: TimeAgo.since(d.observedAt, l)),
+          RiskGauge(
+            view: view,
+            freshnessLabel: TimeAgo.since(d.observedAt, l),
+            // The doctor's view: «my status» is the patient's own wording.
+            eyebrow: Localizations.localeOf(context).languageCode == 'ar'
+                ? 'الحالة الحالية'
+                : 'Current status',
+          ),
           Gap.vSm,
           RiskStrip(view: view),
           Gap.vMd,
@@ -844,12 +868,16 @@ class _SummarySection extends StatelessWidget {
               Expanded(
                 child: _Stat(
                   label: l.adherenceShort,
-                  value: d.activeMeds == 0 ? l.notSet : _pct(d.adherence),
+                  value: d.activeMeds == 0 || d.adherence == null
+                      ? l.notSet
+                      : _pct(d.adherence!),
                   // §3.4's own boundary: below 80 % the doctor should be looking
                   // at the medication list, not at the model.
-                  view: d.activeMeds == 0
+                  view: d.activeMeds == 0 || d.adherence == null
                       ? RiskView.unknown
-                      : (d.adherence >= 0.8 ? RiskView.safe : RiskView.caution),
+                      : (d.adherence! >= 0.8
+                            ? RiskView.safe
+                            : RiskView.caution),
                 ),
               ),
               Gap.hSm,
@@ -867,7 +895,11 @@ class _SummarySection extends StatelessWidget {
             FilledButton.tonalIcon(
               onPressed: onManageMeds,
               icon: const Icon(Icons.medication_liquid_outlined),
-              label: const Text('إدارة ووصف أدوية المريض السريرية'),
+              label: Text(
+                Localizations.localeOf(context).languageCode == 'ar'
+                    ? 'إدارة أدوية المريض ووصفها'
+                    : 'Manage and prescribe medications',
+              ),
             ),
           ],
         ],
@@ -933,7 +965,7 @@ class _TimelineSection extends StatelessWidget {
         _Event(
           at: a.timestamp,
           title: s.label,
-          subtitle: a.message,
+          subtitle: a.displayMessage,
           icon: Icons.notifications_active_outlined,
           view: s.view,
         ),
@@ -1053,7 +1085,7 @@ class _EventTile extends StatelessWidget {
                   ),
                 Text(
                   [
-                    TimeAgo.stamp(event.at),
+                    TimeAgo.stamp(event.at, AppLocalizations.of(context)),
                     if (event.pending) l.pendingSync,
                   ].join(' · '),
                   style: theme.textTheme.labelSmall?.copyWith(
@@ -1083,7 +1115,9 @@ class _SignalSection extends StatelessWidget {
     return SectionCard(
       title: l.signalWindowSection,
       icon: Icons.show_chart_outlined,
-      subtitle: r == null ? null : TimeAgo.stamp(r.timestamp),
+      subtitle: r == null
+          ? null
+          : TimeAgo.stamp(r.timestamp, AppLocalizations.of(context)),
       child: r == null
           ? EmptyState(
               title: l.chartNoData,
@@ -1224,7 +1258,6 @@ class _NotesSection extends StatelessWidget {
           if (notes.isEmpty)
             EmptyState(
               title: l.emptyTitle,
-              body: l.clinicalNotesHint,
               icon: Icons.edit_note_outlined,
               compact: true,
             )
@@ -1238,7 +1271,10 @@ class _NotesSection extends StatelessWidget {
                     Text(n.text, style: theme.textTheme.bodyMedium),
                     Text(
                       [
-                        TimeAgo.stamp(n.writtenAt),
+                        TimeAgo.stamp(
+                          n.writtenAt,
+                          AppLocalizations.of(context),
+                        ),
                         if (!n.synced) l.pendingSync,
                       ].join(' · '),
                       style: theme.textTheme.labelSmall?.copyWith(
@@ -1343,7 +1379,11 @@ class _ReportsSection extends StatelessWidget {
                     )
                   : null,
               icon: const Icon(Icons.table_chart_outlined),
-              label: const Text('مركز التقارير الطبية الشاملة وتصدير Excel'),
+              label: Text(
+                Localizations.localeOf(context).languageCode == 'ar'
+                    ? 'مركز التقارير وتصدير Excel'
+                    : 'Reports center and Excel export',
+              ),
             ),
           ),
         ],
@@ -1442,10 +1482,12 @@ class _PrescriptionSection extends StatefulWidget {
     required this.patientId,
     required this.prescriptions,
     required this.onRefresh,
+    this.loaded = true,
   });
 
   final String patientId;
   final List<Map<String, dynamic>> prescriptions;
+  final bool loaded;
   final VoidCallback onRefresh;
 
   @override
@@ -1788,7 +1830,9 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
               Gap.hSm,
               Expanded(
                 child: Text(
-                  'الأدوية الموصوفة (${active.length} نشط)',
+                  Localizations.localeOf(context).languageCode == 'ar'
+                      ? 'الأدوية الموصوفة (${active.length} نشط)'
+                      : 'Prescribed medications (${active.length} active)',
                   style: theme.textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -1797,7 +1841,11 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
               if (!_busy)
                 TextButton.icon(
                   icon: const Icon(Icons.add, size: 16),
-                  label: const Text('وصف دواء'),
+                  label: Text(
+                    Localizations.localeOf(context).languageCode == 'ar'
+                        ? 'وصف دواء'
+                        : 'Prescribe',
+                  ),
                   onPressed: () => _addPrescription(),
                 )
               else
@@ -1812,7 +1860,13 @@ class _PrescriptionSectionState extends State<_PrescriptionSection> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Text(
-                'لا توجد أدوية موصوفة حتى الآن',
+                !widget.loaded
+                    ? (Localizations.localeOf(context).languageCode == 'ar'
+                          ? 'تعذّر تحميل الوصفات دون اتصال.'
+                          : 'Prescriptions could not be loaded offline.')
+                    : Localizations.localeOf(context).languageCode == 'ar'
+                    ? 'لا توجد أدوية موصوفة حتى الآن'
+                    : 'No prescribed medications yet',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -1869,7 +1923,7 @@ class _RxTile extends StatelessWidget {
             active ? Icons.check_circle_rounded : Icons.cancel_rounded,
             size: 16,
             color: active
-                ? Colors.green
+                ? AppColors.accent(context, AccentTone.green).foreground
                 : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
           ),
           Gap.hSm,
@@ -1933,8 +1987,9 @@ class _RxTile extends StatelessWidget {
 // ──────────────────────────────────────── Patient Triggers Section
 
 class _TriggersSection extends StatelessWidget {
-  const _TriggersSection({required this.triggers});
+  const _TriggersSection({required this.triggers, this.loaded = true});
   final List<Map<String, dynamic>> triggers;
+  final bool loaded;
 
   @override
   Widget build(BuildContext context) {
@@ -1961,7 +2016,11 @@ class _TriggersSection extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
+              Icon(
+                Icons.warning_amber_rounded,
+                color: AppColors.accent(context, AccentTone.orange).foreground,
+                size: 20,
+              ),
               Gap.hSm,
               Expanded(
                 child: Text(
@@ -1979,7 +2038,13 @@ class _TriggersSection extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Text(
-                'لم يسجّل المريض أي محفزات حتى الآن',
+                !loaded
+                    ? (Localizations.localeOf(context).languageCode == 'ar'
+                          ? 'تعذّر تحميل سجل المحفزات دون اتصال.'
+                          : 'The trigger diary could not be loaded offline.')
+                    : Localizations.localeOf(context).languageCode == 'ar'
+                    ? 'لم يسجّل المريض أي محفزات حتى الآن'
+                    : 'The patient has not logged any triggers yet',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -1996,9 +2061,12 @@ class _TriggersSection extends StatelessWidget {
                         Container(
                           width: 8,
                           height: 8,
-                          margin: const EdgeInsets.only(left: 8),
-                          decoration: const BoxDecoration(
-                            color: Colors.orange,
+                          margin: const EdgeInsetsDirectional.only(end: 8),
+                          decoration: BoxDecoration(
+                            color: AppColors.accent(
+                              context,
+                              AccentTone.orange,
+                            ).foreground,
                             shape: BoxShape.circle,
                           ),
                         ),

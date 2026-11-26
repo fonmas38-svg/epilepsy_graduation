@@ -1,3 +1,5 @@
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/risk_view.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/enums.dart';
@@ -50,8 +52,16 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
         !app.auth.accessiblePatients().any((p) => p.patientId == pid)) {
       return const ReportSelection(alerts: [], events: [], medications: []);
     }
-    final alerts = await app.db.alertsFor(pid, limit: 10000, serverOrigin: app.dataOrigin);
-    final events = await app.db.predictionEventsFor(pid, limit: 10000, serverOrigin: app.dataOrigin);
+    final alerts = await app.db.alertsFor(
+      pid,
+      limit: 10000,
+      serverOrigin: app.dataOrigin,
+    );
+    final events = await app.db.predictionEventsFor(
+      pid,
+      limit: 10000,
+      serverOrigin: app.dataOrigin,
+    );
     final meds = await app.db.medicationsFor(pid);
     return ReportSelection(alerts: alerts, events: events, medications: meds);
   }
@@ -153,13 +163,16 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                           width: 40,
                           height: 40,
                           decoration: BoxDecoration(
-                            color: const Color(0xFFEFF6FF),
+                            color: AppColors.accent(
+                              context,
+                              AccentTone.blue,
+                            ).container,
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Icon(
+                          child: Icon(
                             Icons.person_rounded,
                             size: 22,
-                            color: Color(0xFF0066FF),
+                            color: Theme.of(context).colorScheme.primary,
                           ),
                         ),
                         const SizedBox(width: 14),
@@ -198,25 +211,39 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                             vertical: 4,
                           ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFECFDF5),
+                            color: AppColors.accent(
+                              context,
+                              AccentTone.green,
+                            ).container,
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: const Color(0xFFA7F3D0)),
+                            border: Border.all(
+                              color: AppColors.of(
+                                context,
+                                RiskView.safe,
+                              ).border,
+                            ),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.lock_outline,
                                 size: 13,
-                                color: Color(0xFF059669),
+                                color: AppColors.accent(
+                                  context,
+                                  AccentTone.green,
+                                ).foreground,
                               ),
                               const SizedBox(width: 4),
                               Text(
                                 ar ? 'خاص ومحمي' : 'Private & Secure',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
-                                  color: Color(0xFF059669),
+                                  color: AppColors.accent(
+                                    context,
+                                    AccentTone.green,
+                                  ).foreground,
                                 ),
                               ),
                             ],
@@ -341,25 +368,27 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFF1F2),
+            color: AppColors.accent(context, AccentTone.red).container,
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFFFECDD3)),
+            border: Border.all(
+              color: AppColors.of(context, RiskView.danger).border,
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.notifications_active_outlined,
                 size: 16,
-                color: Color(0xFFE11D48),
+                color: AppColors.of(context, RiskView.danger).foreground,
               ),
               const SizedBox(width: 6),
               Text(
                 '${ar ? 'التنبيهات' : 'Alerts'}: ${data.alerts.length}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFFE11D48),
+                  color: AppColors.of(context, RiskView.danger).foreground,
                 ),
               ),
             ],
@@ -368,25 +397,28 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: const Color(0xFFFEF3C7),
+            color: AppColors.accent(context, AccentTone.orange).container,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: const Color(0xFFFDE68A)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.analytics_outlined,
                 size: 16,
-                color: Color(0xFFD97706),
+                color: AppColors.accent(context, AccentTone.orange).foreground,
               ),
               const SizedBox(width: 6),
               Text(
                 '${ar ? 'أحداث النموذج' : 'Model events'}: ${data.events.length}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFFD97706),
+                  color: AppColors.accent(
+                    context,
+                    AccentTone.orange,
+                  ).foreground,
                 ),
               ),
             ],
@@ -395,25 +427,25 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: const Color(0xFFEFF6FF),
+            color: AppColors.accent(context, AccentTone.blue).container,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: const Color(0xFFBFDBFE)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.medication_outlined,
                 size: 16,
-                color: Color(0xFF0066FF),
+                color: Theme.of(context).colorScheme.primary,
               ),
               const SizedBox(width: 6),
               Text(
                 '${ar ? 'الأدوية الحالية' : 'Current medication'}: ${data.medications.length}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFF0066FF),
+                  color: Theme.of(context).colorScheme.primary,
                 ),
               ),
             ],
@@ -427,7 +459,7 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
       height: 52,
       child: FilledButton.icon(
         style: FilledButton.styleFrom(
-          backgroundColor: const Color(0xFF0066FF),
+          backgroundColor: Theme.of(context).colorScheme.primary,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
@@ -435,12 +467,12 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
         ),
         onPressed: _exporting ? null : () => _export(data),
         icon: _exporting
-            ? const SizedBox(
+            ? SizedBox(
                 width: 20,
                 height: 20,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: Colors.white,
+                  color: Theme.of(context).colorScheme.onPrimary,
                 ),
               )
             : const Icon(Icons.download_rounded, size: 20),
@@ -475,12 +507,12 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
               width: 38,
               height: 38,
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF1F2),
+                color: AppColors.accent(context, AccentTone.red).container,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.notifications_outlined,
-                color: Color(0xFFE11D48),
+                color: AppColors.of(context, RiskView.danger).foreground,
                 size: 20,
               ),
             ),
@@ -490,7 +522,7 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    a.message,
+                    a.displayMessage,
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -499,7 +531,7 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    TimeAgo.stamp(a.timestamp),
+                    TimeAgo.stamp(a.timestamp, AppLocalizations.of(context)),
                     style: TextStyle(
                       fontSize: 12,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -530,12 +562,12 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
               width: 38,
               height: 38,
               decoration: BoxDecoration(
-                color: const Color(0xFFFEF3C7),
+                color: AppColors.accent(context, AccentTone.orange).container,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.analytics_outlined,
-                color: Color(0xFFD97706),
+                color: AppColors.accent(context, AccentTone.orange).foreground,
                 size: 20,
               ),
             ),
@@ -554,7 +586,7 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${TimeAgo.stamp(e.firedAt)} · ${_outcome(e.outcome, ar)}',
+                    '${TimeAgo.stamp(e.firedAt, AppLocalizations.of(context))} · ${_outcome(e.outcome, ar)}',
                     style: TextStyle(
                       fontSize: 12,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -585,12 +617,12 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
               width: 38,
               height: 38,
               decoration: BoxDecoration(
-                color: const Color(0xFFEFF6FF),
+                color: AppColors.accent(context, AccentTone.blue).container,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.medication_outlined,
-                color: Color(0xFF0066FF),
+                color: Theme.of(context).colorScheme.primary,
                 size: 20,
               ),
             ),

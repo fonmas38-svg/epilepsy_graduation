@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/theme/app_colors.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/errors/failure.dart';
 import '../../core/utils/username_generator.dart';
@@ -112,7 +113,10 @@ class _CreateDoctorDialogState extends State<CreateDoctorDialog> {
       builder: (ctx) => AlertDialog(
         title: Row(
           children: [
-            const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+            Icon(
+              Icons.warning_amber_rounded,
+              color: AppColors.accent(context, AccentTone.orange).foreground,
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(

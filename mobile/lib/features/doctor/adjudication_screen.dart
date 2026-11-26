@@ -397,7 +397,10 @@ class _PendingTile extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      TimeAgo.stamp(item.alert.timestamp),
+                      TimeAgo.stamp(
+                        item.alert.timestamp,
+                        AppLocalizations.of(context),
+                      ),
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),

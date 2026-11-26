@@ -53,7 +53,8 @@ class _MetricsPanelState extends State<MetricsPanel> {
             child: Text(l.metricsUnavailable),
           );
         }
-        final reports = (data['reports'] as Map?)?.cast<String, dynamic>() ?? {};
+        final reports =
+            (data['reports'] as Map?)?.cast<String, dynamic>() ?? {};
         final engineLive = data['prediction_engine_available'] == true;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -83,8 +84,9 @@ class _EngineLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final color =
-        live ? AppColors.of(context, RiskView.safe).foreground : scheme.primary;
+    final color = live
+        ? AppColors.of(context, RiskView.safe).foreground
+        : scheme.primary;
     return Row(
       children: [
         Icon(live ? Icons.verified : Icons.science, size: 16, color: color),
@@ -93,9 +95,9 @@ class _EngineLine extends StatelessWidget {
           child: Text(
             live ? l.liveEngine : l.modelAvailableOffline,
             style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: color,
-                  fontWeight: FontWeight.w600,
-                ),
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ],
@@ -131,8 +133,9 @@ class _MetricsBlock extends StatelessWidget {
     final caution = AppColors.of(context, RiskView.caution).foreground;
     final safe = AppColors.of(context, RiskView.safe).foreground;
     final available = report?['available'] == true;
-    final metrics =
-        available ? (report?['metrics'] as Map?)?.cast<String, dynamic>() : null;
+    final metrics = available
+        ? (report?['metrics'] as Map?)?.cast<String, dynamic>()
+        : null;
     final picked = metrics == null ? null : _pickMetrics(metrics);
 
     return Card(
@@ -142,10 +145,7 @@ class _MetricsBlock extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(title, style: Theme.of(context).textTheme.titleSmall),
-            Text(
-              l.perWindow,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            Text(l.perWindow, style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: Gap.sm),
             if (picked == null)
               Text(
@@ -212,14 +212,16 @@ class _MetricChip extends StatelessWidget {
         children: [
           Text(
             label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+            style: Theme.of(
+              context,
+            ).textTheme.labelSmall?.copyWith(color: color),
           ),
           Text(
             value,
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: color,
-                  fontWeight: FontWeight.bold,
-                ),
+              color: color,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ],
       ),

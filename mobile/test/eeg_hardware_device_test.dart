@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:async';
 
 import 'package:epilepsy_monitor/core/enums.dart';
 import 'package:epilepsy_monitor/services/api_client.dart';

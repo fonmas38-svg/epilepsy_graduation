@@ -1,3 +1,4 @@
+import '../../core/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -121,10 +122,21 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       if (!mounted) return;
-      await context.read<AppState>().signInWithPassword(
-        username: u,
-        password: p,
-      );
+      final app = context.read<AppState>();
+      try {
+        await app.signInWithPassword(username: u, password: p);
+      } on Failure catch (f) {
+        if (f.kind != FailureKind.conflict || !mounted) rethrow;
+        // Reinstall, cleared data or a new phone: let the owner move the
+        // account here instead of being locked out by a device that is gone.
+        final move = await _confirmMoveHere();
+        if (move != true || !mounted) rethrow;
+        await app.signInWithPassword(
+          username: u,
+          password: p,
+          takeOverDevice: true,
+        );
+      }
       if (mounted) {
         final role = context.read<AppState>().auth.currentUser?.role;
         final target = AppRouter.rootFor(role);
@@ -135,6 +147,33 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<bool?> _confirmMoveHere() {
+    final ar = Localizations.localeOf(context).languageCode == 'ar';
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          ar ? 'نقل الحساب إلى هذا الجهاز؟' : 'Move your account here?',
+        ),
+        content: Text(
+          ar
+              ? 'حسابك مفتوح على جهاز آخر. إن كان هاتفاً قديماً أو أعدت تثبيت التطبيق، انقل الحساب إلى هذا الجهاز. سيُسجَّل خروج الجهاز الآخر وتتوقف المراقبة عليه.'
+              : 'Your account is open on another device. If that is an old phone or you reinstalled the app, move it here. The other device will be signed out and stop monitoring.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(ar ? 'إلغاء' : 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(ar ? 'نقل إلى هذا الجهاز' : 'Move here'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loginWithBiometrics() async {
@@ -309,7 +348,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   subtitle:
                       'يتصل بالسحابة (Render Cloud)، وينتقل فوراً للمحلي عند تعذر الإنترنت',
                   badge: 'موصى به للمناقشة ⭐',
-                  badgeColor: const Color(0xFF00796B),
+                  badgeColor: AppColors.accent(
+                    context,
+                    AccentTone.green,
+                  ).foreground,
                   onSelect: () async {
                     Navigator.pop(ctx);
                     await app.applyServerMode(ServerMode.auto);
@@ -326,7 +368,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   badge: probeResults?['cloud'] != null
                       ? '⚡ ${probeResults!['cloud']} ms'
                       : 'سحابي عالمي',
-                  badgeColor: const Color(0xFF1565C0),
+                  badgeColor: AppColors.accent(
+                    context,
+                    AccentTone.blue,
+                  ).foreground,
                   onSelect: () async {
                     Navigator.pop(ctx);
                     await app.applyServerMode(ServerMode.cloud);
@@ -343,7 +388,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   badge: probeResults?['local'] != null
                       ? '⚡ ${probeResults!['local']} ms'
                       : 'أوفلاين سريع 💻',
-                  badgeColor: const Color(0xFFE65100),
+                  badgeColor: AppColors.accent(
+                    context,
+                    AccentTone.orange,
+                  ).foreground,
                   onSelect: () async {
                     Navigator.pop(ctx);
                     await app.applyServerMode(ServerMode.local);
@@ -358,7 +406,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   title: 'عنوان مخصص (Custom LAN IP)',
                   subtitle: app.customServerUrl ?? 'http://192.168.x.x:8000',
                   badge: 'شبكة محلية',
-                  badgeColor: Colors.blueGrey,
+                  badgeColor: AppColors.accent(
+                    context,
+                    AccentTone.slate,
+                  ).foreground,
                   onSelect: () {
                     showDialog(
                       context: modalCtx,
@@ -534,10 +585,13 @@ class _LoginScreenState extends State<LoginScreen> {
                         width: 76,
                         height: 76,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFEFF6FF),
+                          color: AppColors.accent(
+                            context,
+                            AccentTone.blue,
+                          ).container,
                           borderRadius: BorderRadius.circular(22),
                           border: Border.all(
-                            color: const Color(0xFFDBEAFE),
+                            color: Theme.of(context).colorScheme.outlineVariant,
                             width: 1.5,
                           ),
                           boxShadow: const [
@@ -548,10 +602,10 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ],
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.monitor_heart_rounded,
                           size: 42,
-                          color: Color(0xFF0066FF),
+                          color: Theme.of(context).colorScheme.primary,
                         ),
                       ),
                     ),
@@ -640,7 +694,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     height: 52,
                     child: FilledButton(
                       style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF0066FF),
+                        backgroundColor: Theme.of(context).colorScheme.primary,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
@@ -653,12 +707,12 @@ class _LoginScreenState extends State<LoginScreen> {
                           ? null
                           : () => _submitAccount(),
                       child: _loading
-                          ? const SizedBox(
+                          ? SizedBox(
                               width: 22,
                               height: 22,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                color: Colors.white,
+                                color: Theme.of(context).colorScheme.onPrimary,
                               ),
                             )
                           : Text(
@@ -716,7 +770,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             Text(
                               l.wakingCloudServer,
                               style: theme.textTheme.bodySmall?.copyWith(
-                                color: const Color(0xFF0066FF),
+                                color: Theme.of(context).colorScheme.primary,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),

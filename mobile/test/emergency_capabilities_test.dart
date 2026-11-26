@@ -26,9 +26,17 @@ class FakeLocation implements LocationPlatform {
   Future<bool> openLocationSettings() async => true;
   @override
   Future<bool> openAppSettings() async => true;
+  bool? lastHasInternet;
+  Duration? lastBudget;
   @override
-  Future<GpsFix> acquire() async =>
-      waitForever ? Completer<GpsFix>().future : fix;
+  Future<GpsFix> acquire({
+    bool hasInternet = true,
+    Duration budget = const Duration(seconds: 20),
+  }) async {
+    lastHasInternet = hasInternet;
+    lastBudget = budget;
+    return waitForever ? Completer<GpsFix>().future : fix;
+  }
 }
 
 void main() {
@@ -46,11 +54,19 @@ void main() {
     expect(preciseFix.isCoarse, false);
     expect(preciseFix.isSuspiciouslyCoarse, false);
 
-    const cellCoarseFix = GpsFix(latitude: 15.35, longitude: 44.20, accuracy: 1500);
+    const cellCoarseFix = GpsFix(
+      latitude: 15.35,
+      longitude: 44.20,
+      accuracy: 1500,
+    );
     expect(cellCoarseFix.isCoarse, true);
     expect(cellCoarseFix.isSuspiciouslyCoarse, false);
 
-    const foreignIpFix = GpsFix(latitude: 30.04, longitude: 31.23, accuracy: 25000);
+    const foreignIpFix = GpsFix(
+      latitude: 30.04,
+      longitude: 31.23,
+      accuracy: 25000,
+    );
     expect(foreignIpFix.isCoarse, true);
     expect(foreignIpFix.isSuspiciouslyCoarse, true);
   });
@@ -174,5 +190,105 @@ void main() {
       alert.toMap(),
     ).copyWith(acknowledged: true);
     expect(restored.details, alert.details);
+  });
+
+  group('online/offline location paths', () {
+    test('offline uses the GPS-only path with the longer budget', () async {
+      final platform = FakeLocation();
+      final service = LocationService(
+        platform: platform,
+        hasInternet: () => false,
+      );
+      final result = await service.currentResult();
+      expect(result.status, LocationStatus.available);
+      expect(platform.lastHasInternet, isFalse);
+      // Inner budget is what is left of the 35 s path budget, never more.
+      expect(platform.lastBudget! > const Duration(seconds: 30), isTrue);
+      expect(platform.lastBudget! <= LocationService.offlineBudget, isTrue);
+    });
+
+    test('online uses the fused path with the shorter budget', () async {
+      final platform = FakeLocation();
+      final service = LocationService(
+        platform: platform,
+        hasInternet: () => true,
+      );
+      await service.currentResult();
+      expect(platform.lastHasInternet, isTrue);
+      expect(platform.lastBudget! <= LocationService.onlineBudget, isTrue);
+    });
+
+    test('inner budget always fits inside an explicit outer timeout', () async {
+      final platform = FakeLocation();
+      await LocationService(
+        platform: platform,
+      ).currentResult(timeout: const Duration(seconds: 15));
+      expect(platform.lastBudget! < const Duration(seconds: 15), isTrue);
+    });
+
+    test('describe states source, accuracy and age honestly', () {
+      final now = DateTime(2026, 11, 25, 10, 30);
+      final cached = GpsFix(
+        latitude: 15.3,
+        longitude: 44.2,
+        accuracy: 80,
+        capturedAt: now.subtract(const Duration(minutes: 7)),
+        source: LocationSource.cachedFix,
+      );
+      final text = cached.describe(arabic: true, now: now);
+      expect(text, contains('آخر موقع محفوظ'));
+      expect(text, contains('±80 متر'));
+      expect(text, contains('7 د'));
+      const gps = GpsFix(
+        latitude: 15.3,
+        longitude: 44.2,
+        accuracy: 9,
+        source: LocationSource.deviceGps,
+      );
+      expect(gps.describe(arabic: true), contains('GPS الجهاز'));
+      expect(gps.describe(arabic: true), isNot(contains('أقمار')));
+      expect(gps.isPrecise, isTrue);
+      expect(LocationSource.fromWire('device_gps'), LocationSource.deviceGps);
+      expect(LocationSource.fromWire('satellite'), isNull);
+    });
+
+    test(
+      'refine forces the GPS path and only returns a clearly better fix',
+      () async {
+        final platform = FakeLocation()
+          ..fix = GpsFix(
+            latitude: 15.3,
+            longitude: 44.2,
+            accuracy: 12,
+            capturedAt: DateTime.now(),
+            source: LocationSource.deviceGps,
+          );
+        final service = LocationService(
+          platform: platform,
+          hasInternet: () => true,
+        );
+        const coarse = GpsFix(latitude: 15.3, longitude: 44.2, accuracy: 900);
+        final better = await service.refine(
+          coarse,
+          window: const Duration(seconds: 5),
+        );
+        expect(better?.accuracy, 12);
+        expect(platform.lastHasInternet, isFalse);
+
+        const precise = GpsFix(latitude: 15.3, longitude: 44.2, accuracy: 20);
+        expect(await service.refine(precise), isNull);
+
+        platform.fix = GpsFix(
+          latitude: 15.3,
+          longitude: 44.2,
+          accuracy: 700,
+          capturedAt: DateTime.now(),
+        );
+        expect(
+          await service.refine(coarse, window: const Duration(seconds: 5)),
+          isNull,
+        );
+      },
+    );
   });
 }

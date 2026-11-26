@@ -191,6 +191,41 @@ def test_fcm_adapter_removes_invalid_token_but_does_not_claim_delivery(client, m
 
     assert push_tokens_store.count_for_user(patient["id"]) == 0
 
+def test_fcm_push_marks_simulated_alerts(client, monkeypatch):
+    patient, _ = _create_patient(client)
+    token = "valid-fcm-token-sim-12345678901234"
+    push_tokens_store.register(patient["id"], token, "android",
+        session_id=decode_token(create_token(patient["id"], "patient"))["sid"])
+    sent = []
+
+    class FakeMessaging:
+        class Notification:
+            def __init__(self, **kwargs):
+                self.values = kwargs
+
+        class MulticastMessage:
+            def __init__(self, **kwargs):
+                self.values = kwargs
+
+        @staticmethod
+        def send_each_for_multicast(message):
+            sent.append(message)
+            return SimpleNamespace(success_count=1, failure_count=0,
+                                   responses=[SimpleNamespace(success=True, exception=None)])
+
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "fcm")
+    monkeypatch.setattr(notification_delivery, "_firebase_messaging", lambda: FakeMessaging)
+    for source, expect_tag in (("simulation", True), ("device", False)):
+        sent.clear()
+        notification_delivery.deliver({
+            "id": f"alert-{source}", "patient_id": patient["id"], "severity": "critical",
+            "recipients": ["patient"], "details": {"data_source": source},
+        })
+        msg = sent[0].values
+        assert msg["notification"].values["title"].startswith("[محاكاة]") is expect_tag
+        assert msg["data"]["data_source"] == source
+
+
 def test_invalid_payload_error_does_not_delete_registration():
     class InvalidArgumentError(Exception):
         pass

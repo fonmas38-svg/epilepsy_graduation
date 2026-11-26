@@ -135,7 +135,11 @@ class _Step extends StatelessWidget {
     }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [badge, Gap.hSm, Expanded(child: label)],
+      children: [
+        badge,
+        Gap.hSm,
+        Expanded(child: label),
+      ],
     );
   }
 }

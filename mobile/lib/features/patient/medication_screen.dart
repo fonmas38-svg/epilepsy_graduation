@@ -87,34 +87,38 @@ class _MedicationScreenState extends State<MedicationScreen> {
       final app = context.read<AppState>();
       final owner = app.auth.currentUser;
       final origin = app.api.baseUrl;
-      try {
-        await _svc.synchronize(pid);
-      } catch (_) {
-        /* Local prescriptions remain readable offline. */
-      }
-      if (!mounted ||
-          _pid != pid ||
-          !AppUser.sameSessionOwner(owner, app.auth.currentUser) ||
-          origin != app.api.baseUrl) {
-        return;
-      }
-      final data = _MedData(
+      bool stillCurrent() =>
+          mounted &&
+          _pid == pid &&
+          AppUser.sameSessionOwner(owner, app.auth.currentUser) &&
+          origin == app.api.baseUrl;
+      Future<_MedData> readLocal() async => _MedData(
         meds: await _svc.forPatient(pid),
         schedule: await _svc.todaySchedule(pid),
         week: await _svc.adherence(pid),
         month: await _svc.adherence(pid, days: 30),
         missed: await _svc.missedDoses(pid),
       );
-      if (!mounted ||
-          _pid != pid ||
-          !AppUser.sameSessionOwner(owner, app.auth.currentUser) ||
-          origin != app.api.baseUrl) {
-        return;
-      }
+
+      // Local first: the patient sees today's doses immediately, even while
+      // the server is asleep or unreachable (sync can take up to the 90 s
+      // cold-start ceiling). The server result refreshes the view after.
+      final local = await readLocal();
+      if (!stillCurrent()) return;
       setState(() {
-        _data = data;
+        _data = local;
         _loading = false;
       });
+
+      try {
+        await _svc.synchronize(pid);
+      } catch (_) {
+        /* Local prescriptions remain readable offline. */
+      }
+      if (!stillCurrent()) return;
+      final synced = await readLocal();
+      if (!stillCurrent()) return;
+      setState(() => _data = synced);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -371,7 +375,7 @@ class _MedicationScreenState extends State<MedicationScreen> {
           child: ListView(
             padding: Insets.pageBottomSafe,
             children: [
-              OfflineBanner(visible: !app.apiOnline),
+              OfflineBanner(visible: !app.apiOnline, mode: app.operatingMode),
               _AdherenceSection(
                 data: d,
                 onShare: canShareAdherence ? () => _share(d) : null,
@@ -715,7 +719,10 @@ class _DoseTile extends StatelessWidget {
                         : '${l.dueAt} ${TimeAgo.formatHhmm12h(entry.time, isArabic: l.isArabic)}',
                     style: TextStyle(
                       color: taken
-                          ? const Color(0xFF2E7D32)
+                          ? AppColors.accent(
+                              context,
+                              AccentTone.green,
+                            ).foreground
                           : Theme.of(context).colorScheme.onSurfaceVariant,
                       fontSize: 12.5,
                       fontWeight: FontWeight.w500,
@@ -732,13 +739,16 @@ class _DoseTile extends StatelessWidget {
                   vertical: 5,
                 ),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE8F5E9),
+                  color: AppColors.accent(context, AccentTone.green).container,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
                   l.doseTaken,
-                  style: const TextStyle(
-                    color: Color(0xFF2E7D32),
+                  style: TextStyle(
+                    color: AppColors.accent(
+                      context,
+                      AccentTone.green,
+                    ).foreground,
                     fontWeight: FontWeight.w800,
                     fontSize: 12,
                   ),
@@ -749,8 +759,8 @@ class _DoseTile extends StatelessWidget {
                 height: 38,
                 child: FilledButton.icon(
                   style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF0066FF),
-                    foregroundColor: Colors.white,
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),

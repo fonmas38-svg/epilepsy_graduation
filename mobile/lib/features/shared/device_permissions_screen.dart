@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:provider/provider.dart';
 
+import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
+import '../../providers/app_state.dart';
+import '../../services/background_service.dart';
 import '../../services/biometric_service.dart';
 
 /// Screen allowing users (across all roles) to inspect, diagnose, and manage
@@ -10,21 +14,42 @@ class DevicePermissionsScreen extends StatefulWidget {
   const DevicePermissionsScreen({super.key});
 
   @override
-  State<DevicePermissionsScreen> createState() => _DevicePermissionsScreenState();
+  State<DevicePermissionsScreen> createState() =>
+      _DevicePermissionsScreenState();
 }
 
-class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
+class _DevicePermissionsScreenState extends State<DevicePermissionsScreen>
+    with WidgetsBindingObserver {
   bool _loading = true;
   LocationPermission _locationPermission = LocationPermission.denied;
   bool _locationServiceEnabled = false;
   bool _biometricsAvailable = false;
-  final bool _notificationsAllowed = true;
+  // Read from the OS (was a constant «enabled», which hid a refusal). True
+  // where the OS gives no answer, so nothing false is shown as a failure.
+  bool _notificationsAllowed = true;
+  bool _exactAlarms = true;
   final _biometrics = BiometricService();
+  final _background = BackgroundService();
+  bool _batteryExempt = true;
+  bool _fullScreenAllowed = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkAllPermissions();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Returning from a system settings page: show the real, updated state.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) _checkAllPermissions();
   }
 
   Future<void> _checkAllPermissions() async {
@@ -33,12 +58,22 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
       final locPerm = await Geolocator.checkPermission();
       final locEnabled = await Geolocator.isLocationServiceEnabled();
       final bioAvail = await _biometrics.isAvailable;
+      final batteryExempt = await _background.isIgnoringBatteryOptimizations();
+      final fullScreen = await _background.canUseFullScreenIntent();
+      if (!mounted) return;
+      final notifications = context.read<AppState>().notifications;
+      final notifAllowed = await notifications.notificationsEnabled();
+      final exact = await notifications.canScheduleExact();
 
       if (mounted) {
         setState(() {
           _locationPermission = locPerm;
           _locationServiceEnabled = locEnabled;
           _biometricsAvailable = bioAvail;
+          _batteryExempt = batteryExempt;
+          _fullScreenAllowed = fullScreen;
+          _notificationsAllowed = notifAllowed ?? true;
+          _exactAlarms = exact ?? true;
           _loading = false;
         });
       }
@@ -64,7 +99,9 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(ar ? 'الإذن معطل في النظام' : 'Permission Disabled in System'),
+        title: Text(
+          ar ? 'الإذن معطل في النظام' : 'Permission Disabled in System',
+        ),
         content: Text(
           ar
               ? 'إذن «$permissionName» تم رفضه في إعدادات الهاتف. يتطلب تفعيله فتح إعدادات التطبيق في نظام أندرويد.'
@@ -99,7 +136,9 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(ar ? 'صلاحيات وأذونات النظام' : 'System & Device Permissions'),
+        title: Text(
+          ar ? 'صلاحيات وأذونات النظام' : 'System & Device Permissions',
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -116,7 +155,9 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
                 // Header Info Card
                 Card(
                   elevation: 0,
-                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.2),
+                  color: theme.colorScheme.primaryContainer.withValues(
+                    alpha: 0.2,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                     side: BorderSide(
@@ -168,24 +209,30 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
                 // Permission 1: Location & GPS
                 _PermissionTile(
                   icon: Icons.my_location_rounded,
-                  color: const Color(0xFF0288D1),
-                  title: ar ? 'الموقع الجغرافي الدقيق (GPS / GNSS)' : 'Precise Location (GPS / GNSS)',
+                  tone: AccentTone.blue,
+                  title: ar
+                      ? 'الموقع الجغرافي الدقيق (GPS / GNSS)'
+                      : 'Precise Location (GPS / GNSS)',
                   subtitle: ar
                       ? 'لالتقاط إحداثيات المريض تلقائياً عند النوبة أو طلب الاستغاثة SOS وإرسالها لجهات الطوارئ.'
                       : 'To automatically capture patient coordinates during a seizure or SOS and dispatch to emergency contacts.',
                   statusLabel: isLocationGranted
                       ? (_locationServiceEnabled
-                          ? (ar ? 'ممنوح ومفعل' : 'Granted & Active')
-                          : (ar ? 'الموقع معطل في الجهاز' : 'Location Service Off'))
+                            ? (ar ? 'ممنوح ومفعل' : 'Granted & Active')
+                            : (ar
+                                  ? 'الموقع معطل في الجهاز'
+                                  : 'Location Service Off'))
                       : (ar ? 'مطلوب للمراقبة' : 'Required'),
                   isGranted: isLocationGranted && _locationServiceEnabled,
                   onAction: isLocationGranted
                       ? (_locationServiceEnabled
-                          ? null
-                          : () => Geolocator.openLocationSettings())
+                            ? null
+                            : () => Geolocator.openLocationSettings())
                       : _requestLocation,
                   actionLabel: isLocationGranted
-                      ? (_locationServiceEnabled ? null : (ar ? 'تشغيل GPS' : 'Turn on GPS'))
+                      ? (_locationServiceEnabled
+                            ? null
+                            : (ar ? 'تشغيل GPS' : 'Turn on GPS'))
                       : (ar ? 'منح الإذن' : 'Grant Permission'),
                 ),
 
@@ -194,8 +241,10 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
                 // Permission 2: Notifications
                 _PermissionTile(
                   icon: Icons.notification_important_rounded,
-                  color: const Color(0xFFE65100),
-                  title: ar ? 'إشعارات وتنبيهات الطوارئ' : 'Emergency Notifications',
+                  tone: AccentTone.orange,
+                  title: ar
+                      ? 'إشعارات وتنبيهات الطوارئ'
+                      : 'Emergency Notifications',
                   subtitle: ar
                       ? 'لإيقاظك وتحذيرك قبل حدوث النوبة (Preictal Warning) لتتخذ وضعية الأمان والاستلقاء.'
                       : 'To alert and wake you before seizure onset so you can assume a safe position.',
@@ -204,20 +253,97 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
                       : (ar ? 'معطلة' : 'Disabled'),
                   isGranted: _notificationsAllowed,
                   onAction: () => Geolocator.openAppSettings(),
-                  actionLabel: ar ? 'إعدادات الإشعارات' : 'Notification Settings',
+                  actionLabel: ar
+                      ? 'إعدادات الإشعارات'
+                      : 'Notification Settings',
                 ),
+
+                if (!_exactAlarms) ...[
+                  Gap.vMd,
+                  _PermissionTile(
+                    icon: Icons.alarm_on_outlined,
+                    tone: AccentTone.blue,
+                    title: ar
+                        ? 'تذكير الدواء في وقته الدقيق'
+                        : 'Medication reminders on the minute',
+                    subtitle: ar
+                        ? 'بدونه قد يتأخر تذكير الجرعة بضع دقائق لأن النظام يجمّع المنبهات لتوفير البطارية.'
+                        : 'Without it a dose reminder may arrive a few minutes late, because the system batches alarms to save battery.',
+                    statusLabel: ar ? 'تقريبي' : 'Approximate',
+                    isGranted: false,
+                    onAction: () => context
+                        .read<AppState>()
+                        .notifications
+                        .requestExactAlarms(),
+                    actionLabel: ar ? 'السماح' : 'Allow',
+                  ),
+                ],
+
+                if (_background.supported) ...[
+                  Gap.vMd,
+                  _PermissionTile(
+                    icon: Icons.lock_clock_outlined,
+                    tone: AccentTone.red,
+                    title: ar
+                        ? 'التنبيه فوق شاشة القفل'
+                        : 'Alerts over the lock screen',
+                    subtitle: ar
+                        ? 'يفتح شاشة تنبيه النوبة فوراً حتى والهاتف مقفل. إن رُفض يظهر التنبيه كإشعار عادي فقط.'
+                        : 'Opens the seizure alert immediately even when the phone is locked. If denied, it appears only as a normal notification.',
+                    statusLabel: _fullScreenAllowed
+                        ? (ar ? 'مسموح' : 'Allowed')
+                        : (ar ? 'غير مسموح' : 'Not allowed'),
+                    isGranted: _fullScreenAllowed,
+                    onAction: _fullScreenAllowed
+                        ? null
+                        : () async {
+                            await _background.openFullScreenIntentSettings();
+                          },
+                    actionLabel: _fullScreenAllowed
+                        ? null
+                        : (ar ? 'السماح' : 'Allow'),
+                  ),
+                  Gap.vMd,
+                  _PermissionTile(
+                    icon: Icons.battery_saver_outlined,
+                    tone: AccentTone.indigo,
+                    title: ar
+                        ? 'الاستثناء من توفير البطارية'
+                        : 'Battery optimization exemption',
+                    subtitle: ar
+                        ? 'كي لا يوقف النظام الرصد في الخلفية أو منبهات الدواء عند إطفاء الشاشة.'
+                        : 'So the system does not stop background monitoring or medication alarms when the screen is off.',
+                    statusLabel: _batteryExempt
+                        ? (ar ? 'مستثنى' : 'Exempt')
+                        : (ar ? 'غير مستثنى' : 'Not exempt'),
+                    isGranted: _batteryExempt,
+                    onAction: _batteryExempt
+                        ? null
+                        : () async {
+                            await _background
+                                .requestIgnoreBatteryOptimizations();
+                          },
+                    actionLabel: _batteryExempt
+                        ? null
+                        : (ar ? 'استثناء التطبيق' : 'Exempt the app'),
+                  ),
+                ],
 
                 Gap.vMd,
 
                 // Permission 3: Bluetooth & Wearable Sensors
                 _PermissionTile(
                   icon: Icons.sensors_rounded,
-                  color: const Color(0xFF2E7D32),
-                  title: ar ? 'المستشعرات وأجهزة الارتداء (Headband)' : 'Sensors & Wearable Headband',
+                  tone: AccentTone.green,
+                  title: ar
+                      ? 'المستشعرات وأجهزة الارتداء (Headband)'
+                      : 'Sensors & Wearable Headband',
+                  // Honest: this build has no direct Bluetooth link, so there
+                  // is no permission to grant and nothing «integrated».
                   subtitle: ar
-                      ? 'لقراءة ونقل إشارات الدماغ (EEG) ونبضات القلب من رباط الرأس للمحلل العصبي.'
-                      : 'To ingest and stream EEG and heart signals from the headband to the neural classifier.',
-                  statusLabel: ar ? 'مدمج ومفعل' : 'Integrated & Active',
+                      ? 'لا يتصل هذا الإصدار برباط الرأس عبر Bluetooth مباشرة؛ تصل الإشارات من خادم الجهاز أو من المحاكي، فلا يلزم إذن هنا.'
+                      : 'This build has no direct Bluetooth link to the headband; signals come from the device server or the simulator, so no permission is needed here.',
+                  statusLabel: ar ? 'لا يلزم إذن' : 'No permission needed',
                   isGranted: true,
                   onAction: null,
                 ),
@@ -227,8 +353,10 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
                 // Permission 4: Biometrics & Idle Security
                 _PermissionTile(
                   icon: Icons.fingerprint_rounded,
-                  color: const Color(0xFF6A1B9A),
-                  title: ar ? 'القياسات الحيوية وبصمة الجهاز' : 'Biometrics & Device Passcode',
+                  tone: AccentTone.indigo,
+                  title: ar
+                      ? 'القياسات الحيوية وبصمة الجهاز'
+                      : 'Biometrics & Device Passcode',
                   subtitle: ar
                       ? 'لقفل الخمول التلقائي وحماية السجلات الطبية والبيانات الحساسة من المتطفلين.'
                       : 'For automated idle lock and protecting clinical records from unauthorized local access.',
@@ -277,7 +405,7 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen> {
 class _PermissionTile extends StatelessWidget {
   const _PermissionTile({
     required this.icon,
-    required this.color,
+    required this.tone,
     required this.title,
     required this.subtitle,
     required this.statusLabel,
@@ -287,7 +415,7 @@ class _PermissionTile extends StatelessWidget {
   });
 
   final IconData icon;
-  final Color color;
+  final AccentTone tone;
   final String title;
   final String subtitle;
   final String statusLabel;
@@ -295,12 +423,13 @@ class _PermissionTile extends StatelessWidget {
   final VoidCallback? onAction;
   final String? actionLabel;
 
-  static const Color _green = Color(0xFF0F7A4D);
-  static const Color _amber = Color(0xFF9A6400);
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final c = AppColors.accent(context, tone);
+    // Status colours from the tokens: legible in light and dark themes.
+    final ok = AppColors.accent(context, AccentTone.green).foreground;
+    final warn = AppColors.accent(context, AccentTone.orange).foreground;
 
     return Container(
       padding: const EdgeInsets.all(Gap.md),
@@ -309,8 +438,8 @@ class _PermissionTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: isGranted
-              ? _green.withValues(alpha: 0.3)
-              : _amber.withValues(alpha: 0.4),
+              ? ok.withValues(alpha: 0.3)
+              : warn.withValues(alpha: 0.4),
         ),
         boxShadow: [
           BoxShadow(
@@ -328,10 +457,10 @@ class _PermissionTile extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
+                  color: c.container,
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(icon, color: color, size: 24),
+                child: Icon(icon, color: c.foreground, size: 24),
               ),
               Gap.hMd,
               Expanded(
@@ -352,7 +481,7 @@ class _PermissionTile extends StatelessWidget {
                               ? Icons.check_circle_rounded
                               : Icons.warning_amber_rounded,
                           size: 14,
-                          color: isGranted ? _green : _amber,
+                          color: isGranted ? ok : warn,
                         ),
                         const SizedBox(width: 4),
                         Text(
@@ -360,7 +489,7 @@ class _PermissionTile extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: isGranted ? _green : _amber,
+                            color: isGranted ? ok : warn,
                           ),
                         ),
                       ],
@@ -368,20 +497,12 @@ class _PermissionTile extends StatelessWidget {
                   ],
                 ),
               ),
-              if (onAction != null && actionLabel != null)
-                FilledButton.tonal(
-                  style: FilledButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  ),
-                  onPressed: onAction,
-                  child: Text(actionLabel!, style: const TextStyle(fontSize: 12)),
-                ),
             ],
           ),
           Gap.vSm,
           Padding(
-            padding: const EdgeInsets.only(right: 40),
+            // Directional: aligns under the title in RTL and LTR alike.
+            padding: const EdgeInsetsDirectional.only(start: 52),
             child: Text(
               subtitle,
               style: theme.textTheme.bodySmall?.copyWith(
@@ -390,6 +511,19 @@ class _PermissionTile extends StatelessWidget {
               ),
             ),
           ),
+          if (onAction != null && actionLabel != null) ...[
+            Gap.vSm,
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonal(
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(0, A11y.minTouchTarget),
+                ),
+                onPressed: onAction,
+                child: Text(actionLabel!),
+              ),
+            ),
+          ],
         ],
       ),
     );

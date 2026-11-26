@@ -20,31 +20,27 @@ Future<void> confirmSignOut(BuildContext context, AppState app) async {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              ar
-                  ? 'ستحتاج إلى تسجيل الدخول مجددًا لاستخدام حسابك.'
-                  : 'You will need to sign in again to use your account.',
-            ),
+            // The safety consequence first; the rest kept to one line each.
             if (patient) ...[
-              const SizedBox(height: 12),
               Text(
                 ar
-                    ? 'ستتوقف المراقبة المحلية المرتبطة بحسابك على هذا الجهاز.'
-                    : 'Local monitoring for this account will stop on this device.',
+                    ? 'ستتوقف المراقبة على هذا الجهاز حتى تسجّل الدخول مجددًا.'
+                    : 'Monitoring stops on this device until you sign in again.',
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
+              const SizedBox(height: 12),
             ],
-            const SizedBox(height: 12),
             Text(
               ar
-                  ? 'البيانات المحفوظة محليًا لا تُحذف بهذا الإجراء. مزامنتها مرتبطة بالحساب وصلاحياته.'
-                  : 'This action does not delete locally stored data. Synchronization remains subject to account authorization.',
+                  ? 'بياناتك المحفوظة على الجهاز لن تُحذف.'
+                  : 'Data saved on this device is not deleted.',
             ),
             if (!app.apiOnline) ...[
               const SizedBox(height: 12),
               Text(
                 ar
-                    ? 'دون اتصال يُمسح الدخول من هذا الجهاز فقط. إلغاء الجلسة على الخادم يحتاج اتصالًا، أو إلغاءها من جهاز آخر.'
-                    : 'Offline logout clears this device only. Revoking the server session requires a connection or another signed-in device.',
+                    ? 'دون اتصال، يُلغى الدخول من هذا الجهاز فقط.'
+                    : 'Offline, this signs out this device only.',
               ),
             ],
           ],

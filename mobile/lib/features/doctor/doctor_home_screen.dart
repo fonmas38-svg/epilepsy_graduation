@@ -1,4 +1,7 @@
 import 'patient_file_screen.dart';
+import '../shared/account_screen.dart';
+import '../shared/clinical_messages_screen.dart';
+import 'adjudication_screen.dart';
 import 'dart:math';
 import '../../core/ui/workspace_scaffold.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../../core/enums.dart';
 import '../../core/errors/failure.dart';
 import '../../core/router/route_names.dart';
+import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/risk_view.dart';
 import '../../core/ui/common.dart';
@@ -64,6 +68,9 @@ enum _Sort { attention, name }
 enum _Filter { newAlerts, brokenDevice, lowAdherence }
 
 class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
+  /// Bottom-bar tab. Tabs switch in place (like the patient's), instead of
+  /// pushing a page that hides the bar and strands the doctor.
+  int _tab = 0;
   final _search = TextEditingController();
   bool _loading = true;
   bool _busy = false;
@@ -229,140 +236,165 @@ class _DoctorHomeScreenState extends State<DoctorHomeScreen> {
     final app = context.watch<AppState>();
     final rows = _visible();
     return PopScope(
-      canPop: true,
+      canPop: _tab == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _tab != 0) setState(() => _tab = 0);
+      },
       child: WorkspaceScaffold(
-        appBar: AppBar(
-          title: Text(l.isArabic ? 'المرضى' : 'Patients'),
-          actions: [
-            IconButton(
-              tooltip: 'إضافة مريض جديد',
-              onPressed: _busy ? null : () => _showAddPatientDialog(),
-              icon: const Icon(Icons.person_add_alt_1_rounded),
-            ),
-            IconButton(
-              tooltip: l.refresh,
-              onPressed: _loading || _busy ? null : _refresh,
-              icon: const Icon(Icons.refresh_rounded),
-            ),
-          ],
-        ),
-        body: LayoutBuilder(
-          builder: (context, constraints) {
-            _showTwoPane = constraints.maxWidth >= 900;
-            final list = AsyncView<List<_Row>>(
-              loading: _loading,
-              failure: _failure,
-              value: _rows,
-              isEmpty: (v) => v.isEmpty,
-              onRetry: _load,
-              emptyTitle: l.noPatientsYet,
-              emptyBody:
-                  'يمكنك إضافة مريضك الأول الآن للبدء بمتابعة حالته السريرية وإشاراته الحيوية',
-              emptyIcon: Icons.people_outline,
-              builder: (context, _) => RefreshIndicator(
-                onRefresh: _refresh,
-                child: ResponsiveContent(
-                  maxWidth: 850,
-                  child: ListView(
-                    padding: Insets.pageBottomSafe,
-                    children: [
-                      OfflineBanner(
-                        visible: !app.apiOnline,
-                        lastUpdateLabel: TimeAgo.since(
-                          app.care.lastSyncedAt,
-                          l,
-                        ),
-                        pendingCount: app.care.pendingCount,
-                      ),
-                      TextField(
-                        controller: _search,
-                        textInputAction: TextInputAction.search,
-                        onChanged: (_) => setState(() {}),
-                        decoration: InputDecoration(
-                          labelText: l.searchByName,
-                          prefixIcon: const Icon(Icons.search),
-                          suffixIcon: _search.text.isEmpty
-                              ? null
-                              : IconButton(
-                                  tooltip: l.cancel,
-                                  onPressed: () => setState(_search.clear),
-                                  icon: const Icon(Icons.close),
-                                ),
-                        ),
-                      ),
-                      Gap.vSm,
-                      _Controls(
-                        sort: _sort,
-                        filters: _filters,
-                        onSort: (s) => setState(() => _sort = s),
-                        onToggle: (f) => setState(() {
-                          if (!_filters.remove(f)) _filters.add(f);
-                        }),
-                      ),
-                      Gap.vMd,
-                      SectionCard(
-                        title: l.patientsList,
-                        icon: Icons.people_outline,
-                        trailing: Text(
-                          '${rows.length}/${_rows.length}',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        child: rows.isEmpty
-                            ? EmptyState(
-                                title: l.emptyTitle,
-                                body: l.emptyBody,
-                                icon: Icons.filter_alt_off_outlined,
-                                compact: true,
-                              )
-                            : Column(
-                                children: [
-                                  for (final r in rows)
-                                    _PatientTile(
-                                      row: r,
-                                      enabled: !_busy,
-                                      onOpen: () => _open(r),
-                                    ),
-                                ],
-                              ),
-                      ),
-                      Gap.vMd,
-                      SectionCard(
-                        title: l.modelPerformance,
-                        icon: Icons.insights_outlined,
-                        subtitle: l.operatingPointNote,
-                        child: const MetricsPanel(),
-                      ),
-                    ],
+        selectedIndex: _tab,
+        onDestinationSelected: (i) => setState(() => _tab = i),
+        // Other tabs bring their own app bar.
+        appBar: _tab != 0
+            ? null
+            : AppBar(
+                title: Text(l.isArabic ? 'المرضى' : 'Patients'),
+                actions: [
+                  IconButton(
+                    tooltip: l.isArabic ? 'إضافة مريض جديد' : 'Add new patient',
+                    onPressed: _busy ? null : () => _showAddPatientDialog(),
+                    icon: const Icon(Icons.person_add_alt_1_rounded),
                   ),
-                ),
+                  IconButton(
+                    tooltip: l.refresh,
+                    onPressed: _loading || _busy ? null : _refresh,
+                    icon: const Icon(Icons.refresh_rounded),
+                  ),
+                ],
               ),
-            );
-            if (constraints.maxWidth < 900) return list;
-            return Row(
-              children: [
-                SizedBox(
-                  width: (constraints.maxWidth * .38).clamp(330.0, 500.0),
-                  child: list,
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: _selectedPatient == null
-                      ? Center(
-                          child: Text(
-                            l.isArabic
-                                ? 'اختر مريضاً لعرض ملفه'
-                                : 'Select a patient to view their file',
+        body: IndexedStack(
+          index: _tab,
+          children: [
+            LayoutBuilder(
+              builder: (context, constraints) {
+                _showTwoPane = constraints.maxWidth >= 900;
+                final list = AsyncView<List<_Row>>(
+                  loading: _loading,
+                  failure: _failure,
+                  value: _rows,
+                  isEmpty: (v) => v.isEmpty,
+                  onRetry: _load,
+                  emptyTitle: l.noPatientsYet,
+                  emptyBody: l.isArabic
+                      ? 'يمكنك إضافة مريضك الأول الآن للبدء بمتابعة حالته السريرية وإشاراته الحيوية.'
+                      : 'Add your first patient to start following their clinical status and vital signals.',
+                  emptyIcon: Icons.people_outline,
+                  builder: (context, _) => RefreshIndicator(
+                    onRefresh: _refresh,
+                    child: ResponsiveContent(
+                      maxWidth: 850,
+                      child: ListView(
+                        padding: Insets.pageBottomSafe,
+                        children: [
+                          OfflineBanner(
+                            visible: !app.apiOnline,
+                            mode: app.operatingMode,
+                            onSyncNow: app.syncNow,
+                            // Null when never synced: the banner then says so,
+                            // instead of «last update Not set».
+                            lastUpdateLabel: app.care.lastSyncedAt == null
+                                ? null
+                                : TimeAgo.since(app.care.lastSyncedAt, l),
+                            pendingCount: app.care.pendingCount,
                           ),
-                        )
-                      : PatientFileScreen(
-                          key: ValueKey(_selectedPatient),
-                          embedded: true,
-                          args: PatientRouteArgs(patientId: _selectedPatient!),
-                        ),
-                ),
-              ],
-            );
-          },
+                          TextField(
+                            controller: _search,
+                            textInputAction: TextInputAction.search,
+                            onChanged: (_) => setState(() {}),
+                            decoration: InputDecoration(
+                              labelText: l.searchByName,
+                              prefixIcon: const Icon(Icons.search),
+                              suffixIcon: _search.text.isEmpty
+                                  ? null
+                                  : IconButton(
+                                      tooltip: l.cancel,
+                                      onPressed: () => setState(_search.clear),
+                                      icon: const Icon(Icons.close),
+                                    ),
+                            ),
+                          ),
+                          Gap.vSm,
+                          _Controls(
+                            sort: _sort,
+                            filters: _filters,
+                            onSort: (s) => setState(() => _sort = s),
+                            onToggle: (f) => setState(() {
+                              if (!_filters.remove(f)) _filters.add(f);
+                            }),
+                          ),
+                          Gap.vMd,
+                          SectionCard(
+                            title: l.patientsList,
+                            icon: Icons.people_outline,
+                            trailing: Text(
+                              '${rows.length}/${_rows.length}',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            child: rows.isEmpty
+                                ? EmptyState(
+                                    title: l.emptyTitle,
+                                    body: l.emptyBody,
+                                    icon: Icons.filter_alt_off_outlined,
+                                    compact: true,
+                                  )
+                                : Column(
+                                    children: [
+                                      for (var i = 0; i < rows.length; i++)
+                                        _PatientTile(
+                                          row: rows[i],
+                                          enabled: !_busy,
+                                          onOpen: () => _open(rows[i]),
+                                          // A divider separates rows; none after
+                                          // the last one.
+                                          last: i == rows.length - 1,
+                                        ),
+                                    ],
+                                  ),
+                          ),
+                          Gap.vMd,
+                          SectionCard(
+                            title: l.modelPerformance,
+                            icon: Icons.insights_outlined,
+                            subtitle: l.operatingPointNote,
+                            child: const MetricsPanel(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+                if (constraints.maxWidth < 900) return list;
+                return Row(
+                  children: [
+                    SizedBox(
+                      width: (constraints.maxWidth * .38).clamp(330.0, 500.0),
+                      child: list,
+                    ),
+                    const VerticalDivider(width: 1),
+                    Expanded(
+                      child: _selectedPatient == null
+                          ? Center(
+                              child: Text(
+                                l.isArabic
+                                    ? 'اختر مريضاً لعرض ملفه'
+                                    : 'Select a patient to view their file',
+                              ),
+                            )
+                          : PatientFileScreen(
+                              key: ValueKey(_selectedPatient),
+                              embedded: true,
+                              args: PatientRouteArgs(
+                                patientId: _selectedPatient!,
+                              ),
+                            ),
+                    ),
+                  ],
+                );
+              },
+            ),
+            const AdjudicationScreen(),
+            const ClinicalMessagesScreen(),
+            const AccountScreen(embedded: true),
+          ],
         ),
       ),
     );
@@ -429,11 +461,13 @@ class _PatientTile extends StatelessWidget {
     required this.row,
     required this.enabled,
     required this.onOpen,
+    this.last = false,
   });
 
   final _Row row;
   final bool enabled;
   final VoidCallback onOpen;
+  final bool last;
 
   @override
   Widget build(BuildContext context) {
@@ -531,7 +565,7 @@ class _PatientTile extends StatelessWidget {
                   ),
                 ),
               ),
-              const Divider(height: Gap.sm),
+              if (!last) const Divider(height: Gap.sm),
             ],
           ),
         ),
@@ -659,6 +693,8 @@ class AddPatientDialog extends StatefulWidget {
 }
 
 class _AddPatientDialogState extends State<AddPatientDialog> {
+  bool get _ar => Localizations.localeOf(context).languageCode == 'ar';
+
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
@@ -680,7 +716,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
 
   bool _usernameEditedManually = false;
   bool _cgUsernameEditedManually = false;
-  late final String _idempotencyKey = const Uuid().v4();
+  late final String _idempotencyKey = Uuid().v4();
 
   bool _busy = false;
   String? _error;
@@ -819,13 +855,17 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
-          title: const Row(
+          title: Row(
             children: [
-              Icon(Icons.check_circle_rounded, color: Colors.green, size: 28),
+              Icon(
+                Icons.check_circle_rounded,
+                color: AppColors.accent(ctx, AccentTone.green).foreground,
+                size: 28,
+              ),
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'تم إنشاء ملف المريض بنجاح',
+                  (_ar ? 'تم إنشاء ملف المريض بنجاح' : 'Patient file created'),
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),
@@ -837,21 +877,33 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'المريض: ${profile.name}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  (_ar
+                      ? 'المريض: ${profile.name}'
+                      : 'Patient: ${profile.name}'),
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 4),
-                Text('اسم المستخدم: $patUser'),
-                Text('كلمة المرور: $generatedPatientPass'),
+                SizedBox(height: 4),
+                Text((_ar ? 'اسم المستخدم: $patUser' : 'Username: $patUser')),
+                Text(
+                  (_ar
+                      ? 'كلمة المرور: $generatedPatientPass'
+                      : 'Password: $generatedPatientPass'),
+                ),
                 if (_addCaregiver && _cgNameCtrl.text.trim().isNotEmpty) ...[
-                  const Divider(height: 24),
+                  Divider(height: 24),
                   Text(
-                    'المرافق الأسري: ${_cgNameCtrl.text.trim()} ($_cgRelation)',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    (_ar
+                        ? 'المرافق الأسري: ${_cgNameCtrl.text.trim()} ($_cgRelation)'
+                        : 'Caregiver: ${_cgNameCtrl.text.trim()} ($_cgRelation)'),
+                    style: TextStyle(fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 4),
-                  Text('اسم المستخدم: $cgUser'),
-                  Text('كلمة المرور: $generatedCgPass'),
+                  SizedBox(height: 4),
+                  Text((_ar ? 'اسم المستخدم: $cgUser' : 'Username: $cgUser')),
+                  Text(
+                    (_ar
+                        ? 'كلمة المرور: $generatedCgPass'
+                        : 'Password: $generatedCgPass'),
+                  ),
                 ],
               ],
             ),
@@ -859,7 +911,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
           actions: [
             FilledButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('تم'),
+              child: Text((_ar ? 'تم' : 'Done')),
             ),
           ],
         ),
@@ -884,11 +936,11 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      insetPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 540),
+        constraints: BoxConstraints(maxWidth: 540),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.all(20),
           child: Form(
             key: _formKey,
             autovalidateMode: AutovalidateMode.onUserInteraction,
@@ -900,7 +952,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(8),
+                        padding: EdgeInsets.all(8),
                         decoration: BoxDecoration(
                           color: theme.colorScheme.primaryContainer,
                           shape: BoxShape.circle,
@@ -910,23 +962,27 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                           color: theme.colorScheme.primary,
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      const Expanded(
+                      SizedBox(width: 12),
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'إضافة مريض',
+                              (_ar ? 'إضافة مريض' : 'Add patient'),
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             Text(
-                              'أنشئ حساب المريض واربطه بعيادتك.',
+                              (_ar
+                                  ? 'أنشئ حساب المريض واربطه بعيادتك.'
+                                  : 'Create the patient account and link it to your clinic.'),
                               style: TextStyle(
                                 fontSize: 12,
-                                color: Colors.grey,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
                               ),
                             ),
                           ],
@@ -934,12 +990,12 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                       ),
                     ],
                   ),
-                  const Divider(height: 24),
+                  Divider(height: 24),
                   if (_error != null) ...[
                     Semantics(
                       liveRegion: true,
                       child: Container(
-                        padding: const EdgeInsets.all(10),
+                        padding: EdgeInsets.all(10),
                         decoration: BoxDecoration(
                           color: theme.colorScheme.errorContainer,
                           borderRadius: BorderRadius.circular(8),
@@ -952,80 +1008,96 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: 12),
                   ],
 
                   // Patient Section
-                  const Text(
-                    'البيانات الأساسية للمريض (مطلوبة)',
+                  Text(
+                    (_ar
+                        ? 'البيانات الأساسية للمريض (مطلوبة)'
+                        : 'Patient basics (required)'),
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   ),
-                  const SizedBox(height: 8),
+                  SizedBox(height: 8),
                   TextFormField(
                     controller: _nameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'اسم المريض الكامل *',
+                    decoration: InputDecoration(
+                      labelText: (_ar
+                          ? 'اسم المريض الكامل *'
+                          : 'Patient full name *'),
                       prefixIcon: Icon(Icons.person_outline),
                     ),
                     validator: (v) => (v == null || v.trim().isEmpty)
                         ? 'يرجى إدخال اسم المريض'
                         : null,
                   ),
-                  const SizedBox(height: 10),
+                  SizedBox(height: 10),
                   TextFormField(
                     controller: _usernameCtrl,
                     onChanged: (_) => _usernameEditedManually = true,
-                    decoration: const InputDecoration(
-                      labelText: 'اسم المستخدم *',
+                    decoration: InputDecoration(
+                      labelText: (_ar ? 'اسم المستخدم *' : 'Username *'),
                       prefixIcon: Icon(Icons.badge_outlined),
                       hintText: 'pat_ahmed',
-                      helperText:
-                          'يُولّد تلقائياً من الاسم ويمكنك تعديله لتسجيل الدخول.',
+                      helperText: (_ar
+                          ? 'يُولّد تلقائياً من الاسم ويمكنك تعديله لتسجيل الدخول.'
+                          : 'Generated from the name; you can edit it.'),
                     ),
                     validator: (v) => (v == null || v.trim().length < 3)
                         ? 'اسم المستخدم يجب ألا يقل عن 3 أحرف'
                         : null,
                   ),
-                  const SizedBox(height: 10),
+                  SizedBox(height: 10),
                   TextFormField(
                     controller: _emailCtrl,
                     keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'البريد الإلكتروني للمريض (اختياري)',
+                    decoration: InputDecoration(
+                      labelText: (_ar
+                          ? 'البريد الإلكتروني للمريض (اختياري)'
+                          : 'Patient email (optional)'),
                       prefixIcon: Icon(Icons.email_outlined),
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  SizedBox(height: 10),
                   TextFormField(
                     controller: _passwordCtrl,
                     obscureText: true,
                     enableSuggestions: false,
                     autocorrect: false,
                     validator: _validatePassword,
-                    decoration: const InputDecoration(
-                      labelText: 'كلمة مرور المريض (اختيارية)',
-                      helperText:
-                          '6–128 حرفًا. اتركها فارغة لتوليد كلمة مرور آمنة.',
+                    decoration: InputDecoration(
+                      labelText: (_ar
+                          ? 'كلمة مرور المريض (اختيارية)'
+                          : 'Patient password (optional)'),
+                      helperText: (_ar
+                          ? '6–128 حرفًا. اتركها فارغة لتوليد كلمة مرور آمنة.'
+                          : '6–128 characters. Leave empty to generate a secure one.'),
                       helperMaxLines: 2,
                       prefixIcon: Icon(Icons.lock_outline),
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
 
                   ExpansionTile(
                     tilePadding: EdgeInsets.zero,
-                    title: const Text('بيانات المريض المطلوبة'),
+                    title: Text(
+                      (_ar
+                          ? 'بيانات المريض المطلوبة'
+                          : 'Required patient details'),
+                    ),
                     initiallyExpanded: true,
                     maintainState: true,
                     children: [
                       DropdownButtonFormField<String>(
                         initialValue: _gender,
-                        decoration: const InputDecoration(labelText: 'الجنس *'),
-                        items: const [
+                        decoration: InputDecoration(
+                          labelText: (_ar ? 'الجنس *' : 'Sex *'),
+                        ),
+                        items: [
                           DropdownMenuItem(value: 'male', child: Text('ذكر')),
                           DropdownMenuItem(
                             value: 'female',
-                            child: Text('أنثى'),
+                            child: Text((_ar ? 'أنثى' : 'Female')),
                           ),
                         ],
                         validator: (v) => v == null ? 'اختر الجنس' : null,
@@ -1033,21 +1105,25 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                             ? null
                             : (value) => setState(() => _gender = value),
                       ),
-                      const SizedBox(height: 10),
+                      SizedBox(height: 10),
                       TextFormField(
                         controller: _emergencyContactCtrl,
                         keyboardType: TextInputType.phone,
-                        decoration: const InputDecoration(
-                          labelText: 'رقم اتصال الطوارئ *',
+                        decoration: InputDecoration(
+                          labelText: (_ar
+                              ? 'رقم اتصال الطوارئ *'
+                              : 'Emergency contact number *'),
                         ),
                         validator: (v) =>
                             RegExp(
                               r'^\+?[0-9]{8,15}$',
                             ).hasMatch(v?.trim() ?? '')
                             ? null
-                            : 'أدخل رقم اتصال طوارئ صالحاً',
+                            : (_ar
+                                  ? 'أدخل رقم اتصال طوارئ صالحاً'
+                                  : 'Enter a valid emergency number'),
                       ),
-                      const SizedBox(height: 10),
+                      SizedBox(height: 10),
                       Column(
                         children: [
                           SizedBox(
@@ -1059,22 +1135,28 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                                     r'^\+?[0-9]{8,15}$',
                                   ).hasMatch(v?.trim() ?? '')
                                   ? null
-                                  : 'أدخل رقم هاتف من 8 إلى 15 رقماً',
+                                  : (_ar
+                                        ? 'أدخل رقم هاتف من 8 إلى 15 رقماً'
+                                        : 'Enter a phone number of 8 to 15 digits'),
                               keyboardType: TextInputType.phone,
-                              decoration: const InputDecoration(
-                                labelText: 'رقم هاتف المريض',
+                              decoration: InputDecoration(
+                                labelText: (_ar
+                                    ? 'رقم هاتف المريض'
+                                    : 'Patient phone'),
                                 prefixIcon: Icon(Icons.phone_outlined),
                               ),
                             ),
                           ),
-                          const SizedBox(height: 10),
+                          SizedBox(height: 10),
                           SizedBox(
                             width: double.infinity,
                             child: TextFormField(
                               controller: _ageCtrl,
                               validator: (value) {
                                 if (value == null || value.trim().isEmpty) {
-                                  return 'العمر مطلوب';
+                                  return (_ar
+                                      ? 'العمر مطلوب'
+                                      : 'Age is required');
                                 }
                                 final age = int.tryParse(value.trim());
                                 return age == null || age < 0 || age > 130
@@ -1082,35 +1164,39 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                                     : null;
                               },
                               keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
-                                labelText: 'العمر',
+                              decoration: InputDecoration(
+                                labelText: (_ar ? 'العمر' : 'Age'),
                                 prefixIcon: Icon(Icons.cake_outlined),
                               ),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 10),
+                      SizedBox(height: 10),
                       TextFormField(
                         controller: _diagnosisCtrl,
                         validator: (v) => v == null || v.trim().isEmpty
                             ? 'التشخيص مطلوب'
                             : null,
-                        decoration: const InputDecoration(
-                          labelText: 'التشخيص ونوع الصرع',
+                        decoration: InputDecoration(
+                          labelText: (_ar
+                              ? 'التشخيص ونوع الصرع'
+                              : 'Diagnosis and epilepsy type'),
                           prefixIcon: Icon(Icons.medical_information_outlined),
                         ),
                       ),
-                      const SizedBox(height: 10),
+                      SizedBox(height: 10),
                       TextFormField(
                         controller: _notesCtrl,
                         maxLines: 2,
-                        decoration: const InputDecoration(
-                          labelText: 'ملاحظات وتوجيهات سريرية أولية',
+                        decoration: InputDecoration(
+                          labelText: (_ar
+                              ? 'ملاحظات وتوجيهات سريرية أولية'
+                              : 'Initial clinical notes'),
                           prefixIcon: Icon(Icons.notes_outlined),
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      SizedBox(height: 16),
                     ],
                   ),
 
@@ -1126,7 +1212,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                             : Colors.transparent,
                       ),
                     ),
-                    padding: const EdgeInsets.all(12),
+                    padding: EdgeInsets.all(12),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -1135,21 +1221,25 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                           value: _addCaregiver,
                           onChanged: (v) =>
                               setState(() => _addCaregiver = v ?? false),
-                          title: const Text(
-                            'إنشاء حساب مرافق',
+                          title: Text(
+                            (_ar
+                                ? 'إنشاء حساب مرافق'
+                                : 'Create a caregiver account'),
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 14,
                             ),
                           ),
-                          subtitle: const Text(
-                            'اختياري؛ يُربط الحساب بهذا المريض.',
+                          subtitle: Text(
+                            (_ar
+                                ? 'اختياري؛ يُربط الحساب بهذا المريض.'
+                                : 'Optional; linked to this patient.'),
                             style: TextStyle(fontSize: 12),
                           ),
                           controlAffinity: ListTileControlAffinity.leading,
                         ),
                         if (_addCaregiver) ...[
-                          const SizedBox(height: 8),
+                          SizedBox(height: 8),
                           TextFormField(
                             controller: _cgNameCtrl,
                             validator: (value) =>
@@ -1157,23 +1247,28 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                                     (value == null || value.trim().isEmpty)
                                 ? 'أدخل اسم المرافق أو ألغِ إضافته'
                                 : null,
-                            decoration: const InputDecoration(
-                              labelText: 'اسم المرافق الكامل',
+                            decoration: InputDecoration(
+                              labelText: (_ar
+                                  ? 'اسم المرافق الكامل'
+                                  : 'Caregiver full name'),
                               prefixIcon: Icon(Icons.family_restroom_outlined),
                             ),
                           ),
-                          const SizedBox(height: 10),
+                          SizedBox(height: 10),
                           TextFormField(
                             controller: _cgUsernameCtrl,
                             onChanged: (_) => _cgUsernameEditedManually = true,
-                            decoration: const InputDecoration(
-                              labelText: 'اسم مستخدم المرافق',
-                              helperText:
-                                  'يُولّد تلقائياً من اسم المرافق ويمكنك تعديله.',
+                            decoration: InputDecoration(
+                              labelText: (_ar
+                                  ? 'اسم مستخدم المرافق'
+                                  : 'Caregiver username'),
+                              helperText: (_ar
+                                  ? 'يُولّد تلقائياً من اسم المرافق ويمكنك تعديله.'
+                                  : 'Generated from the caregiver name; you can edit it.'),
                               prefixIcon: Icon(Icons.badge_outlined),
                             ),
                           ),
-                          const SizedBox(height: 10),
+                          SizedBox(height: 10),
                           Column(
                             children: [
                               SizedBox(
@@ -1181,55 +1276,68 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                                 child: TextFormField(
                                   controller: _cgPhoneCtrl,
                                   keyboardType: TextInputType.phone,
-                                  decoration: const InputDecoration(
-                                    labelText: 'رقم هاتف المرافق',
+                                  decoration: InputDecoration(
+                                    labelText: (_ar
+                                        ? 'رقم هاتف المرافق'
+                                        : 'Caregiver phone'),
                                     prefixIcon: Icon(Icons.phone_outlined),
                                   ),
                                 ),
                               ),
-                              const SizedBox(height: 10),
+                              SizedBox(height: 10),
                               DropdownButton<String>(
                                 isExpanded: true,
                                 value: _cgRelation,
                                 onChanged: (v) => setState(
                                   () => _cgRelation = v ?? _cgRelation,
                                 ),
-                                items: const [
+                                items: [
                                   DropdownMenuItem(
                                     value: 'أب / ولي أمر',
-                                    child: Text('أب / ولي أمر'),
+                                    child: Text(
+                                      (_ar
+                                          ? 'أب / ولي أمر'
+                                          : 'Father / guardian'),
+                                    ),
                                   ),
                                   DropdownMenuItem(
                                     value: 'أم',
-                                    child: Text('أم'),
+                                    child: Text((_ar ? 'أم' : 'Mother')),
                                   ),
                                   DropdownMenuItem(
                                     value: 'أخ / أخت',
-                                    child: Text('أخ / أخت'),
+                                    child: Text((_ar ? 'أخ / أخت' : 'Sibling')),
                                   ),
                                   DropdownMenuItem(
                                     value: 'زوج / زوجة',
-                                    child: Text('زوج / زوجة'),
+                                    child: Text(
+                                      (_ar ? 'زوج / زوجة' : 'Spouse'),
+                                    ),
                                   ),
                                   DropdownMenuItem(
                                     value: 'مرافق قانوني',
-                                    child: Text('مرافق قانوني'),
+                                    child: Text(
+                                      (_ar ? 'مرافق قانوني' : 'Legal guardian'),
+                                    ),
                                   ),
                                 ],
                               ),
                             ],
                           ),
-                          const SizedBox(height: 10),
+                          SizedBox(height: 10),
                           TextFormField(
                             controller: _cgPasswordCtrl,
                             obscureText: true,
                             enableSuggestions: false,
                             autocorrect: false,
                             validator: _validatePassword,
-                            decoration: const InputDecoration(
-                              labelText: 'كلمة مرور المرافق (اختيارية)',
-                              helperText:
-                                  '6–128 حرفًا، أو اتركها للتوليد الآمن.',
+                            decoration: InputDecoration(
+                              labelText: (_ar
+                                  ? 'كلمة مرور المرافق (اختيارية)'
+                                  : 'Caregiver password (optional)'),
+                              helperText: (_ar
+                                  ? '6–128 حرفًا، أو اتركها للتوليد الآمن.'
+                                  : '6–128 characters, or leave empty to generate.'),
                               helperMaxLines: 2,
                               prefixIcon: Icon(Icons.lock_outline),
                             ),
@@ -1238,7 +1346,7 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  SizedBox(height: 24),
 
                   // Actions
                   OverflowBar(
@@ -1250,19 +1358,19 @@ class _AddPatientDialogState extends State<AddPatientDialog> {
                         onPressed: _busy
                             ? null
                             : () => Navigator.pop(context, false),
-                        child: const Text('إلغاء'),
+                        child: Text((_ar ? 'إلغاء' : 'Cancel')),
                       ),
                       FilledButton.icon(
                         onPressed: _busy ? null : _submit,
                         icon: _busy
-                            ? const SizedBox(
+                            ? SizedBox(
                                 width: 18,
                                 height: 18,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
                                 ),
                               )
-                            : const Icon(Icons.check, size: 18),
+                            : Icon(Icons.check, size: 18),
                         label: Text(
                           _busy ? 'جارٍ الإنشاء...' : 'حفظ وإنشاء السجل',
                         ),

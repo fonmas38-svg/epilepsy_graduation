@@ -97,10 +97,18 @@ class _PatientHistoryScreenState extends State<PatientHistoryScreen> {
     final db = app.db;
     return _HistoryData(
       profile: app.auth.patientById(pid),
-      assessments: await db.assessmentsFor(pid, limit: 500, serverOrigin: app.dataOrigin),
+      assessments: await db.assessmentsFor(
+        pid,
+        limit: 500,
+        serverOrigin: app.dataOrigin,
+      ),
       alerts: await db.alertsFor(pid, limit: 200, serverOrigin: app.dataOrigin),
       seizures: await db.seizureLogsFor(pid, limit: 200),
-      events: await db.predictionEventsFor(pid, limit: 200, serverOrigin: app.dataOrigin),
+      events: await db.predictionEventsFor(
+        pid,
+        limit: 200,
+        serverOrigin: app.dataOrigin,
+      ),
     );
   }
 
@@ -660,9 +668,9 @@ class _TimelineRow extends StatelessWidget {
                   ],
                   const SizedBox(height: 2),
                   Text(
-                    TimeAgo.stamp(event.at),
-                    style: const TextStyle(
-                      color: Color(0xFF9E9E9E),
+                    TimeAgo.stamp(event.at, AppLocalizations.of(context)),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                       fontSize: 11,
                     ),
                   ),

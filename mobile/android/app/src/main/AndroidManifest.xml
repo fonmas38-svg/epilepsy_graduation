@@ -10,11 +10,19 @@
     <!-- Best-effort location for the SOS feature (optional; SOS still fires if denied). -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Keeps seizure monitoring running with the screen off (persistent notification). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- Seizure alerts open over the lock screen (Android 14+ may require the user to allow it). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <!-- One-time prompt so battery saver does not stop monitoring or medication alarms. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <application
         android:label="Epilepsy Monitor"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true">
+        android:icon="@mipmap/ic_launcher">
+        <!-- Release builds are HTTPS-only (Android default since API 28).
+             Plain-HTTP local servers are allowed only in src/debug. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -42,6 +50,14 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <service
+            android:name=".MonitoringForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continuous on-device epileptic seizure detection from a wearable EEG stream; must keep running with the screen off to raise a life-safety alert." />
+        </service>
         <receiver
             android:exported="false"
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />

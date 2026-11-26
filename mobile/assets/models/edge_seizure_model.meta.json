@@ -1,0 +1,18 @@
+{
+  "arch": "EdgeSeizureNet",
+  "in_ch": 1,
+  "n_classes": 2,
+  "hidden_dim": 32,
+  "input_len": 262,
+  "fs": 256,
+  "channel": "eeg",
+  "task": "detection(ictal_vs_nonictal)",
+  "dataset": "bonn_edge",
+  "decision_threshold": 0.50,
+  "watch_threshold": 0.35,
+  "sensitivity": 0.9420,
+  "specificity": 0.9268,
+  "accuracy": 0.9304,
+  "f1_score": 0.8876,
+  "notes": "Lightweight 3-layer Conv1D + BiLSTM edge seizure detection network optimized for on-device/offline execution."
+}

@@ -1,3 +1,5 @@
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/risk_view.dart';
 import '../../core/utils/doctor_title_formatter.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -143,18 +145,20 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('تأكيد العملية'),
+        title: Text((ar ? 'تأكيد العملية' : 'Confirm action')),
         content: Text(
-          '$actionTitle\nسيتحقق الخادم من صلاحية حساب المشرف عند التنفيذ.',
+          ar
+              ? '$actionTitle\nسيتحقق الخادم من صلاحية حساب المشرف عند التنفيذ.'
+              : '$actionTitle\nThe server checks the administrator account when this runs.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('إلغاء'),
+            child: Text((ar ? 'إلغاء' : 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('متابعة'),
+            child: Text((ar ? 'متابعة' : 'Continue')),
           ),
         ],
       ),
@@ -179,10 +183,20 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     try {
       if (isDisabled) {
         await app.api.adminEnableUser(docId);
-        if (mounted) AppSnack.success(context, 'تم تفعيل حساب الطبيب بنجاح');
+        if (mounted) {
+          AppSnack.success(
+            context,
+            (ar ? 'تم تفعيل حساب الطبيب' : 'Doctor account enabled'),
+          );
+        }
       } else {
         await app.api.adminDisableUser(docId);
-        if (mounted) AppSnack.success(context, 'تم تعطيل حساب الطبيب بنجاح');
+        if (mounted) {
+          AppSnack.success(
+            context,
+            (ar ? 'تم تعطيل حساب الطبيب' : 'Doctor account disabled'),
+          );
+        }
       }
       await _load('users');
     } catch (e) {
@@ -199,7 +213,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     final docId = doctor['id']?.toString() ?? '';
     final name = doctor['name'] ?? doctor['username'] ?? '';
     final verified = await _requireAdminSecurityVerification(
-      'إعادة تعيين كلمة مرور الطبيب $name',
+      ar
+          ? 'إعادة تعيين كلمة مرور الطبيب $name'
+          : 'Reset the password of doctor $name',
     );
     if (!verified || !mounted) return;
 
@@ -211,39 +227,53 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         await showDialog<void>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('كلمة المرور المؤقتة الجديدة'),
+            title: Text(
+              (ar ? 'كلمة المرور المؤقتة الجديدة' : 'New temporary password'),
+            ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('تم توليد كلمة مرور جديدة للطبيب "$name":'),
+                Text(
+                  ar
+                      ? 'تم توليد كلمة مرور جديدة للطبيب "$name":'
+                      : 'A new password was generated for doctor "$name":',
+                ),
                 const SizedBox(height: 12),
                 SelectableText(
                   generated,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                     letterSpacing: 1.5,
-                    color: Color(0xFF0066FF),
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'يرجى نسخ كلمة المرور ومشاركتها مع الطبيب بشكل آمن. لن تظهر مجدداً.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                Text(
+                  ar
+                      ? 'يرجى نسخ كلمة المرور ومشاركتها مع الطبيب بشكل آمن. لن تظهر مجدداً.'
+                      : 'Copy the password and share it with the doctor securely. It will not be shown again.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
             actions: [
               FilledButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('تم الحفظ'),
+                child: Text((ar ? 'تم الحفظ' : 'Saved')),
               ),
             ],
           ),
         );
       } else {
-        AppSnack.success(context, 'تم إعادة تعيين كلمة المرور بنجاح');
+        AppSnack.success(
+          context,
+          (ar ? 'تمت إعادة تعيين كلمة المرور' : 'Password reset'),
+        );
       }
       await _loadAdminData();
     } catch (e) {
@@ -260,14 +290,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     final docId = doctor['id']?.toString() ?? '';
     final name = doctor['name'] ?? doctor['username'] ?? '';
     final verified = await _requireAdminSecurityVerification(
-      'الحذف النهائي لحساب الطبيب $name وإلغاء كافة إسناداته',
+      ar
+          ? 'الحذف النهائي لحساب الطبيب $name وإلغاء كافة إسناداته'
+          : 'Permanently delete doctor $name and remove all assignments',
     );
     if (!verified || !mounted) return;
 
     final app = context.read<AppState>();
     try {
       await app.api.adminDeleteUser(docId);
-      if (mounted) AppSnack.success(context, 'تم حذف حساب الطبيب نهائياً');
+      if (mounted) {
+        AppSnack.success(
+          context,
+          (ar ? 'تم حذف حساب الطبيب نهائياً' : 'Doctor account deleted'),
+        );
+      }
       await _loadAdminData();
     } catch (e) {
       if (mounted) {
@@ -283,7 +320,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     final docId = doctor['id']?.toString() ?? '';
     final name = doctor['name'] ?? doctor['username'] ?? '';
     final verified = await _requireAdminSecurityVerification(
-      'فك قفل الأجهزة والجلسات للحساب $name',
+      ar
+          ? 'فك قفل الأجهزة والجلسات للحساب $name'
+          : 'Unlock devices and sessions for $name',
     );
     if (!verified || !mounted) return;
 
@@ -293,7 +332,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       if (mounted) {
         AppSnack.success(
           context,
-          'تم إنهاء $revoked جلسة وفك قفل الجهاز بنجاح',
+          ar
+              ? 'تم إنهاء $revoked جلسة وفك قفل الجهاز'
+              : 'Ended $revoked sessions and unlocked the device',
         );
       }
       await _loadAdminData();
@@ -309,7 +350,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
   Future<void> _openAddDoctorDialog() async {
     final verified = await _requireAdminSecurityVerification(
-      'إضافة طبيب معالج جديد',
+      (ar ? 'إضافة طبيب معالج جديد' : 'Add a new treating doctor'),
     );
     if (!verified || !mounted) return;
 
@@ -397,7 +438,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         app.api.baseUrl != origin) {
       return;
     }
-    AppSnack.success(context, 'تم تسجيل الطبيب بنجاح');
+    AppSnack.success(context, (ar ? 'تم تسجيل الطبيب' : 'Doctor registered'));
     await _loadAdminData();
   }
 
@@ -532,7 +573,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           runSpacing: 8,
           children: [
             FilledButton.icon(
-              onPressed: _openAddDoctorDialog,
+              // Creating an account needs the server; offline it could only
+              // fail after the security check (same rule as «Create account»).
+              onPressed: context.read<AppState>().apiOnline
+                  ? _openAddDoctorDialog
+                  : null,
               icon: const Icon(Icons.person_add_outlined),
               label: Text(ar ? 'طبيب جديد' : 'New doctor'),
             ),
@@ -574,13 +619,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       children: [
                         CircleAvatar(
                           backgroundColor: isDisabled
-                              ? const Color(0xFFFEE2E2)
-                              : const Color(0xFFEFF6FF),
+                              ? AppColors.of(context, RiskView.danger).border
+                              : AppColors.accent(
+                                  context,
+                                  AccentTone.blue,
+                                ).container,
                           child: Icon(
                             Icons.medical_services_outlined,
                             color: isDisabled
-                                ? const Color(0xFFDC2626)
-                                : const Color(0xFF0066FF),
+                                ? AppColors.of(
+                                    context,
+                                    RiskView.danger,
+                                  ).foreground
+                                : Theme.of(context).colorScheme.primary,
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -617,17 +668,26 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                               vertical: 3,
                             ),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFFEE2E2),
+                              color: AppColors.of(
+                                context,
+                                RiskView.danger,
+                              ).container,
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: const Color(0xFFFCA5A5),
+                                color: AppColors.of(
+                                  context,
+                                  RiskView.danger,
+                                ).border,
                               ),
                             ),
                             child: Text(
                               ar ? 'معطّل' : 'Disabled',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
-                                color: Color(0xFFDC2626),
+                                color: AppColors.of(
+                                  context,
+                                  RiskView.danger,
+                                ).foreground,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -639,17 +699,26 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                               vertical: 3,
                             ),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFECFDF5),
+                              color: AppColors.accent(
+                                context,
+                                AccentTone.green,
+                              ).container,
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: const Color(0xFFA7F3D0),
+                                color: AppColors.of(
+                                  context,
+                                  RiskView.safe,
+                                ).border,
                               ),
                             ),
                             child: Text(
                               ar ? 'نشط' : 'Active',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
-                                color: Color(0xFF059669),
+                                color: AppColors.accent(
+                                  context,
+                                  AccentTone.green,
+                                ).foreground,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -668,18 +737,24 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.verified_outlined,
                                   size: 14,
-                                  color: Color(0xFF059669),
+                                  color: AppColors.accent(
+                                    context,
+                                    AccentTone.green,
+                                  ).foreground,
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
                                   'MOH: $license',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
-                                    color: Color(0xFF059669),
+                                    color: AppColors.accent(
+                                      context,
+                                      AccentTone.green,
+                                    ).foreground,
                                   ),
                                 ),
                               ],
@@ -698,9 +773,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                                 const SizedBox(width: 4),
                                 Text(
                                   spec,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
-                                    color: Color(0xFF475569),
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
                                   ),
                                 ),
                               ],
@@ -719,9 +796,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                                 const SizedBox(width: 4),
                                 Text(
                                   hospital,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
-                                    color: Color(0xFF475569),
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
                                   ),
                                 ),
                               ],
@@ -770,7 +849,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                           OutlinedButton.icon(
                             onPressed: () => _toggleDoctorDisabled(doctor),
                             style: OutlinedButton.styleFrom(
-                              foregroundColor: const Color(0xFFEA580C),
+                              foregroundColor: AppColors.of(
+                                context,
+                                RiskView.caution,
+                              ).foreground,
                             ),
                             icon: const Icon(Icons.block_outlined, size: 16),
                             label: Text(ar ? 'تعطيل' : 'Disable'),
@@ -778,9 +860,12 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                         IconButton(
                           tooltip: ar ? 'حذف الحساب نهائياً' : 'Delete account',
                           onPressed: () => _deleteDoctor(doctor),
-                          icon: const Icon(
+                          icon: Icon(
                             Icons.delete_forever_outlined,
-                            color: Color(0xFFDC2626),
+                            color: AppColors.of(
+                              context,
+                              RiskView.danger,
+                            ).foreground,
                           ),
                         ),
                       ],

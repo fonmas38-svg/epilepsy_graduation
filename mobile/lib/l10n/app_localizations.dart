@@ -113,6 +113,10 @@ class AppLocalizations {
   String get savedLocallyWillSync => _s('savedLocallyWillSync');
   String get pendingSync => _s('pendingSync');
   String get wakingCloudServer => _s('wakingCloudServer');
+  String get offlineLocalMode => _s('offlineLocalMode');
+  String get serverUnreachableMode => _s('serverUnreachableMode');
+  String get syncingNow => _s('syncingNow');
+  String get syncNow => _s('syncNow');
 
   // ------------------------------------------------------ risk states (§3.1)
   String get riskSafeTitle => _s('riskSafeTitle');
@@ -482,6 +486,7 @@ class AppLocalizations {
   String get respond => _s('respond');
   String get noPatientSelected => _s('noPatientSelected');
   String get locationUnavailable => _s('locationUnavailable');
+  String get locationPending => _s('locationPending');
   String get arrived => _s('arrived');
   String get alertTime => _s('alertTime');
   String get lastKnownStatus => _s('lastKnownStatus');
@@ -680,7 +685,7 @@ const Map<String, String> _ar = {
   'agoLabel': 'قبل {v}',
   'justNow': 'الآن',
 
-  'errNoConnection': 'لا يوجد اتصال. سنحاول تلقائياً.',
+  'errNoConnection': 'لا يوجد اتصال. تحقق من الإنترنت ثم أعد المحاولة.',
   'errTimeout': 'الخادم بطيء الاستجابة.',
   'errSessionExpired': 'انتهت الجلسة. سجّل الدخول مرة أخرى.',
   'errInvalidCredentials': 'اسم المستخدم أو كلمة المرور غير صحيحة.',
@@ -706,10 +711,16 @@ const Map<String, String> _ar = {
   'errorTitle': 'تعذّر إكمال العملية',
   'offlineTitle': 'غير متصل',
   'offlineSince': 'غير متصل — آخر تحديث {v}',
-  'offlineNoData': 'غير متصل ولا توجد بيانات محفوظة.',
+  'offlineNoData': 'غير متصل — لم تتم المزامنة بعد.',
   'savedLocallyWillSync': 'حُفظ على الجهاز، وسيُرسل عند عودة الاتصال.',
   'pendingSync': 'بانتظار المزامنة',
   'wakingCloudServer': 'جاري إيقاظ الخادم السحابي...',
+  'offlineLocalMode':
+      'الوضع المحلي (دون إنترنت): التطبيق يعمل على جهازك، وتُرسل البيانات عند عودة الاتصال.',
+  'serverUnreachableMode':
+      'تعذّر الوصول إلى الخادم — يعمل التطبيق محلياً وتُرسل البيانات لاحقاً.',
+  'syncingNow': 'عاد الاتصال — جارٍ إرسال البيانات المعلّقة...',
+  'syncNow': 'مزامنة الآن',
 
   'riskSafeTitle': 'الوضع مستقر',
   'riskSafeBody':
@@ -815,7 +826,7 @@ const Map<String, String> _ar = {
   'triggerIntensity': 'الشدة',
   'correlationTitle': 'تزامن المحفزات مع الأحداث',
   'correlationDisclaimer':
-      'ما يظهر هنا **تزامن** لا **سبب**. لا يصلح لاتخاذ قرار دوائي؛ اعرضه على طبيبك.',
+      'ما يظهر هنا «تزامن» لا «سبب». لا يصلح لاتخاذ قرار دوائي؛ اعرضه على طبيبك.',
   'coOccurrence': 'لوحظ تزامن في {n} حالة',
   'exportPdf': 'تصدير PDF',
   'exportCsv': 'تصدير CSV',
@@ -1081,6 +1092,7 @@ const Map<String, String> _ar = {
   'respond': 'استجابة',
   'noPatientSelected': 'لم يُحدَّد مريض.',
   'locationUnavailable': 'الموقع غير متوفر الآن.',
+  'locationPending': 'جارٍ تحديد الموقع، وسيُرسل فور توفره.',
   'arrived': 'وصلت',
   'alertTime': 'وقت التنبيه',
   'lastKnownStatus': 'آخر حالة معروفة',
@@ -1270,7 +1282,7 @@ const Map<String, String> _en = {
   'agoLabel': '{v} ago',
   'justNow': 'just now',
 
-  'errNoConnection': 'No connection. We will retry automatically.',
+  'errNoConnection': 'No connection. Check your internet and try again.',
   'errTimeout': 'The server is slow to respond.',
   'errSessionExpired': 'Your session expired. Please sign in again.',
   'errInvalidCredentials': 'Invalid username or password.',
@@ -1296,11 +1308,17 @@ const Map<String, String> _en = {
   'errorTitle': 'Could not complete that',
   'offlineTitle': 'Offline',
   'offlineSince': 'Offline — last update {v}',
-  'offlineNoData': 'Offline, and nothing stored locally.',
+  'offlineNoData': 'Offline — not synced yet.',
   'savedLocallyWillSync':
       'Saved on this device; it will sync when back online.',
   'pendingSync': 'Pending sync',
   'wakingCloudServer': 'Waking up cloud server...',
+  'offlineLocalMode':
+      'Local mode (no internet): the app keeps working on this device; data is sent when the connection returns.',
+  'serverUnreachableMode':
+      'Server unreachable — the app works locally and sends data later.',
+  'syncingNow': 'Back online — sending pending data...',
+  'syncNow': 'Sync now',
 
   'riskSafeTitle': 'Stable',
   'riskSafeBody':
@@ -1367,7 +1385,7 @@ const Map<String, String> _en = {
   'tabDevice': 'Device',
   'tabAlerts': 'Alerts',
   'tabHistory': 'History',
-  'tabMeds': 'Medication',
+  'tabMeds': 'Meds',
   'tabEmergency': 'Emergency',
 
   'activeAlertTitle': 'Active alert',
@@ -1407,7 +1425,7 @@ const Map<String, String> _en = {
   'triggerIntensity': 'Intensity',
   'correlationTitle': 'Triggers alongside events',
   'correlationDisclaimer':
-      'This shows **co-occurrence**, not **cause**. Do not change medication from it; show it to your doctor.',
+      'This shows co-occurrence, not cause. Do not change medication from it; show it to your doctor.',
   'coOccurrence': 'Co-occurred in {n} case(s)',
   'exportPdf': 'Export PDF',
   'exportCsv': 'Export CSV',
@@ -1676,6 +1694,8 @@ const Map<String, String> _en = {
   'respond': 'Respond',
   'noPatientSelected': 'No patient selected.',
   'locationUnavailable': 'Location is not available right now.',
+  'locationPending':
+      'Locating now; the position will follow as soon as it is available.',
   'arrived': 'Arrived',
   'alertTime': 'Alert time',
   'lastKnownStatus': 'Last known status',

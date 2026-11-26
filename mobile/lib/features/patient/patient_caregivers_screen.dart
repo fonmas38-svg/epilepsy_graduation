@@ -1,3 +1,5 @@
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/risk_view.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/enums.dart';
@@ -230,7 +232,7 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
               height: 50,
               child: FilledButton.icon(
                 style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF0066FF),
+                  backgroundColor: Theme.of(context).colorScheme.primary,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
@@ -315,12 +317,15 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
                             width: 44,
                             height: 44,
                             decoration: BoxDecoration(
-                              color: const Color(0xFFEFF6FF),
+                              color: AppColors.accent(
+                                context,
+                                AccentTone.blue,
+                              ).container,
                               borderRadius: BorderRadius.circular(14),
                             ),
-                            child: const Icon(
+                            child: Icon(
                               Icons.person_rounded,
-                              color: Color(0xFF0066FF),
+                              color: Theme.of(context).colorScheme.primary,
                               size: 24,
                             ),
                           ),
@@ -360,13 +365,25 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
                             ),
                             decoration: BoxDecoration(
                               color: isAccountDisabled || isDisabled
-                                  ? const Color(0xFFFFF1F2)
-                                  : const Color(0xFFECFDF5),
+                                  ? AppColors.accent(
+                                      context,
+                                      AccentTone.red,
+                                    ).container
+                                  : AppColors.accent(
+                                      context,
+                                      AccentTone.green,
+                                    ).container,
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(
                                 color: isAccountDisabled || isDisabled
-                                    ? const Color(0xFFFECDD3)
-                                    : const Color(0xFFA7F3D0),
+                                    ? AppColors.of(
+                                        context,
+                                        RiskView.danger,
+                                      ).border
+                                    : AppColors.of(
+                                        context,
+                                        RiskView.safe,
+                                      ).border,
                               ),
                             ),
                             child: Text(
@@ -379,8 +396,14 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
                                 color: isAccountDisabled || isDisabled
-                                    ? const Color(0xFFE11D48)
-                                    : const Color(0xFF059669),
+                                    ? AppColors.of(
+                                        context,
+                                        RiskView.danger,
+                                      ).foreground
+                                    : AppColors.accent(
+                                        context,
+                                        AccentTone.green,
+                                      ).foreground,
                               ),
                             ),
                           ),
@@ -452,7 +475,7 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
                               ),
                               side: BorderSide(
                                 color: isDisabled
-                                    ? const Color(0xFF0066FF)
+                                    ? Theme.of(context).colorScheme.primary
                                     : Theme.of(
                                         context,
                                       ).colorScheme.outlineVariant,
@@ -468,7 +491,7 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
                                   : Icons.pause_rounded,
                               size: 16,
                               color: isDisabled
-                                  ? const Color(0xFF0066FF)
+                                  ? Theme.of(context).colorScheme.primary
                                   : null,
                             ),
                             label: Text(
@@ -478,7 +501,7 @@ class _PatientCaregiversScreenState extends State<PatientCaregiversScreen> {
                               style: TextStyle(
                                 fontSize: 13,
                                 color: isDisabled
-                                    ? const Color(0xFF0066FF)
+                                    ? Theme.of(context).colorScheme.primary
                                     : null,
                               ),
                             ),

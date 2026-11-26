@@ -44,7 +44,9 @@ class SettingsService extends ChangeNotifier {
   int _quietEndMinutes = 7 * 60;
   bool _notifyFamilyOnCaution = false;
   bool _shareLocationOnAlert = true;
-  bool _autoLockEnabled = true;
+
+  /// Null until the user chooses; the default then depends on the role.
+  bool? _autoLockChoice;
   int _autoLockMinutes = 5;
 
   /// The currently-loaded horizon (minutes). Read synchronously after [load];
@@ -64,14 +66,22 @@ class SettingsService extends ChangeNotifier {
   bool get quietHoursEnabled => _quietHoursEnabled;
   int get quietStartMinutes => _quietStartMinutes;
   int get quietEndMinutes => _quietEndMinutes;
-  TimeOfDay get quietStart =>
-      TimeOfDay(hour: _quietStartMinutes ~/ 60, minute: _quietStartMinutes % 60);
+  TimeOfDay get quietStart => TimeOfDay(
+    hour: _quietStartMinutes ~/ 60,
+    minute: _quietStartMinutes % 60,
+  );
   TimeOfDay get quietEnd =>
       TimeOfDay(hour: _quietEndMinutes ~/ 60, minute: _quietEndMinutes % 60);
 
   bool get notifyFamilyOnCaution => _notifyFamilyOnCaution;
   bool get shareLocationOnAlert => _shareLocationOnAlert;
-  bool get autoLockEnabled => _autoLockEnabled;
+  bool get autoLockEnabled => _autoLockChoice ?? true;
+
+  /// Patients: off unless chosen. Their phone's own lock protects it, and an
+  /// app lock in front of «I feel a seizure coming» costs more than it saves.
+  /// Clinical roles see many patients' records: on unless turned off.
+  bool autoLockFor(UserRole? role) =>
+      _autoLockChoice ?? (role != UserRole.patient);
   int get autoLockMinutes => _autoLockMinutes;
   Duration get autoLockTimeout => Duration(minutes: _autoLockMinutes);
 
@@ -104,7 +114,7 @@ class SettingsService extends ChangeNotifier {
       );
       _notifyFamilyOnCaution = prefs.getBool(_notifyCautionKey) ?? false;
       _shareLocationOnAlert = prefs.getBool(_shareLocationKey) ?? true;
-      _autoLockEnabled = prefs.getBool(_autoLockEnabledKey) ?? true;
+      _autoLockChoice = prefs.getBool(_autoLockEnabledKey);
       final lockM = prefs.getInt(_autoLockMinutesKey);
       if (lockM != null) {
         _autoLockMinutes = _clampAutoLockMinutes(lockM);
@@ -168,7 +178,7 @@ class SettingsService extends ChangeNotifier {
   }
 
   Future<void> setAutoLockEnabled(bool value) async {
-    _autoLockEnabled = value;
+    _autoLockChoice = value;
     await _write((p) => p.setBool(_autoLockEnabledKey, value));
   }
 

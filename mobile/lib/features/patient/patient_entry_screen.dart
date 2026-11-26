@@ -1,3 +1,5 @@
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/risk_view.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/errors/failure.dart';
@@ -142,8 +144,8 @@ class PatientEntryScreen extends StatelessWidget {
             const SizedBox(height: 24),
             option(
               icon: Icons.bolt_rounded,
-              iconColor: const Color(0xFFE11D48),
-              iconBgColor: const Color(0xFFFFF1F2),
+              iconColor: AppColors.of(context, RiskView.danger).foreground,
+              iconBgColor: AppColors.accent(context, AccentTone.red).container,
               title: ar
                   ? 'توثيق نوبة تمت ملاحظتها'
                   : 'Document an observed seizure',
@@ -155,8 +157,14 @@ class PatientEntryScreen extends StatelessWidget {
             const SizedBox(height: 14),
             option(
               icon: Icons.psychology_outlined,
-              iconColor: const Color(0xFFD97706),
-              iconBgColor: const Color(0xFFFEF3C7),
+              iconColor: AppColors.accent(
+                context,
+                AccentTone.orange,
+              ).foreground,
+              iconBgColor: AppColors.accent(
+                context,
+                AccentTone.orange,
+              ).container,
               title: ar ? 'محفز أو ملاحظة' : 'Trigger or note',
               description: ar
                   ? 'سجّل النوم أو الإجهاد أو ملاحظة أخرى.'
@@ -166,8 +174,8 @@ class PatientEntryScreen extends StatelessWidget {
             const SizedBox(height: 14),
             option(
               icon: Icons.medication_rounded,
-              iconColor: const Color(0xFF0066FF),
-              iconBgColor: const Color(0xFFEFF6FF),
+              iconColor: Theme.of(context).colorScheme.primary,
+              iconBgColor: AppColors.accent(context, AccentTone.blue).container,
               title: ar ? 'تناول دواء' : 'Medication taken',
               description: ar
                   ? 'اختر الجرعة من جدول الأدوية لتسجيل تناولها.'
@@ -388,12 +396,15 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                         Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFEFF6FF),
+                            color: AppColors.accent(
+                              context,
+                              AccentTone.blue,
+                            ).container,
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Icon(
+                          child: Icon(
                             Icons.calendar_today_rounded,
-                            color: Color(0xFF0066FF),
+                            color: Theme.of(context).colorScheme.primary,
                             size: 20,
                           ),
                         ),
@@ -414,7 +425,10 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                TimeAgo.stamp(_occurredAt),
+                                TimeAgo.stamp(
+                                  _occurredAt,
+                                  AppLocalizations.of(context),
+                                ),
                                 style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,
@@ -426,9 +440,9 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                             ],
                           ),
                         ),
-                        const Icon(
+                        Icon(
                           Icons.edit_calendar_rounded,
-                          color: Color(0xFF0066FF),
+                          color: Theme.of(context).colorScheme.primary,
                           size: 20,
                         ),
                       ],
@@ -449,9 +463,9 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                     fontSize: 14,
                   ),
-                  prefixIcon: const Icon(
+                  prefixIcon: Icon(
                     Icons.timer_outlined,
-                    color: Color(0xFF0066FF),
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                   filled: true,
                   fillColor: Theme.of(context).colorScheme.surfaceContainerLow,
@@ -464,22 +478,22 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF0066FF),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.primary,
                       width: 1.5,
                     ),
                   ),
                   errorBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(
-                      color: Color(0xFFE11D48),
+                    borderSide: BorderSide(
+                      color: AppColors.of(context, RiskView.danger).foreground,
                       width: 1.2,
                     ),
                   ),
                   focusedErrorBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(
-                      color: Color(0xFFE11D48),
+                    borderSide: BorderSide(
+                      color: AppColors.of(context, RiskView.danger).foreground,
                       width: 1.5,
                     ),
                   ),
@@ -507,9 +521,9 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                     fontSize: 14,
                   ),
-                  prefixIcon: const Icon(
+                  prefixIcon: Icon(
                     Icons.bubble_chart_outlined,
-                    color: Color(0xFF0066FF),
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                   filled: true,
                   fillColor: Theme.of(context).colorScheme.surfaceContainerLow,
@@ -522,8 +536,8 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF0066FF),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.primary,
                       width: 1.5,
                     ),
                   ),
@@ -564,9 +578,12 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                     fontSize: 14,
                   ),
                   alignLabelWithHint: true,
-                  prefixIcon: const Padding(
+                  prefixIcon: Padding(
                     padding: EdgeInsets.only(bottom: 60),
-                    child: Icon(Icons.notes_rounded, color: Color(0xFF0066FF)),
+                    child: Icon(
+                      Icons.notes_rounded,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
                   ),
                   filled: true,
                   fillColor: Theme.of(context).colorScheme.surfaceContainerLow,
@@ -579,8 +596,8 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF0066FF),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.primary,
                       width: 1.5,
                     ),
                   ),
@@ -593,7 +610,8 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                 height: 52,
                 child: FilledButton.icon(
                   style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF0066FF),
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -601,12 +619,12 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                   ),
                   onPressed: _busy ? null : _save,
                   icon: _busy
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 20,
                           height: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: Colors.white,
+                            color: Theme.of(context).colorScheme.onPrimary,
                           ),
                         )
                       : const Icon(
@@ -615,10 +633,10 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                         ),
                   label: Text(
                     ar ? 'حفظ البلاغ' : 'Save report',
+                    // Colour comes from foregroundColor (onPrimary).
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.white,
                     ),
                   ),
                 ),

@@ -105,7 +105,13 @@ def _trim(conn: Connection, table, patient_id: str, keep: int) -> None:
 
 def _persist_monitoring_row(conn: Connection, table, values: dict) -> tuple[dict, bool]:
     """Retry-safe insert; never disclose or overwrite another patient's row."""
-    inserted = conn.execute(upsert(table, values).on_conflict_do_nothing(index_elements=["id"]))
+    # RETURNING, not rowcount: rowcount after ON CONFLICT is not a reliable
+    # «was a row written» signal across drivers (it broke on PostgreSQL CI).
+    inserted = conn.execute(
+        upsert(table, values)
+        .on_conflict_do_nothing(index_elements=["id"])
+        .returning(table.c.id)
+    ).first() is not None
     row = conn.execute(select(table).where(table.c.id == values["id"])).one()
     if row._mapping["patient_id"] != values["patient_id"]:
         raise ValueError("Monitoring id is already in use")
@@ -114,7 +120,7 @@ def _persist_monitoring_row(conn: Connection, table, values: dict) -> tuple[dict
     ignored = {"synced", "acknowledged", "acknowledgedBy", "acknowledgments"}
     if any(saved.get(key) != value for key, value in incoming.items() if key not in ignored):
         raise ValueError("Monitoring id is already in use with different content")
-    return saved, inserted.rowcount == 1
+    return saved, inserted
 
 
 def _add_reading(

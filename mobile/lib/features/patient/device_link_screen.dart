@@ -1,3 +1,5 @@
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/risk_view.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/errors/failure.dart';
@@ -257,8 +259,14 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
                   const SizedBox(height: 14),
                   FilledButton.icon(
                     style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF0F7A4D),
-                      foregroundColor: Colors.white,
+                      backgroundColor: AppColors.of(
+                        context,
+                        RiskView.safe,
+                      ).solid,
+                      foregroundColor: AppColors.of(
+                        context,
+                        RiskView.safe,
+                      ).onSolid,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                     onPressed: () =>
@@ -300,8 +308,14 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: app.apiOnline
-                          ? const Color(0xFFE8F5E9)
-                          : const Color(0xFFFFF3E0),
+                          ? AppColors.accent(
+                              context,
+                              AccentTone.green,
+                            ).container
+                          : AppColors.accent(
+                              context,
+                              AccentTone.orange,
+                            ).container,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
@@ -309,8 +323,8 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
                           ? Icons.verified_user_outlined
                           : Icons.cloud_off_outlined,
                       color: app.apiOnline
-                          ? const Color(0xFF0F7A4D)
-                          : const Color(0xFF9A6400),
+                          ? AppColors.of(context, RiskView.safe).foreground
+                          : AppColors.of(context, RiskView.caution).foreground,
                       size: 22,
                     ),
                   ),
@@ -343,8 +357,14 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
                             fontSize: 14,
                             fontWeight: FontWeight.bold,
                             color: app.apiOnline
-                                ? const Color(0xFF0F7A4D)
-                                : const Color(0xFF9A6400),
+                                ? AppColors.of(
+                                    context,
+                                    RiskView.safe,
+                                  ).foreground
+                                : AppColors.of(
+                                    context,
+                                    RiskView.caution,
+                                  ).foreground,
                           ),
                         ),
                       ],

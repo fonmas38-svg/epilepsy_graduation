@@ -211,7 +211,11 @@ class _AlertResponseScreenState extends State<AlertResponseScreen> {
         if (a.id == wanted && a.patientId == pid) return a;
       }
     }
-    final rows = await app.db.alertsFor(pid, limit: 100, serverOrigin: app.dataOrigin);
+    final rows = await app.db.alertsFor(
+      pid,
+      limit: 100,
+      serverOrigin: app.dataOrigin,
+    );
     if (wanted != null) {
       for (final a in rows) {
         if (a.id == wanted && a.patientId == pid) return a;
@@ -490,6 +494,8 @@ class _Body extends StatelessWidget {
         children: [
           OfflineBanner(
             visible: !app.apiOnline,
+            mode: app.operatingMode,
+            onSyncNow: app.syncNow,
             lastUpdateLabel: care.lastSyncedAt == null
                 ? null
                 : TimeAgo.since(care.lastSyncedAt, l),
@@ -599,7 +605,7 @@ class _Headline extends StatelessWidget {
               RiskBadge(view: s.view, labelOverride: s.label),
               const Spacer(),
               Text(
-                TimeAgo.clock(alert.timestamp),
+                TimeAgo.clock(alert.timestamp, AppLocalizations.of(context)),
                 style: theme.textTheme.labelLarge?.copyWith(
                   color: tone.foreground,
                 ),
@@ -631,7 +637,7 @@ class _Headline extends StatelessWidget {
           Gap.vXs,
           LabeledValue(
             label: l.alertTime,
-            value: TimeAgo.stamp(alert.timestamp),
+            value: TimeAgo.stamp(alert.timestamp, AppLocalizations.of(context)),
             icon: Icons.schedule_outlined,
           ),
         ],
@@ -1015,7 +1021,7 @@ class _DocumentSection extends StatelessWidget {
                   '${seizureDurationLabel(s.durationSeconds, l)}',
                 ),
                 subtitle: Text(
-                  TimeAgo.stamp(s.occurredAt),
+                  TimeAgo.stamp(s.occurredAt, AppLocalizations.of(context)),
                   style: theme.textTheme.labelSmall,
                 ),
               ),
@@ -1238,7 +1244,11 @@ class _CaregiverMedicalCardSection extends StatelessWidget {
             OutlinedButton.icon(
               onPressed: () => onDial(card.doctorPhone),
               icon: const Icon(Icons.phone),
-              label: Text('اتصال بالطبيب المعالج (${card.doctorPhone})'),
+              label: Text(
+                AppLocalizations.of(context).isArabic
+                    ? 'اتصال بالطبيب المعالج (${card.doctorPhone})'
+                    : 'Call the treating doctor (${card.doctorPhone})',
+              ),
             ),
           ],
         ],

@@ -150,15 +150,20 @@ abstract final class AppTheme {
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           minimumSize: const Size(64, A11y.minTouchTarget),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-          backgroundColor: const Color(0xFF0066FF),
+          // No fixed background: it overrode tonal buttons (dark text on
+          // bright blue) and the dark theme's primary. The scheme decides.
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(64, A11y.minTouchTarget),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           side: BorderSide(
             color: dark ? scheme.outlineVariant : const Color(0xFFE4EDF7),
             width: 1.2,

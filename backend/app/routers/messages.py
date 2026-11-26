@@ -1,6 +1,7 @@
 """Router for clinical and family messaging channels and patient location sharing."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -40,6 +41,11 @@ class LocationShareRequest(BaseModel):
     longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
     accuracy: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     note: str | None = Field(default=None, max_length=500)
+    # Which acquisition path produced the fix, so caregivers can tell a live
+    # device-GPS position from a network estimate or a remembered one.
+    source: Literal["device_gps", "fused_network", "cached_fix"] | None = None
+    # When the fix was captured on the phone (may be older than the share).
+    captured_at: datetime | None = None
 
 
 def _enforce_channel_rbac(role: str | None, channel_type: str | None, *, is_write: bool) -> str | None:
@@ -211,6 +217,8 @@ def share_location(
         "updatedAt": messages_store._now(),
         "mapsUrl": f"https://maps.google.com/?q={body.latitude:.6f},{body.longitude:.6f}",
         "note": body.note,
+        "source": body.source,
+        "capturedAt": body.captured_at.isoformat() if body.captured_at else None,
     }
 
     patient = cloud_store.get_patient(patient_id) or {}

@@ -25,18 +25,18 @@ enum SeizurePhase {
 
 extension SeizurePhaseX on SeizurePhase {
   RiskLabel get riskLabel => switch (this) {
-        SeizurePhase.interictal => RiskLabel.stable,
-        SeizurePhase.preIctal => RiskLabel.watch,
-        SeizurePhase.ictal => RiskLabel.highRisk,
-        SeizurePhase.postIctal => RiskLabel.stable,
-      };
+    SeizurePhase.interictal => RiskLabel.stable,
+    SeizurePhase.preIctal => RiskLabel.watch,
+    SeizurePhase.ictal => RiskLabel.highRisk,
+    SeizurePhase.postIctal => RiskLabel.stable,
+  };
 
   String get arabicLabel => switch (this) {
-        SeizurePhase.interictal => 'بين النوبات',
-        SeizurePhase.preIctal => 'ما قبل النوبة',
-        SeizurePhase.ictal => 'أثناء النوبة',
-        SeizurePhase.postIctal => 'ما بعد النوبة',
-      };
+    SeizurePhase.interictal => 'بين النوبات',
+    SeizurePhase.preIctal => 'ما قبل النوبة',
+    SeizurePhase.ictal => 'أثناء النوبة',
+    SeizurePhase.postIctal => 'ما بعد النوبة',
+  };
 }
 
 /// Controls progression through a complete seizure cycle.
@@ -135,13 +135,17 @@ class SignalSimulator {
           hr = 70 + _n(3);
         case RiskLabel.watch:
           eeg.add(0.7 * sin(12 * t) + _n(0.25));
-          ecg.add(_synthesizeEcg(t, rate: 2.8, noise: 0.05, ampMultiplier: 1.15));
+          ecg.add(
+            _synthesizeEcg(t, rate: 2.8, noise: 0.05, ampMultiplier: 1.15),
+          );
           motion.add(0.45 * sin(3 * t) + _n(0.2));
           hr = 95 + _n(6);
         case RiskLabel.highRisk:
           final burst = sin(25 * t) > 0.6 ? 0.8 : 0.0;
           eeg.add(1.4 * sin(20 * t) + burst + _n(0.35));
-          ecg.add(_synthesizeEcg(t, rate: 3.8, noise: 0.08, ampMultiplier: 1.3));
+          ecg.add(
+            _synthesizeEcg(t, rate: 3.8, noise: 0.08, ampMultiplier: 1.3),
+          );
           motion.add(1.2 * sin(10 * t).abs() + _n(0.5));
           hr = 125 + _n(10);
       }
@@ -170,7 +174,11 @@ class SignalSimulator {
     if (phase == SeizurePhase.postIctal) {
       return _generatePostIctal(patientId: patientId, samples: samples);
     }
-    return generate(patientId: patientId, pattern: phase.riskLabel, samples: samples);
+    return generate(
+      patientId: patientId,
+      pattern: phase.riskLabel,
+      samples: samples,
+    );
   }
 
   /// Post-ictal: slow delta waves, suppressed amplitude, HR below normal.
@@ -224,9 +232,23 @@ class SignalSimulator {
     for (var i = 0; i < samples; i++) {
       final t = (_sampleIndex + i) / sampleRateHz * 2 * pi;
       final burst = sin(25 * t) > 0.6 ? 0.8 * p : 0.0;
-      eeg.add(_lerp(0.4, 1.4, p) * sin(_lerp(8, 20, p) * t) + burst + _n(0.1 + 0.25 * p));
-      ecg.add(_synthesizeEcg(t, rate: _lerp(2.2, 3.8, p), noise: 0.03 + 0.05 * p, ampMultiplier: _lerp(1.0, 1.3, p)));
-      motion.add(_lerp(0.0, 1.2, p) * sin(_lerp(3, 10, p) * t).abs() + _n(0.15 + 0.35 * p));
+      eeg.add(
+        _lerp(0.4, 1.4, p) * sin(_lerp(8, 20, p) * t) +
+            burst +
+            _n(0.1 + 0.25 * p),
+      );
+      ecg.add(
+        _synthesizeEcg(
+          t,
+          rate: _lerp(2.2, 3.8, p),
+          noise: 0.03 + 0.05 * p,
+          ampMultiplier: _lerp(1.0, 1.3, p),
+        ),
+      );
+      motion.add(
+        _lerp(0.0, 1.2, p) * sin(_lerp(3, 10, p) * t).abs() +
+            _n(0.15 + 0.35 * p),
+      );
       hr = _lerp(70, 125, p) + _n(3 + 7 * p);
     }
     _sampleIndex += samples;
@@ -280,7 +302,6 @@ class SignalSimulator {
 
 String encodeSignal(List<double> values) => jsonEncode(values);
 
-List<double> decodeSignal(String raw) =>
-    List<double>.from((jsonDecode(raw) as List).map((e) => (e as num).toDouble()));
-
-
+List<double> decodeSignal(String raw) => List<double>.from(
+  (jsonDecode(raw) as List).map((e) => (e as num).toDouble()),
+);

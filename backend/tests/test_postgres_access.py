@@ -16,7 +16,8 @@ def test_postgres_head_and_all_clinical_tables_have_rls():
         assert conn.dialect.name == "postgresql"
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261124_12"
         rows = conn.execute(text("SELECT relname, relrowsecurity FROM pg_class JOIN pg_namespace n ON n.oid = relnamespace WHERE n.nspname = 'public' AND relkind = 'r'"))
-        enabled = dict(rows)
+        # dict(rows) treats the result as a mapping (it has keys()) and fails.
+        enabled = {name: secure for name, secure in rows.all()}
     for name in metadata.tables:
         assert enabled.get(name), f"RLS missing: {name}"
 

@@ -30,6 +30,17 @@ class RiskColors {
   final Color onSolid;
 }
 
+/// Decorative hue families for icon squircles (no clinical meaning).
+enum AccentTone { blue, indigo, red, orange, green, slate }
+
+/// A pastel [container] and a [foreground] legible on it (≥ 4.5:1).
+@immutable
+class AccentColors {
+  const AccentColors(this.container, this.foreground);
+  final Color container;
+  final Color foreground;
+}
+
 /// Semantic palette from `docs/frontend-plan-ar.md` §2.4.
 ///
 /// **The critical rule (§2.4, §7):** colour never carries meaning alone. Every
@@ -128,6 +139,36 @@ abstract final class AppColors {
   /// Palette for [view] resolved against the ambient theme.
   static RiskColors of(BuildContext context, RiskView view) =>
       resolve(view, Theme.of(context).brightness);
+
+  // ------------------------------------------------------- decorative accents
+  // Pastel squircles behind icons (quick actions, menu rows, avatars). These
+  // carry no risk meaning, so they live apart from RiskColors. Every pair is
+  // ≥ 4.5:1 in both themes (light: design-system §2.3 values; dark: tinted
+  // containers with lightened foregrounds), so no screen hardcodes a pastel
+  // that turns into a glaring light square in dark mode.
+  static const _accentLight = {
+    AccentTone.blue: AccentColors(Color(0xFFEBF3FF), Color(0xFF1565C0)),
+    AccentTone.indigo: AccentColors(Color(0xFFEEF0FA), Color(0xFF3949AB)),
+    AccentTone.red: AccentColors(Color(0xFFFFEEEE), Color(0xFFC62828)),
+    AccentTone.orange: AccentColors(Color(0xFFFFF3E0), Color(0xFFA35200)),
+    AccentTone.green: AccentColors(Color(0xFFE8F5E9), Color(0xFF2E7D32)),
+    AccentTone.slate: AccentColors(Color(0xFFF0F4F8), Color(0xFF455A64)),
+  };
+  static const _accentDark = {
+    AccentTone.blue: AccentColors(Color(0xFF15294A), Color(0xFF8AB8FF)),
+    AccentTone.indigo: AccentColors(Color(0xFF1E2347), Color(0xFFAFB8F6)),
+    AccentTone.red: AccentColors(Color(0xFF3A1416), Color(0xFFFF9A92)),
+    AccentTone.orange: AccentColors(Color(0xFF33260A), Color(0xFFFCC366)),
+    AccentTone.green: AccentColors(Color(0xFF10301F), Color(0xFF7BE3AE)),
+    AccentTone.slate: AccentColors(Color(0xFF232B36), Color(0xFFBCC5D2)),
+  };
+
+  static AccentColors accentResolve(AccentTone tone, Brightness brightness) =>
+      (brightness == Brightness.dark ? _accentDark : _accentLight)[tone]!;
+
+  /// Decorative accent for [tone] in the ambient theme.
+  static AccentColors accent(BuildContext context, AccentTone tone) =>
+      accentResolve(tone, Theme.of(context).brightness);
 
   /// The icon that must accompany [view]. Half of the «colour + icon + text»
   /// rule — see the class doc.

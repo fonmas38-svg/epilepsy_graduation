@@ -75,11 +75,17 @@ class SecureStore {
 
   Future<void> deleteSecret(String key) => _storage.delete(key: key);
 
-  Future<String> readOrCreateSecret(String key, {int byteLength = 32, bool allowCreate = true}) async {
+  Future<String> readOrCreateSecret(
+    String key, {
+    int byteLength = 32,
+    bool allowCreate = true,
+  }) async {
     final existing = await readSecret(key);
     if (existing != null && existing.isNotEmpty) return existing;
     if (!allowCreate) {
-      throw StateError('The existing database key is unavailable; recovery is required');
+      throw StateError(
+        'The existing database key is unavailable; recovery is required',
+      );
     }
     final rng = Random.secure();
     final bytes = List<int>.generate(byteLength, (_) => rng.nextInt(256));

@@ -30,7 +30,13 @@ class MonitoringService {
     this.useBackgroundIsolate = true,
   }) : simulator = simulator ?? SignalSimulator(),
        _injectedDevice = device,
-       _deviceFactory = deviceFactory;
+       _deviceFactory = deviceFactory {
+    sync.dataSourceOf = () => switch (source) {
+      SignalSource.simulator => 'simulation',
+      SignalSource.dataset => 'dataset',
+      SignalSource.headDevice => 'device',
+    };
+  }
 
   final LocalDatabase db;
   final SignalSimulator simulator;
@@ -395,7 +401,11 @@ class MonitoringService {
         _applyPrediction(
           _usable(assessment) ? PredictionState.fromMap(rawPred) : null,
         );
-        if (packet.sourceLabel == 'server_device_hub') {
+        // The server also raises alerts for recorded-data windows: pull
+        // them too, or the alerts tab stays empty while monitoring shows
+        // «high likelihood».
+        if (packet.sourceLabel == 'server_device_hub' ||
+            packet.sourceLabel == 'dataset_player') {
           for (final alert in await sync.pullCloudAlerts(patientId)) {
             await db.insertAlert(alert);
           }

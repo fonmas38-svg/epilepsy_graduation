@@ -1,3 +1,4 @@
+import '../../core/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/router/route_names.dart';
@@ -87,12 +88,15 @@ class ConsentsScreen extends StatelessWidget {
                         width: 42,
                         height: 42,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFEFF6FF),
+                          color: AppColors.accent(
+                            context,
+                            AccentTone.blue,
+                          ).container,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.people_outline_rounded,
-                          color: Color(0xFF0066FF),
+                          color: Theme.of(context).colorScheme.primary,
                           size: 22,
                         ),
                       ),
@@ -127,7 +131,7 @@ class ConsentsScreen extends StatelessWidget {
                     height: 50,
                     child: FilledButton.icon(
                       style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF0066FF),
+                        backgroundColor: Theme.of(context).colorScheme.primary,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
@@ -174,12 +178,18 @@ class ConsentsScreen extends StatelessWidget {
                         width: 42,
                         height: 42,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFEF3C7),
+                          color: AppColors.accent(
+                            context,
+                            AccentTone.orange,
+                          ).container,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.shield_outlined,
-                          color: Color(0xFFD97706),
+                          color: AppColors.accent(
+                            context,
+                            AccentTone.orange,
+                          ).foreground,
                           size: 22,
                         ),
                       ),

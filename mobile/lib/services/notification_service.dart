@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data' show Int64List;
 import 'dart:io' show Platform;
 
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -11,6 +12,11 @@ import 'package:timezone/timezone.dart' as tz;
 import '../core/config.dart';
 import 'alert_reception_gate.dart';
 
+/// Separate Android channels so muting one category (e.g. medication reminders)
+/// can never silence a seizure alert. Channel ids are persistent on Android:
+/// once created their importance cannot be changed from code, so never rename.
+enum NotificationChannelKind { seizureAlert, preAlert, medication }
+
 /// Abstraction over OS local notification scheduling so headless tests can run
 /// without invoking Windows FFI DLLs or Android/iOS platform channels.
 abstract class LocalNotificationGateway {
@@ -21,6 +27,7 @@ abstract class LocalNotificationGateway {
     required String title,
     required String body,
     String? payload,
+    NotificationChannelKind channel = NotificationChannelKind.medication,
   });
   Future<void> zonedSchedule({
     required int id,
@@ -42,6 +49,50 @@ class FlutterLocalNotificationsGateway implements LocalNotificationGateway {
 
   static bool _tzInitialized = false;
 
+  AndroidFlutterLocalNotificationsPlugin? get _android =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+      ? _plugin
+            ?.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >()
+      : null;
+
+  /// Whether the OS lets this app post notifications; null when unknown
+  /// (not Android, or the plugin is unavailable).
+  Future<bool?> notificationsEnabled() async {
+    try {
+      return await _android?.areNotificationsEnabled();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Whether reminders can fire at the exact minute; null when unknown.
+  Future<bool?> canScheduleExact() async {
+    try {
+      return await _android?.canScheduleExactNotifications();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Shows the system notification prompt; null when Android cannot ask
+  /// (refused before: only settings can re-enable it).
+  Future<bool?> requestNotifications() async {
+    try {
+      return await _android?.requestNotificationsPermission();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Opens the system «Alarms & reminders» page for this app (Android 12+).
+  Future<void> requestExactAlarms() async {
+    try {
+      await _android?.requestExactAlarmsPermission();
+    } catch (_) {}
+  }
+
   static void ensureTimeZonesInitialized() {
     if (_tzInitialized) return;
     tz_data.initializeTimeZones();
@@ -57,17 +108,51 @@ class FlutterLocalNotificationsGateway implements LocalNotificationGateway {
     }
   }
 
-  NotificationDetails _details() => const NotificationDetails(
-    android: AndroidNotificationDetails(
+  static AndroidNotificationDetails _androidDetails(
+    NotificationChannelKind channel,
+  ) => switch (channel) {
+    NotificationChannelKind.seizureAlert => AndroidNotificationDetails(
+      'seizure_alerts',
+      'Seizure Alerts',
+      channelDescription: 'Critical seizure and SOS alerts',
+      importance: Importance.max,
+      priority: Priority.max,
+      category: AndroidNotificationCategory.alarm,
+      playSound: true,
+      enableVibration: true,
+      vibrationPattern: Int64List.fromList([0, 800, 400, 800, 400, 800]),
+      ticker: 'Seizure alert',
+      // Opens the alert over the lock screen (MainActivity honours this only
+      // for `alert:` payloads). Android 14+ users can revoke it; the app then
+      // falls back to a heads-up notification and says so in settings.
+      fullScreenIntent: true,
+    ),
+    NotificationChannelKind.preAlert => const AndroidNotificationDetails(
+      'seizure_prealerts',
+      'Seizure Pre-Alerts',
+      channelDescription: 'Early seizure-risk warnings with cancel window',
+      importance: Importance.max,
+      priority: Priority.high,
+      category: AndroidNotificationCategory.alarm,
+      playSound: true,
+      enableVibration: true,
+    ),
+    NotificationChannelKind.medication => const AndroidNotificationDetails(
       'medication_reminders',
       'Medication Reminders',
       channelDescription: 'Scheduled anti-epileptic medication reminders',
       importance: Importance.max,
       priority: Priority.high,
     ),
-    iOS: DarwinNotificationDetails(),
-    macOS: DarwinNotificationDetails(),
-    windows: WindowsNotificationDetails(),
+  };
+
+  NotificationDetails _details([
+    NotificationChannelKind channel = NotificationChannelKind.medication,
+  ]) => NotificationDetails(
+    android: _androidDetails(channel),
+    iOS: const DarwinNotificationDetails(),
+    macOS: const DarwinNotificationDetails(),
+    windows: const WindowsNotificationDetails(),
   );
 
   @override
@@ -87,7 +172,8 @@ class FlutterLocalNotificationsGateway implements LocalNotificationGateway {
         macOS: DarwinInitializationSettings(),
         windows: WindowsInitializationSettings(
           appName: 'NeuroShield AI',
-          appUserModelId: 'NeuroShieldHealthTechnologies.NeuroShieldAI.Desktop.1',
+          appUserModelId:
+              'NeuroShieldHealthTechnologies.NeuroShieldAI.Desktop.1',
           guid: '9e2f4b8c-7a1d-4c3e-8f5a-2b6d9c1e4a70',
         ),
       );
@@ -112,7 +198,10 @@ class FlutterLocalNotificationsGateway implements LocalNotificationGateway {
               AndroidFlutterLocalNotificationsPlugin
             >();
         await android?.requestNotificationsPermission();
-        await android?.requestExactAlarmsPermission();
+        // Not the exact-alarm permission: on Android 14+ it starts denied and
+        // the request opens a system settings page, which would throw the
+        // user out of the app on every launch. Reminders fall back to inexact
+        // timing; the permissions screen offers it with an explanation.
       } else if (defaultTargetPlatform == TargetPlatform.iOS) {
         await plugin
             .resolvePlatformSpecificImplementation<
@@ -137,11 +226,12 @@ class FlutterLocalNotificationsGateway implements LocalNotificationGateway {
     required String title,
     required String body,
     String? payload,
+    NotificationChannelKind channel = NotificationChannelKind.medication,
   }) async {
     if (!_initialized) await initialize();
     if (!_osAvailable || _plugin == null) return;
     try {
-      await _plugin!.show(id, title, body, _details(), payload: payload);
+      await _plugin!.show(id, title, body, _details(channel), payload: payload);
     } catch (e) {
       debugPrint('Local notification show skipped: $e');
     }
@@ -234,6 +324,22 @@ class NotificationService {
 
   LocalNotificationGateway get gateway => _gateway;
 
+  FlutterLocalNotificationsGateway? get _os {
+    final gateway = _gateway;
+    return gateway is FlutterLocalNotificationsGateway ? gateway : null;
+  }
+
+  /// Real OS state for the permissions screen; null when it cannot be read.
+  Future<bool?> notificationsEnabled() async =>
+      await _os?.notificationsEnabled();
+
+  Future<bool?> canScheduleExact() async => await _os?.canScheduleExact();
+
+  Future<bool?> requestNotifications() async =>
+      await _os?.requestNotifications();
+
+  Future<void> requestExactAlarms() async => await _os?.requestExactAlarms();
+
   /// The patient whose alerts this session should receive.
   /// Set by AppState immediately after login and cleared on sign-out.
   final AlertReceptionGate reception = AlertReceptionGate();
@@ -296,10 +402,13 @@ class NotificationService {
       }
     } catch (_) {}
 
-    final isMobile = !kIsWeb &&
+    final isMobile =
+        !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS);
-    if (AppConfig.demoMode || !isMobile || FlutterLocalNotificationsGateway.isHeadlessTest) {
+    if (AppConfig.demoMode ||
+        !isMobile ||
+        FlutterLocalNotificationsGateway.isHeadlessTest) {
       if (!AppConfig.demoMode && !isMobile) {
         debugPrint(
           'FCM is disabled on this desktop/web platform; using backend polling',
@@ -307,7 +416,8 @@ class NotificationService {
         token = null;
         return;
       }
-      if (FlutterLocalNotificationsGateway.isHeadlessTest && !AppConfig.demoMode) {
+      if (FlutterLocalNotificationsGateway.isHeadlessTest &&
+          !AppConfig.demoMode) {
         token = null;
         return;
       }
@@ -336,8 +446,12 @@ class NotificationService {
       final body = message.notification?.body ?? '';
       onMessage?.call(title, body);
     };
-    _messageSubscription = FirebaseMessaging.onMessage.listen((message) => _dispatch?.call(message));
-    _openedSubscription = FirebaseMessaging.onMessageOpenedApp.listen((message) => _dispatch?.call(message));
+    _messageSubscription = FirebaseMessaging.onMessage.listen(
+      (message) => _dispatch?.call(message),
+    );
+    _openedSubscription = FirebaseMessaging.onMessageOpenedApp.listen(
+      (message) => _dispatch?.call(message),
+    );
     _pendingInitial = await messaging.getInitialMessage();
   }
 
@@ -347,8 +461,15 @@ class NotificationService {
     String body, {
     int id = 0,
     String? payload,
+    NotificationChannelKind channel = NotificationChannelKind.medication,
   }) async {
-    await _gateway.show(id: id, title: title, body: body, payload: payload);
+    await _gateway.show(
+      id: id,
+      title: title,
+      body: body,
+      payload: payload,
+      channel: channel,
+    );
     _sink?.call(title, body);
   }
 

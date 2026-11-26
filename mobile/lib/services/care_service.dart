@@ -1162,6 +1162,7 @@ class CareService extends ChangeNotifier {
         _generation == generation;
     final blocked = <String>{};
     var attempted = 0;
+    var acknowledged = 0;
     _flushing = true;
     try {
       final items = await db.careOutboxForOwner(owner);
@@ -1212,6 +1213,7 @@ class CareService extends ChangeNotifier {
           );
           if (!current()) break;
           await db.acknowledgeCareWrite(item);
+          acknowledged++;
         } catch (e) {
           if (!current()) break;
           final f = Failure.from(e);
@@ -1227,6 +1229,12 @@ class CareService extends ChangeNotifier {
       final remaining = await db.careOutboxForOwner(owner);
       if (current()) {
         _setOutboxStatus(remaining, origin);
+      }
+      // The rows were marked synced in the database; refresh the in-memory
+      // lists too, or the screen keeps showing «pending sync».
+      final pid = _patientId;
+      if (acknowledged > 0 && pid != null && current()) {
+        await loadFor(pid, remote: false);
       }
     } catch (_) {
       // The queue is best-effort by design; a failure here must not break a UI

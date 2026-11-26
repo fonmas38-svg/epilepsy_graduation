@@ -1,6 +1,7 @@
 """Cloud + dataset streaming APIs for MVP without hardware."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -11,7 +12,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.exc import IntegrityError
 
 from app import cloud_store
-from app.device_hub import DeviceSample
+from app.device_hub import ALERT_COOLDOWN_SECONDS, DeviceSample, _age
 from app.schemas import VitalWindow
 from app.auth import (
     authorize_patient_access,
@@ -403,6 +404,11 @@ def dataset_next(
         row = df.iloc[idx]
 
     window = _row_to_window(row, body.patient_id)
+    # Recorded rows carry no capture time: stamp them when played, so the
+    # stored assessment/alert has a real time and the cooldown below works.
+    now = datetime.now(timezone.utc)
+    if not window.timestamp:
+        window.timestamp = now.isoformat()
     result = request.app.state.classifier.predict_window(window)
     features = result.features
     label, confidence = result.label, result.confidence
@@ -433,12 +439,18 @@ def dataset_next(
         "source": "dataset",
     }
     alert_payload = None
-    if label == "high_risk":
+    # Same cooldown as the device hub: one alert per episode, not one per
+    # 4-second window (the replay otherwise floods every recipient).
+    recent = cloud_store.list_alerts(body.patient_id, 1)
+    cooled = not recent or _age(recent[0].get("timestamp"), now) >= ALERT_COOLDOWN_SECONDS
+    if label == "high_risk" and cooled:
         alert_payload = {
             "timestamp": window.timestamp,
             "severity": "critical",
             "message": "High seizure risk detected from dataset stream",
             "recipients": ["patient", "caregiver", "doctor"],
+            # Tagged as replayed data so pushes and views mark it [محاكاة].
+            "details": {"data_source": "dataset"},
         }
     saved = cloud_store.save_monitoring_bundle(
         body.patient_id, reading, assessment=assessment, alert=alert_payload

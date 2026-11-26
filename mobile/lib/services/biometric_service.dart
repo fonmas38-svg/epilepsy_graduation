@@ -212,7 +212,8 @@ class BiometricService {
       } else if (text.contains('lockedout') || text.contains('locked_out')) {
         lastErrorMessage = 'تم قفل مستشعر البصمة مؤقتاً؛ حاول لاحقاً';
       } else if (text.contains('no_fragment_activity')) {
-        lastErrorMessage = 'يتطلب المستشعر تهيئة FlutterFragmentActivity على أندرويد';
+        lastErrorMessage =
+            'يتطلب المستشعر تهيئة FlutterFragmentActivity على أندرويد';
       }
       return false;
     }

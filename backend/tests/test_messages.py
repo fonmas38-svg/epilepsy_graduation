@@ -162,6 +162,34 @@ def test_location_sharing(client, test_setup):
     assert any("قام" in m["content"] and "موقعه" in m["content"] for m in res.json()["messages"])
 
 
+def test_location_source_and_capture_time_are_kept(client, test_setup):
+    pat_id = test_setup["pat"]["id"]
+    pat_headers = {"Authorization": f"Bearer {test_setup['pat_token']}"}
+    cg_headers = {"Authorization": f"Bearer {test_setup['cg_token']}"}
+    res = client.post(
+        f"/patients/{pat_id}/location",
+        headers=pat_headers,
+        json={
+            "latitude": 15.35,
+            "longitude": 44.2,
+            "accuracy": 80,
+            "source": "cached_fix",
+            "captured_at": "2026-11-25T10:00:00Z",
+        },
+    )
+    assert res.status_code == 200
+    loc = client.get(f"/patients/{pat_id}/location", headers=cg_headers).json()["location"]
+    assert loc["source"] == "cached_fix"
+    assert loc["capturedAt"].startswith("2026-11-25T10:00:00")
+
+    bad = client.post(
+        f"/patients/{pat_id}/location",
+        headers=pat_headers,
+        json={"latitude": 15.35, "longitude": 44.2, "source": "satellite_sms"},
+    )
+    assert bad.status_code == 422
+
+
 def test_message_retry_is_idempotent(client, test_setup):
     from uuid import uuid4
     patient = test_setup["pat"]["id"]

@@ -77,71 +77,80 @@ class AppDrawer extends StatelessWidget {
       }
     }
 
-    return Drawer(
-      child: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    backgroundColor: Theme.of(
-                      context,
-                    ).colorScheme.primaryContainer,
-                    child: Icon(
-                      Icons.person_outline,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          user?.name ?? l.appTitle,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        Text(switch (user?.role) {
-                          UserRole.patient => l.rolePatient,
-                          UserRole.doctor => l.roleDoctor,
-                          UserRole.caregiver => l.roleCaregiver,
-                          UserRole.admin => l.roleAdmin,
-                          null => '',
-                        }),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(),
-            Expanded(
-              child: ListView(
-                children: entries
-                    .map(
-                      (entry) => ListTile(
-                        leading: Icon(entry.$1),
-                        title: Text(entry.$2),
-                        selected:
-                            ModalRoute.of(context)?.settings.name == entry.$3,
-                        onTap: () => open(entry.$3),
+    // Back closes the open menu, not the app: the drawer is not a route, so
+    // on Android 14+ (predictive back) the system would otherwise exit.
+    // This scope only exists while the drawer is built, i.e. open.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) Scaffold.maybeOf(context)?.closeDrawer();
+      },
+      child: Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: Theme.of(
+                        context,
+                      ).colorScheme.primaryContainer,
+                      child: Icon(
+                        Icons.person_outline,
+                        color: Theme.of(context).colorScheme.primary,
                       ),
-                    )
-                    .toList(),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            user?.name ?? l.appTitle,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          Text(switch (user?.role) {
+                            UserRole.patient => l.rolePatient,
+                            UserRole.doctor => l.roleDoctor,
+                            UserRole.caregiver => l.roleCaregiver,
+                            UserRole.admin => l.roleAdmin,
+                            null => '',
+                          }),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.logout),
-              title: Text(l.logout),
-              onTap: () {
-                Navigator.pop(context);
-                confirmSignOut(context, app);
-              },
-            ),
-          ],
+              const Divider(),
+              Expanded(
+                child: ListView(
+                  children: entries
+                      .map(
+                        (entry) => ListTile(
+                          leading: Icon(entry.$1),
+                          title: Text(entry.$2),
+                          selected:
+                              ModalRoute.of(context)?.settings.name == entry.$3,
+                          onTap: () => open(entry.$3),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.logout),
+                title: Text(l.logout),
+                onTap: () {
+                  Navigator.pop(context);
+                  confirmSignOut(context, app);
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );

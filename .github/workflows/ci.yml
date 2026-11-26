@@ -191,18 +191,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned to the project's local SDK. Floating "latest stable" brought in
+      # new framework deprecations (85 analyzer infos) and a new ListTile
+      # assertion that do not exist on the version the app is developed and
+      # tested with. Bump this together with a local upgrade.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.38.5
           cache: true
 
       - name: Install packages
         run: flutter pub get
 
-      # Advisory: the mobile app belongs to another team member, so analyzer
-      # warnings there must not block backend work from merging.
-      - name: Analyze (advisory)
-        continue-on-error: true
+      # Mandatory: the analyzer is clean (0 issues), so any new warning or
+      # info is a regression and must be fixed before merging.
+      - name: Analyze
         run: flutter analyze
 
       - name: Test

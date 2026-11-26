@@ -194,14 +194,15 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                     children: [
                       OfflineBanner(
                         visible: !app.apiOnline,
-                        lastUpdateLabel: TimeAgo.since(
-                          app.care.lastSyncedAt,
-                          l,
-                        ),
+                        mode: app.operatingMode,
+                        onSyncNow: app.syncNow,
+                        lastUpdateLabel: app.care.lastSyncedAt == null
+                            ? null
+                            : TimeAgo.since(app.care.lastSyncedAt, l),
                         pendingCount: app.care.pendingCount,
                       ),
-                      const _CaregiverLocationTrackerCard(),
-                      Gap.vMd,
+                      // Patients and alerts first; the last shared location
+                      // follows (often empty, so it should not lead).
                       SectionCard(
                         title: l.linkedPatients,
                         icon: Icons.people_outline,
@@ -211,20 +212,23 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                         ),
                         child: Column(
                           children: [
-                            for (final r in rows)
+                            for (var i = 0; i < rows.length; i++)
                               _PatientRowTile(
-                                row: r,
+                                row: rows[i],
                                 enabled: !_busy,
-                                onOpen: () => _open(r),
-                                onRespond: r.newestUnacked == null
+                                onOpen: () => _open(rows[i]),
+                                onRespond: rows[i].newestUnacked == null
                                     ? null
-                                    : () => _respond(r.newestUnacked!),
+                                    : () => _respond(rows[i].newestUnacked!),
+                                last: i == rows.length - 1,
                               ),
                           ],
                         ),
                       ),
                       Gap.vMd,
                       _RecentSection(rows: rows, onRespond: _respond),
+                      Gap.vMd,
+                      const _CaregiverLocationTrackerCard(),
                     ],
                   ),
                 ),
@@ -293,12 +297,14 @@ class _PatientRowTile extends StatelessWidget {
     required this.enabled,
     required this.onOpen,
     required this.onRespond,
+    this.last = false,
   });
 
   final _Row row;
   final bool enabled;
   final VoidCallback onOpen;
   final VoidCallback? onRespond;
+  final bool last;
 
   @override
   Widget build(BuildContext context) {
@@ -416,7 +422,7 @@ class _PatientRowTile extends StatelessWidget {
               ],
             ],
           ),
-          const Divider(height: Gap.lg),
+          if (!last) const Divider(height: Gap.lg),
         ],
       ),
     );
@@ -600,7 +606,11 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
               children: [
                 OfflineBanner(
                   visible: !app.apiOnline,
-                  lastUpdateLabel: TimeAgo.since(app.care.lastSyncedAt, l),
+                  mode: app.operatingMode,
+                  onSyncNow: app.syncNow,
+                  lastUpdateLabel: app.care.lastSyncedAt == null
+                      ? null
+                      : TimeAgo.since(app.care.lastSyncedAt, l),
                   pendingCount: app.care.pendingCount,
                 ),
                 SectionCard(
@@ -615,8 +625,8 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
                   ),
                   child: InfoNote(
                     text: l.isArabic
-                        ? 'هذا تفضيل عرض محلي، وليس دليلًا على صلاحيات مفروضة في الخادم. يعتمد الوصول الفعلي على علاقتك بالمريض وسياسات الخادم.'
-                        : 'This is a local display preference, not evidence of server-enforced permissions. Actual access depends on the care relationship and server policies.',
+                        ? 'هذا ما يعرضه التطبيق لك. ما يمكنك رؤيته فعلاً يحدده المريض من إعدادات المشاركة.'
+                        : 'This is what the app shows you. What you can actually see is set by the patient in their sharing settings.',
                   ),
                 ),
                 if (canSeeStatus) ...[
@@ -668,7 +678,10 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
                             children: [
                               for (final s in _seizures.take(10))
                                 LabeledValue(
-                                  label: TimeAgo.stamp(s.occurredAt),
+                                  label: TimeAgo.stamp(
+                                    s.occurredAt,
+                                    AppLocalizations.of(context),
+                                  ),
                                   value: s.notes.isEmpty
                                       ? l.noteLabel
                                       : s.notes,

@@ -26,7 +26,10 @@ class AppConfig {
   }
 
   /// Demo mode must be explicitly enabled and never targets the live API by default.
-  static const demoMode = bool.fromEnvironment('DEMO_MODE', defaultValue: false);
+  static const demoMode = bool.fromEnvironment(
+    'DEMO_MODE',
+    defaultValue: false,
+  );
 
   static const simulationInterval = Duration(seconds: 4);
 

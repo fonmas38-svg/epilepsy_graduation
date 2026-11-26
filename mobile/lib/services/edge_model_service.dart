@@ -31,7 +31,8 @@ class EdgeModelService {
     required double motionEnergy,
     required double ecgVariability,
   }) {
-    final eeg = 0.28 * _ramp(eegPower, 0.4, 1.4) + 0.22 * _ramp(eegPeak, 0.6, 2.2);
+    final eeg =
+        0.28 * _ramp(eegPower, 0.4, 1.4) + 0.22 * _ramp(eegPeak, 0.6, 2.2);
     final hr = 0.25 * _ramp(hrMean, 80.0, 125.0);
     final motion = 0.15 * _ramp(motionEnergy, 0.2, 1.0);
     final ecg = 0.10 * _ramp(ecgVariability, 0.3, 1.0);
@@ -50,8 +51,12 @@ class EdgeModelService {
     // 1. Signal preprocessing & peak analysis
     final eeg = reading.eeg;
     if (eeg.length < 8 ||
-        [...eeg, ...reading.ecg, ...reading.motion, reading.hr]
-            .any((v) => !v.isFinite || v.abs() > 1e6) ||
+        [
+          ...eeg,
+          ...reading.ecg,
+          ...reading.motion,
+          reading.hr,
+        ].any((v) => !v.isFinite || v.abs() > 1e6) ||
         eeg.every((v) => (v - eeg.first).abs() <= 1e-8)) {
       return AnalyzeResult(
         label: RiskLabel.watch,
@@ -162,7 +167,9 @@ class EdgeModelService {
       motionEnergy: motionEnergy,
       ecgVariability: ecgVar,
     );
-    final preictalScore = (preictalBreakdown.values.reduce((a, b) => a + b)).clamp(0.0, 1.0);
+    final preictalScore = (preictalBreakdown.values.reduce(
+      (a, b) => a + b,
+    )).clamp(0.0, 1.0);
     final isPredicted = preictalScore >= 0.60;
 
     // 6. Classification decision using optimal ensemble threshold

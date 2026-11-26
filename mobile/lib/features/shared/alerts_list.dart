@@ -17,20 +17,21 @@ import '../../models/models.dart';
 /// «غير معروف» instead of silently rendering as safe (§11.1).
 /// Pure risk-view mapping from severity string without requiring Localizations.
 RiskView alertRiskView(String raw) => switch (raw.trim().toLowerCase()) {
-      'critical' || 'danger' || 'high_risk' => RiskView.danger,
-      'warning' || 'watch' => RiskView.caution,
-      'pre_alert' || 'prealert' || 'preictal' => RiskView.caution,
-      'info' || 'stable' => RiskView.safe,
-      _ => RiskView.unknown,
-    };
+  'critical' || 'danger' || 'high_risk' => RiskView.danger,
+  'warning' || 'watch' => RiskView.caution,
+  'pre_alert' || 'prealert' || 'preictal' => RiskView.caution,
+  'info' || 'stable' => RiskView.safe,
+  _ => RiskView.unknown,
+};
 
 ({RiskView view, String label}) alertSeverity(String raw, AppLocalizations l) {
   final v = alertRiskView(raw);
   final label = switch (v) {
     RiskView.danger => l.severityCritical,
-    RiskView.caution => raw.trim().toLowerCase().contains('pre')
-        ? l.severityPreAlert
-        : l.severityWarning,
+    RiskView.caution =>
+      raw.trim().toLowerCase().contains('pre')
+          ? l.severityPreAlert
+          : l.severityWarning,
     RiskView.safe => l.severityInfo,
     _ => l.unknown,
   };
@@ -99,11 +100,18 @@ class AlertCard extends StatelessWidget {
                 Gap.vSm,
                 Text(
                   alert.details['forecast_status'] == 'prior_model_forecast'
-                      ? (l.isArabic ? 'سُجلت إشارة تنبؤ بحثية قبل الرصد؛ وصول تحذير للمرافق غير مؤكد.' : 'A prior research forecast was recorded; warning delivery is unverified.')
-                      : (l.isArabic ? 'لم يوجد إنذار سابق في السجل المتاح؛ اكتمال المراقبة وتأكيد النوبة غير مثبتين.' : 'No prior alert in available history; monitoring completeness and seizure confirmation are unverified.'),
+                      ? (l.isArabic
+                            ? 'سُجلت إشارة تنبؤ بحثية قبل الرصد؛ وصول تحذير للمرافق غير مؤكد.'
+                            : 'A prior research forecast was recorded; warning delivery is unverified.')
+                      : (l.isArabic
+                            ? 'لم يوجد إنذار سابق في السجل المتاح؛ اكتمال المراقبة وتأكيد النوبة غير مثبتين.'
+                            : 'No prior alert in available history; monitoring completeness and seizure confirmation are unverified.'),
                   style: theme.textTheme.bodySmall,
                 ),
-                Text('${l.isArabic ? 'مرجع الرصد' : 'Detection reference'}: ${alert.details['assessment_id'] ?? alert.id}', style: theme.textTheme.bodySmall),
+                Text(
+                  '${l.isArabic ? 'مرجع الرصد' : 'Detection reference'}: ${alert.details['assessment_id'] ?? alert.id}',
+                  style: theme.textTheme.bodySmall,
+                ),
               ],
               Gap.vSm,
               Row(

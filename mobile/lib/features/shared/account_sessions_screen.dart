@@ -131,10 +131,9 @@ class _AccountSessionsScreenState extends State<AccountSessionsScreen> {
         await _app.api.tokens.clear();
         await _app.auth.signOut();
         if (mounted) {
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            Routes.login,
-            (_) => false,
-          );
+          Navigator.of(
+            context,
+          ).pushNamedAndRemoveUntil(Routes.login, (_) => false);
         }
         return;
       }
@@ -274,11 +273,11 @@ class _AccountSessionsScreenState extends State<AccountSessionsScreen> {
                               child: Text(
                                 row['current'] == true
                                     ? (_ar
-                                        ? 'تسجيل الخروج من هذه الجلسة'
-                                        : 'Sign out of this session')
+                                          ? 'تسجيل الخروج من هذه الجلسة'
+                                          : 'Sign out of this session')
                                     : (_ar
-                                        ? 'إلغاء هذه الجلسة'
-                                        : 'Revoke this session'),
+                                          ? 'إلغاء هذه الجلسة'
+                                          : 'Revoke this session'),
                               ),
                             ),
                           ),

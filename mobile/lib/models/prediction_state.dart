@@ -41,7 +41,8 @@ class PredictionState {
   final Map<String, double>? drivers;
 
   /// Whether the forecast came from the real trained model vs. the heuristic.
-  bool get isModel => source == 'cnn_lstm_preictal' || source == 'cloud_preictal_net';
+  bool get isModel =>
+      source == 'cnn_lstm_preictal' || source == 'cloud_preictal_net';
 
   bool get hasLeadTime => leadTimeMin != null;
 
@@ -74,8 +75,9 @@ class PredictionState {
     }
     // Some payloads carry the drivers at the top level already.
     if (drivers == null && map['preictal_drivers'] is Map) {
-      drivers = (map['preictal_drivers'] as Map)
-          .map((k, v) => MapEntry(k.toString(), _d(v) ?? 0.0));
+      drivers = (map['preictal_drivers'] as Map).map(
+        (k, v) => MapEntry(k.toString(), _d(v) ?? 0.0),
+      );
     }
 
     final rawTraj = map['preictal_trajectory'];
@@ -88,29 +90,33 @@ class PredictionState {
       predicted: map['predicted'] == true,
       source: map['prediction_source'] as String?,
       trajectory: rawTraj is List
-          ? rawTraj.map(_d).whereType<double>().map((e) => e.clamp(0.0, 1.0).toDouble()).toList()
+          ? rawTraj
+                .map(_d)
+                .whereType<double>()
+                .map((e) => e.clamp(0.0, 1.0).toDouble())
+                .toList()
           : const [],
       drivers: drivers,
     );
   }
 
   Map<String, dynamic> toMap() => {
-        'preictal_prob': preictalProb,
-        'lead_time_min': leadTimeMin,
-        'horizon_min': horizonMin,
-        'predicted': predicted,
-        'prediction_source': source,
-        'preictal_trajectory': trajectory,
-        if (drivers != null) 'preictal_drivers': drivers,
-      };
+    'preictal_prob': preictalProb,
+    'lead_time_min': leadTimeMin,
+    'horizon_min': horizonMin,
+    'predicted': predicted,
+    'prediction_source': source,
+    'preictal_trajectory': trajectory,
+    if (drivers != null) 'preictal_drivers': drivers,
+  };
 
   PredictionState copyWith({List<double>? trajectory}) => PredictionState(
-        preictalProb: preictalProb,
-        leadTimeMin: leadTimeMin,
-        horizonMin: horizonMin,
-        predicted: predicted,
-        source: source,
-        trajectory: trajectory ?? this.trajectory,
-        drivers: drivers,
-      );
+    preictalProb: preictalProb,
+    leadTimeMin: leadTimeMin,
+    horizonMin: horizonMin,
+    predicted: predicted,
+    source: source,
+    trajectory: trajectory ?? this.trajectory,
+    drivers: drivers,
+  );
 }

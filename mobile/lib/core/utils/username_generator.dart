@@ -100,14 +100,14 @@ class UsernameGenerator {
         ? parts.join('_')
         : '${parts.first}_${parts.last}';
 
-    final cleanPrefix = prefix
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]'), '');
-    final cleanSuffix = (suffix ?? '')
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final cleanPrefix = prefix.trim().toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9]'),
+      '',
+    );
+    final cleanSuffix = (suffix ?? '').trim().toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9]'),
+      '',
+    );
 
     final segments = <String>[
       if (cleanPrefix.isNotEmpty) cleanPrefix,

@@ -47,26 +47,22 @@ class EmptyState extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            icon,
-            size: compact ? 32 : 48,
-            color: scheme.onSurfaceVariant,
-          ),
+          Icon(icon, size: compact ? 32 : 48, color: scheme.onSurfaceVariant),
           Gap.vMd,
           Text(
             title ?? l.emptyTitle,
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
           Gap.vXs,
           Text(
             body ?? l.emptyBody,
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
           ),
           if (action != null) ...[
             Gap.vLg,
@@ -127,17 +123,17 @@ class ErrorState extends StatelessWidget {
           Text(
             l.errorTitle,
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
           Gap.vXs,
           Text(
             failure.message(l),
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
           ),
           if (onRetry != null && failure.canRetry) ...[
             Gap.vLg,
@@ -294,11 +290,7 @@ class AsyncView<T> extends StatelessWidget {
     final canShowStale = v != null && failure?.isConnectivity == true;
 
     if (failure != null && !canShowStale) {
-      return ErrorState(
-        failure: failure!,
-        onRetry: onRetry,
-        compact: compact,
-      );
+      return ErrorState(failure: failure!, onRetry: onRetry, compact: compact);
     }
 
     if (loading && v == null) {

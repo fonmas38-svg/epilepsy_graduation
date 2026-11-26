@@ -55,38 +55,37 @@ class ChatMessage {
     DateTime? readAt,
     bool? synced,
     String? serverOrigin,
-  }) =>
-      ChatMessage(
-        id: id ?? this.id,
-        patientId: patientId ?? this.patientId,
-        senderId: senderId ?? this.senderId,
-        senderName: senderName ?? this.senderName,
-        senderRole: senderRole ?? this.senderRole,
-        channelType: channelType ?? this.channelType,
-        peerUserId: peerUserId ?? this.peerUserId,
-        content: content ?? this.content,
-        createdAt: createdAt ?? this.createdAt,
-        deliveredAt: deliveredAt ?? this.deliveredAt,
-        readAt: readAt ?? this.readAt,
-        synced: synced ?? this.synced,
-        serverOrigin: serverOrigin ?? this.serverOrigin,
-      );
+  }) => ChatMessage(
+    id: id ?? this.id,
+    patientId: patientId ?? this.patientId,
+    senderId: senderId ?? this.senderId,
+    senderName: senderName ?? this.senderName,
+    senderRole: senderRole ?? this.senderRole,
+    channelType: channelType ?? this.channelType,
+    peerUserId: peerUserId ?? this.peerUserId,
+    content: content ?? this.content,
+    createdAt: createdAt ?? this.createdAt,
+    deliveredAt: deliveredAt ?? this.deliveredAt,
+    readAt: readAt ?? this.readAt,
+    synced: synced ?? this.synced,
+    serverOrigin: serverOrigin ?? this.serverOrigin,
+  );
 
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'patientId': patientId,
-        'senderId': senderId,
-        'senderName': senderName,
-        'senderRole': senderRole.name,
-        'channelType': channelType,
-        if (peerUserId != null) 'peerUserId': peerUserId,
-        'content': content,
-        'createdAt': createdAt.toIso8601String(),
-        if (deliveredAt != null) 'deliveredAt': deliveredAt!.toIso8601String(),
-        'readAt': readAt?.toIso8601String(),
-        'synced': synced ? 1 : 0,
-        'serverOrigin': serverOrigin,
-      };
+    'id': id,
+    'patientId': patientId,
+    'senderId': senderId,
+    'senderName': senderName,
+    'senderRole': senderRole.name,
+    'channelType': channelType,
+    if (peerUserId != null) 'peerUserId': peerUserId,
+    'content': content,
+    'createdAt': createdAt.toIso8601String(),
+    if (deliveredAt != null) 'deliveredAt': deliveredAt!.toIso8601String(),
+    'readAt': readAt?.toIso8601String(),
+    'synced': synced ? 1 : 0,
+    'serverOrigin': serverOrigin,
+  };
 
   factory ChatMessage.fromMap(Map<String, dynamic> map) {
     UserRole parsedRole;
@@ -123,15 +122,21 @@ class ChatMessage {
       id: map['id'] as String? ?? '',
       patientId: (map['patientId'] ?? map['patient_id'] ?? '') as String,
       senderId: (map['senderId'] ?? map['sender_id'] ?? '') as String,
-      senderName: (map['senderName'] ?? map['sender_name'] ?? 'مستخدم') as String,
+      senderName:
+          (map['senderName'] ?? map['sender_name'] ?? 'مستخدم') as String,
       senderRole: parsedRole,
-      channelType: (map['channelType'] ?? map['channel_type'] ?? 'family_patient') as String,
+      channelType:
+          (map['channelType'] ?? map['channel_type'] ?? 'family_patient')
+              as String,
       peerUserId: (map['peerUserId'] ?? map['peer_user_id']) as String?,
       content: (map['content'] ?? '') as String,
       createdAt: parsedCreated,
       deliveredAt: parsedDelivered,
       readAt: parsedRead,
-      synced: !map.containsKey('synced') || map['synced'] == 1 || map['synced'] == true,
+      synced:
+          !map.containsKey('synced') ||
+          map['synced'] == 1 ||
+          map['synced'] == true,
       serverOrigin: map['serverOrigin'] as String? ?? '',
     );
   }

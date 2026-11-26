@@ -64,22 +64,24 @@ class Failure implements Exception {
   bool get isConnectivity =>
       kind == FailureKind.offline || kind == FailureKind.timeout;
 
-  String message(AppLocalizations l) => customMessage ?? switch (kind) {
-    FailureKind.offline => l.errNoConnection,
-    FailureKind.timeout => l.errTimeout,
-    FailureKind.unauthorized => l.errSessionExpired,
-    FailureKind.forbidden => l.errForbidden,
-    FailureKind.notFound => l.errNotFound,
-    FailureKind.conflict =>
-      l.isArabic
-          ? 'تعارض في البيانات: قد يكون اسم المستخدم أو السجل موجوداً مسبقاً.'
-          : 'Data conflict: the username or record already exists.',
-    FailureKind.validation => l.errValidation,
-    FailureKind.rateLimited => l.errTooManyRequests,
-    FailureKind.tooLarge => l.errPayloadTooLarge,
-    FailureKind.server => l.errServer,
-    FailureKind.unknown => l.errUnknown,
-  };
+  String message(AppLocalizations l) =>
+      customMessage ??
+      switch (kind) {
+        FailureKind.offline => l.errNoConnection,
+        FailureKind.timeout => l.errTimeout,
+        FailureKind.unauthorized => l.errSessionExpired,
+        FailureKind.forbidden => l.errForbidden,
+        FailureKind.notFound => l.errNotFound,
+        FailureKind.conflict =>
+          l.isArabic
+              ? 'تعارض في البيانات: قد يكون اسم المستخدم أو السجل موجوداً مسبقاً.'
+              : 'Data conflict: the username or record already exists.',
+        FailureKind.validation => l.errValidation,
+        FailureKind.rateLimited => l.errTooManyRequests,
+        FailureKind.tooLarge => l.errPayloadTooLarge,
+        FailureKind.server => l.errServer,
+        FailureKind.unknown => l.errUnknown,
+      };
 
   /// Tone to render this failure in.
   ///
@@ -158,7 +160,8 @@ class Failure implements Exception {
   }
 
   @override
-  String toString() => 'Failure(${kind.name}${debugDetail == null ? '' : ', $debugDetail'})';
+  String toString() =>
+      'Failure(${kind.name}${debugDetail == null ? '' : ', $debugDetail'})';
 }
 
 /// Wrap an async call so callers deal in [Failure] only.

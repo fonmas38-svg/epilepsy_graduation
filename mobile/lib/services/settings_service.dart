@@ -64,8 +64,10 @@ class SettingsService extends ChangeNotifier {
   bool get quietHoursEnabled => _quietHoursEnabled;
   int get quietStartMinutes => _quietStartMinutes;
   int get quietEndMinutes => _quietEndMinutes;
-  TimeOfDay get quietStart =>
-      TimeOfDay(hour: _quietStartMinutes ~/ 60, minute: _quietStartMinutes % 60);
+  TimeOfDay get quietStart => TimeOfDay(
+    hour: _quietStartMinutes ~/ 60,
+    minute: _quietStartMinutes % 60,
+  );
   TimeOfDay get quietEnd =>
       TimeOfDay(hour: _quietEndMinutes ~/ 60, minute: _quietEndMinutes % 60);
 

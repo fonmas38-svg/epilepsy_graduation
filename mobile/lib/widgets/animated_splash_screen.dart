@@ -38,13 +38,15 @@ class _AnimatedSplashScreenState extends State<AnimatedSplashScreen>
       duration: const Duration(milliseconds: 1600),
     )..repeat(reverse: true);
 
-    _scaleAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
+    _scaleAnimation = Tween<double>(
+      begin: 0.95,
+      end: 1.05,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
 
-    _fadeAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
+    _fadeAnimation = Tween<double>(
+      begin: 0.85,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
 
     _timer = Timer(widget.duration, widget.onFinished);
   }
@@ -71,10 +73,7 @@ class _AnimatedSplashScreenState extends State<AnimatedSplashScreen>
               builder: (context, child) {
                 return Transform.scale(
                   scale: _scaleAnimation.value,
-                  child: Opacity(
-                    opacity: _fadeAnimation.value,
-                    child: child,
-                  ),
+                  child: Opacity(opacity: _fadeAnimation.value, child: child),
                 );
               },
               child: Container(

@@ -46,7 +46,8 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
   @override
   void didUpdateWidget(InactivityWatcher oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.timeout != widget.timeout || oldWidget.enabled != widget.enabled) {
+    if (oldWidget.timeout != widget.timeout ||
+        oldWidget.enabled != widget.enabled) {
       if (!widget.enabled && _locked) {
         setState(() => _locked = false);
       }

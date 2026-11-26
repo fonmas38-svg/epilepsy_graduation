@@ -83,7 +83,8 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
     final msg = switch (level) {
       RiskLabel.stable => 'تم ضبط الحالة: مستقر / طبيعي (إشارات هادئة)',
       RiskLabel.watch => 'تم رفع الحالة: تنبيه خفيف / متابعة نشاط الدماغ',
-      RiskLabel.highRisk => 'تم تصعيد الحالة: إنذار حرج وتحديد الموقع للمرافقين',
+      RiskLabel.highRisk =>
+        'تم تصعيد الحالة: إنذار حرج وتحديد الموقع للمرافقين',
     };
     AppSnack.success(context, msg);
   }
@@ -272,54 +273,76 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
                 end: Alignment.bottomLeft,
               ),
               borderRadius: Radii.rMd,
-              border: Border.all(color: riskTone.solid.withValues(alpha: 0.5), width: 1.5),
+              border: Border.all(
+                color: riskTone.solid.withValues(alpha: 0.5),
+                width: 1.5,
+              ),
             ),
             child: Column(
               children: [
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(Gap.sm),
-                          decoration: BoxDecoration(
-                            color: riskTone.solid,
-                            shape: BoxShape.circle,
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(Gap.sm),
+                            decoration: BoxDecoration(
+                              color: riskTone.solid,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.sensors,
+                              color: riskTone.onSolid,
+                              size: 20,
+                            ),
                           ),
-                          child: Icon(Icons.sensors, color: riskTone.onSolid, size: 20),
-                        ),
-                        Gap.hSm,
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'الحالة الفسيولوجية الحالية',
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
+                          Gap.hSm,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'الحالة الفسيولوجية الحالية',
+                                  style: theme.textTheme.labelMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                Text(
+                                  RiskCopy.title(app.riskView, l),
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: riskTone.foreground,
+                                  ),
+                                ),
+                              ],
                             ),
-                            Text(
-                              RiskCopy.title(app.riskView, l),
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: riskTone.foreground,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
+                    Gap.hSm,
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: Gap.sm,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: theme.colorScheme.surface,
                         borderRadius: BorderRadius.circular(Radii.pill),
-                        border: Border.all(color: theme.colorScheme.outlineVariant),
+                        border: Border.all(
+                          color: theme.colorScheme.outlineVariant,
+                        ),
                       ),
                       child: Text(
-                        'ثقة النموذج: ${((assessment?.confidence ?? 0.95) * 100).toInt()}%',
-                        style: theme.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.bold),
+                        // No assessment -> no number (never a default 95 %).
+                        assessment == null
+                            ? 'ثقة النموذج: —'
+                            : 'ثقة النموذج: ${(assessment.confidence * 100).toInt()}%',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                   ],
@@ -328,7 +351,11 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
                   const Divider(height: Gap.lg),
                   Row(
                     children: [
-                      Icon(Icons.warning_amber_rounded, color: riskTone.solid, size: 20),
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        color: riskTone.solid,
+                        size: 20,
+                      ),
                       Gap.hSm,
                       Expanded(
                         child: Text(
@@ -357,47 +384,61 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        ScaleTransition(
-                          scale: _pulseScale,
-                          child: const Icon(Icons.favorite, color: Colors.redAccent, size: 36),
-                        ),
-                        Gap.hMd,
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            RichText(
-                              text: TextSpan(
-                                text: '${hr.toInt()} ',
-                                style: theme.textTheme.headlineMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                                children: [
-                                  TextSpan(
-                                    text: 'BPM (نبضة/دقيقة)',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          ScaleTransition(
+                            scale: _pulseScale,
+                            child: const Icon(
+                              Icons.favorite,
+                              color: Colors.redAccent,
+                              size: 36,
                             ),
-                            Text(
-                              hr > 120
-                                  ? 'تسارع قلبي حاد (مصاحب للنوبة)'
-                                  : hr > 90
+                          ),
+                          Gap.hMd,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text.rich(
+                                  TextSpan(
+                                    text: '${hr.toInt()} ',
+                                    style: theme.textTheme.headlineMedium
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                          color: theme.colorScheme.onSurface,
+                                        ),
+                                    children: [
+                                      TextSpan(
+                                        text: 'BPM (نبضة/دقيقة)',
+                                        style: theme.textTheme.bodySmall
+                                            ?.copyWith(
+                                              color: theme
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Text(
+                                  hr > 120
+                                      ? 'تسارع قلبي حاد (مصاحب للنوبة)'
+                                      : hr > 90
                                       ? 'معدل متزايد (نشاط تنبيهي)'
                                       : 'إيقاع جيبي طبيعي (منتظم)',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: hr > 100 ? Colors.redAccent : Colors.green,
-                                fontWeight: FontWeight.bold,
-                              ),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: hr > 100
+                                        ? Colors.redAccent
+                                        : Colors.green,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -438,7 +479,16 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
                   ),
                 ),
                 Gap.vSm,
-                // Brain wave breakdown chips
+                // Brain wave breakdown chips. These are a teaching aid driven
+                // by the simulated heart rate, not a spectral EEG analysis —
+                // say so instead of implying measured band activity.
+                Text(
+                  'توضيحي للمحاكاة: مُشتق من نبض المحاكاة، وليس تحليلاً طيفياً لإشارة EEG.',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                Gap.vXs,
                 Wrap(
                   spacing: Gap.sm,
                   runSpacing: Gap.xs,
@@ -492,12 +542,16 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    reading != null && reading.motion.isNotEmpty && reading.motion.any((m) => m.abs() > 0.8)
+                    reading != null &&
+                            reading.motion.isNotEmpty &&
+                            reading.motion.any((m) => m.abs() > 0.8)
                         ? '⚠️ رصد اهتزازات وتشنجات حركية شديدة'
                         : 'الحركة ضمن الحدود الطبيعية المستقرة',
                     style: theme.textTheme.bodySmall?.copyWith(
                       fontWeight: FontWeight.bold,
-                      color: reading != null && reading.motion.any((m) => m.abs() > 0.8)
+                      color:
+                          reading != null &&
+                              reading.motion.any((m) => m.abs() > 0.8)
                           ? Colors.deepOrange
                           : Colors.teal,
                     ),
@@ -511,19 +565,24 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
           // 5. Interactive Multi-Tier Escalation Panel
           Text(
             'لوحة التحكم وتصعيد حالة المريض',
-            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
           ),
           Gap.vXs,
           Text(
             'حدد درجة خطورة الحالة لمحاكاة الاستجابة وتوليد التنبيهات اللازمة فوراً:',
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           Gap.vMd,
 
           // Tier 1: Stable
           _EscalateButton(
             title: 'المستوى 1: مستقر / طبيعي (Stable Baseline)',
-            subtitle: 'نبض 70-75 BPM، إشارات دماغ هادئة (ألفا)، لا توجد تنبيهات',
+            subtitle:
+                'نبض 70-75 BPM، إشارات دماغ هادئة (ألفا)، لا توجد تنبيهات',
             color: Colors.green,
             icon: Icons.check_circle_outline,
             onPressed: () => _escalate(app, RiskLabel.stable),
@@ -543,13 +602,17 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
           // Tier 3: Moderate / Pre-Ictal Warning
           _EscalateButton(
             title: 'المستوى 3: إنذار استباقي / ما قبل النوبة (Pre-Ictal)',
-            subtitle: 'نبض 110+ BPM، تفريغات استباقية، ونافذة عد تنازلي 30 ثانية حية',
+            subtitle:
+                'نبض 110+ BPM، تفريغات استباقية، ونافذة عد تنازلي 30 ثانية حية',
             color: Colors.deepOrange,
             icon: Icons.timer,
             onPressed: () async {
               await app.simulatePreIctalForecast();
               if (context.mounted) {
-                AppSnack.warn(context, 'تم تفعيل إنذار ما قبل النوبة وبدء عداد الـ 30 ثانية!');
+                AppSnack.warn(
+                  context,
+                  'تم تفعيل إنذار ما قبل النوبة وبدء عداد الـ 30 ثانية!',
+                );
               }
             },
           ),
@@ -558,7 +621,8 @@ class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
           // Tier 4: Critical / Active Seizure Alert
           _EscalateButton(
             title: 'المستوى 4: إنذار حرج / نوبة صرع نشطة (Critical)',
-            subtitle: 'نبض 130+ BPM، تفريغات حادة، تشنجات، إشعار فوري للأسرة والطبيب',
+            subtitle:
+                'نبض 130+ BPM، تفريغات حادة، تشنجات، إشعار فوري للأسرة والطبيب',
             color: Colors.red.shade700,
             icon: Icons.notification_important,
             isCritical: true,
@@ -708,13 +772,16 @@ class _SeizurePhaseIndicator extends StatelessWidget {
                     ),
                   ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: activeCycleIndex == i
                         ? stages[i].$2
                         : (activeCycleIndex > i
-                            ? stages[i].$2.withValues(alpha: 0.25)
-                            : theme.colorScheme.surface),
+                              ? stages[i].$2.withValues(alpha: 0.25)
+                              : theme.colorScheme.surface),
                     borderRadius: BorderRadius.circular(Radii.pill),
                     border: Border.all(
                       color: activeCycleIndex >= i
@@ -733,8 +800,8 @@ class _SeizurePhaseIndicator extends StatelessWidget {
                       color: activeCycleIndex == i
                           ? Colors.white
                           : (activeCycleIndex > i
-                              ? stages[i].$2
-                              : theme.colorScheme.onSurfaceVariant),
+                                ? stages[i].$2
+                                : theme.colorScheme.onSurfaceVariant),
                     ),
                   ),
                 ),
@@ -768,7 +835,9 @@ class _TelemetryCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         borderRadius: Radii.rMd,
-        border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.6)),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.6),
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.02),
@@ -784,10 +853,14 @@ class _TelemetryCard extends StatelessWidget {
             children: [
               Icon(icon, size: 20, color: accentColor),
               Gap.hSm,
-              Text(
-                title,
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
+              // Expanded: long bilingual titles wrap instead of overflowing
+              // narrow phones (was 32 px over at 390 dp).
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -817,7 +890,9 @@ class _FrequencyBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: 3),
       decoration: BoxDecoration(
-        color: active ? color.withValues(alpha: 0.15) : theme.colorScheme.surfaceContainerHighest,
+        color: active
+            ? color.withValues(alpha: 0.15)
+            : theme.colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(Radii.pill),
         border: Border.all(
           color: active ? color : theme.colorScheme.outlineVariant,
@@ -862,16 +937,16 @@ class _EscalateButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: color.withValues(alpha: isCritical ? 0.12 : 0.06),
           borderRadius: BorderRadius.circular(Radii.md),
-          border: Border.all(color: color.withValues(alpha: isCritical ? 0.8 : 0.4), width: isCritical ? 2 : 1),
+          border: Border.all(
+            color: color.withValues(alpha: isCritical ? 0.8 : 0.4),
+            width: isCritical ? 2 : 1,
+          ),
         ),
         child: Row(
           children: [
             Container(
               padding: const EdgeInsets.all(Gap.sm),
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
-              ),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
               child: Icon(icon, color: Colors.white, size: 22),
             ),
             Gap.hMd,

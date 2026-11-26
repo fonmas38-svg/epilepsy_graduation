@@ -1,3 +1,4 @@
+import '../../core/theme/app_colors.dart';
 import 'dart:async';
 import '../../core/router/route_names.dart';
 import '../../core/ui/session_actions.dart';
@@ -83,12 +84,15 @@ class PatientSettingsScreen extends StatelessWidget {
                           width: 42,
                           height: 42,
                           decoration: BoxDecoration(
-                            color: const Color(0xFFEFF6FF),
+                            color: AppColors.accent(
+                              context,
+                              AccentTone.blue,
+                            ).container,
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Icon(
+                          child: Icon(
                             Icons.people_outline_rounded,
-                            color: Color(0xFF0066FF),
+                            color: Theme.of(context).colorScheme.primary,
                             size: 22,
                           ),
                         ),
@@ -489,7 +493,7 @@ class _ThemePreviewCard extends StatelessWidget {
           border: Border.all(
             color: isSelected
                 ? accentColor
-                : Colors.grey.withValues(alpha: 0.3),
+                : Theme.of(context).colorScheme.outlineVariant,
             width: isSelected ? 2.5 : 1,
           ),
           boxShadow: isSelected

@@ -15,6 +15,7 @@ import '../../core/utils/time_ago.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
+import '../../services/connectivity_coordinator.dart';
 import '../../services/location_service.dart';
 import '../../services/medication_service.dart';
 import '../../services/monitoring_service.dart';
@@ -74,18 +75,6 @@ class _PatientHomeScreenState extends State<PatientHomeScreen> {
         }
       },
       child: WorkspaceScaffold(
-        floatingActionButton: _tab == 0
-            ? FloatingActionButton(
-                heroTag: null,
-                elevation: 4,
-                backgroundColor: const Color(0xFF0066FF),
-                foregroundColor: Colors.white,
-                shape: const CircleBorder(),
-                onPressed: () =>
-                    Navigator.pushNamed(context, Routes.patientEntry),
-                child: const Icon(Icons.add, size: 30),
-              )
-            : null,
         body: IndexedStack(
           index: _tab,
           children: [
@@ -163,9 +152,9 @@ class _DashboardTabState extends State<_DashboardTab> {
   }
 
   /// The dose the patient should be thinking about: the earliest untaken one
-  /// still to come today, or — if the day's plan is already behind — the earliest
-  /// untaken one at all, because a missed 08:00 is more useful to show at noon
-  /// than «لا توجد جرعة قريبة».
+  /// still to come today, or — if the day's plan is already behind — the most
+  /// recent untaken one, because a just-missed 20:00 is more useful to show at
+  /// 20:15 than this morning's 08:00 or «لا توجد جرعة قريبة».
   ScheduleEntry? get _nextDose {
     final pending = _schedule.where((e) => !e.taken).toList();
     if (pending.isEmpty) return null;
@@ -173,17 +162,36 @@ class _DashboardTabState extends State<_DashboardTab> {
     for (final e in pending) {
       if (e.time.compareTo(now) >= 0) return e;
     }
-    return pending.first;
+    return pending.last;
   }
 
   Future<void> _sos() async {
     final l = AppLocalizations.of(context);
     final app = context.read<AppState>();
+    // Promise only what will happen: offline, the alert goes out by SMS to
+    // the emergency contacts, and with none there is nobody to reach.
+    final online = app.operatingMode == AppOperatingMode.onlineFull;
+    var hasContacts = true;
+    if (!online) {
+      try {
+        hasContacts = (await app.validEmergencyContacts()).isNotEmpty;
+      } catch (_) {}
+      if (!mounted) return;
+    }
+    final body = online
+        ? l.needHelpConfirmBody
+        : hasContacts
+        ? (l.isArabic
+              ? 'لا يوجد إنترنت: ستُجهَّز رسالة نصية (SMS) بموقعك إلى أرقام الطوارئ لترسلها.'
+              : 'No internet: a text message (SMS) with your location will be prepared for your emergency contacts.')
+        : (l.isArabic
+              ? 'لا يوجد إنترنت ولا أرقام طوارئ: لن يصل التنبيه إلى أحد من هذا الهاتف. اتصل بالإسعاف مباشرة إن احتجت.'
+              : 'No internet and no emergency numbers: this phone cannot alert anyone. Call emergency services directly if needed.');
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(l.needHelpConfirmTitle),
-        content: Text(l.needHelpConfirmBody),
+        content: Text(body),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -250,12 +258,14 @@ class _DashboardTabState extends State<_DashboardTab> {
     final ar = Localizations.localeOf(context).languageCode == 'ar';
     showModalBottomSheet<void>(
       context: context,
+      // Scrollable: at large text sizes the rows never overflow the sheet.
+      isScrollControlled: true,
       backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) => SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -266,7 +276,7 @@ class _DashboardTabState extends State<_DashboardTab> {
                   width: 44,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
+                    color: Theme.of(context).colorScheme.outlineVariant,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -281,64 +291,12 @@ class _DashboardTabState extends State<_DashboardTab> {
                 ),
               ),
               const SizedBox(height: 12),
+              // «خطة الطوارئ» and «المحفزات» are quick actions on Home; the
+              // sheet lists only tools not already one tap away.
               ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFEEEE),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.emergency_outlined,
-                    color: Color(0xFFE53935),
-                    size: 22,
-                  ),
-                ),
-                title: Text(
-                  ar
-                      ? 'خطة الطوارئ وجهات الاتصال'
-                      : 'Emergency Plan & Contacts',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.pushNamed(context, Routes.patientEmergency);
-                },
-              ),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF3E0),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.bolt_outlined,
-                    color: Color(0xFFF57C00),
-                    size: 22,
-                  ),
-                ),
-                title: Text(
-                  ar ? 'محفزات النوبات (Triggers)' : 'Seizure Triggers',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.pushNamed(context, Routes.patientTriggers);
-                },
-              ),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE8F5E9),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.devices_outlined,
-                    color: Color(0xFF2E7D32),
-                    size: 22,
-                  ),
+                leading: const ToneIcon(
+                  icon: Icons.devices_outlined,
+                  tone: AccentTone.green,
                 ),
                 title: Text(
                   ar ? 'رباط الرأس والسوار الذكي' : 'Wearable Headband Device',
@@ -350,17 +308,9 @@ class _DashboardTabState extends State<_DashboardTab> {
                 },
               ),
               ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEBF3FF),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.picture_as_pdf_outlined,
-                    color: Color(0xFF1976D2),
-                    size: 22,
-                  ),
+                leading: const ToneIcon(
+                  icon: Icons.picture_as_pdf_outlined,
+                  tone: AccentTone.blue,
                 ),
                 title: Text(
                   ar ? 'التقارير الطبية السريرية' : 'Clinical Medical Reports',
@@ -372,17 +322,9 @@ class _DashboardTabState extends State<_DashboardTab> {
                 },
               ),
               ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF0F4F8),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.security_outlined,
-                    color: Color(0xFF455A64),
-                    size: 22,
-                  ),
+                leading: const ToneIcon(
+                  icon: Icons.security_outlined,
+                  tone: AccentTone.slate,
                 ),
                 title: Text(
                   ar ? 'صلاحيات وأذونات النظام' : 'Device & System Permissions',
@@ -406,113 +348,143 @@ class _DashboardTabState extends State<_DashboardTab> {
     final app = context.watch<AppState>();
     final pre = app.preAlert;
     final prediction = app.monitoring.latestPrediction;
-    final ar = l.isArabic;
-    final userName = app.auth.currentUser?.name ?? (ar ? 'أحمد' : 'Ahmed');
+    final userName = app.auth.currentUser?.name ?? '';
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _loadSchedule,
-          child: ResponsiveContent(
-            maxWidth: 850,
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-              children: [
-                _DashboardTopHeader(
-                  userName: userName,
-                  onMenu: () => Scaffold.maybeOf(context)?.openDrawer(),
-                  onProfile: () => Navigator.pushNamed(context, Routes.account),
-                ),
-                Gap.vMd,
-                OfflineBanner(
-                  visible: !app.apiOnline,
-                  mode: app.operatingMode,
-                  onSyncNow: app.syncNow,
-                  lastUpdateLabel: TimeAgo.since(app.lastObservedAt, l),
-                  pendingCount: app.care.pendingCount,
-                ),
-                MonitoringCapabilityNotice(app: app),
-                EmergencyContactsWarning(app: app),
-                BatteryExemptionNotice(background: app.background),
-                if (pre != null) ...[
-                  Gap.vMd,
-                  _PreAlertCard(
-                    alert: pre,
-                    leadTimeMin: prediction?.leadTimeMin,
-                    onOpen: () => _openAlert(pre),
+    return ColoredBox(
+      color: Theme.of(context).colorScheme.surface,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _loadSchedule,
+                child: ResponsiveContent(
+                  maxWidth: 850,
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
+                    children: [
+                      _DashboardTopHeader(
+                        userName: userName,
+                        onMenu: () => Scaffold.maybeOf(context)?.openDrawer(),
+                        onProfile: () =>
+                            Navigator.pushNamed(context, Routes.account),
+                      ),
+                      Gap.vMd,
+                      OfflineBanner(
+                        visible: !app.apiOnline,
+                        mode: app.operatingMode,
+                        onSyncNow: app.syncNow,
+                        lastUpdateLabel: TimeAgo.since(app.lastObservedAt, l),
+                        pendingCount: app.care.pendingCount,
+                      ),
+                      // Pre-alert first: it has a 30-second cancel window.
+                      if (pre != null) ...[
+                        Gap.vMd,
+                        _PreAlertCard(
+                          alert: pre,
+                          leadTimeMin: prediction?.leadTimeMin,
+                          onOpen: () => _openAlert(pre),
+                        ),
+                      ],
+                      // Only actionable notices on Home. The model/server capability
+                      // explanation lives on the Monitoring screen, where it applies.
+                      EmergencyContactsWarning(
+                        app: app,
+                        otherwise: BatteryExemptionNotice(
+                          background: app.background,
+                        ),
+                      ),
+                      Gap.vSm,
+                      _SmartMonitoringHeroCard(
+                        monitoring: app.monitoring,
+                        onTap: () => Navigator.pushNamed(
+                          context,
+                          Routes.patientMonitoring,
+                        ),
+                        onToggle: app.setMonitoringEnabled,
+                      ),
+                      // The most frequent daily action, right under the status.
+                      Gap.vMd,
+                      _NextDoseSection(
+                        entry: _nextDose,
+                        enabled: !_busy,
+                        onTake: _takeDose,
+                      ),
+                      Gap.vMd,
+                      _SeizureProbabilityCard(
+                        riskView: app.riskView,
+                        probability: prediction?.preictalProb,
+                        leadTimeMin: prediction?.leadTimeMin,
+                      ),
+                      Gap.vMd,
+                      // Daily actions not already in the bottom bar (history and
+                      // alerts are tabs; live monitoring is the card above).
+                      _PastelQuickActionsRow(
+                        onAddRecord: () =>
+                            Navigator.pushNamed(context, Routes.patientEntry),
+                        onEmergencyPlan: () => Navigator.pushNamed(
+                          context,
+                          Routes.patientEmergency,
+                        ),
+                        onTriggers: () => Navigator.pushNamed(
+                          context,
+                          Routes.patientTriggers,
+                        ),
+                        onMore: () => _showMoreServicesSheet(context),
+                      ),
+                      Gap.vMd,
+                      _RecentActivitiesSection(
+                        latestAlert: app.monitoring.alerts.isNotEmpty
+                            ? app.monitoring.alerts.first
+                            : null,
+                        lastObservedAt: app.lastObservedAt,
+                        onViewAll: () {
+                          if (widget.onSelectTab != null) {
+                            widget.onSelectTab!(1);
+                          }
+                        },
+                      ),
+                      if (app.monitoring.alerts.isNotEmpty) ...[
+                        Gap.vMd,
+                        _RecentAlertsSection(
+                          alerts: app.monitoring.alerts,
+                          onAcknowledge: app.acknowledgeAlert,
+                          onOpen: _openAlert,
+                        ),
+                      ],
+                      Gap.vMd,
+                      const _FamilyLocationCard(),
+                      Gap.vMd,
+                      const _SimulatorBannerCard(),
+                    ],
                   ),
-                ],
-                Gap.vSm,
-                _SmartMonitoringHeroCard(
-                  monitoring: app.monitoring,
-                  onTap: () =>
-                      Navigator.pushNamed(context, Routes.patientMonitoring),
                 ),
-                Gap.vMd,
-                _SeizureProbabilityCard(
-                  riskView: app.riskView,
-                  probability: prediction?.preictalProb,
-                  leadTimeMin: prediction?.leadTimeMin,
-                ),
-                Gap.vMd,
-                _PastelQuickActionsRow(
-                  onLiveMonitoring: () =>
-                      Navigator.pushNamed(context, Routes.patientMonitoring),
-                  onHistory: () {
-                    if (widget.onSelectTab != null) {
-                      widget.onSelectTab!(3);
-                    } else {
-                      Navigator.pushNamed(context, Routes.patientHistory);
-                    }
-                  },
-                  onAlerts: () {
-                    if (widget.onSelectTab != null) {
-                      widget.onSelectTab!(1);
-                    }
-                  },
-                  onMore: () => _showMoreServicesSheet(context),
-                ),
-                Gap.vMd,
-                _RecentActivitiesSection(
-                  latestAlert: app.monitoring.alerts.isNotEmpty
-                      ? app.monitoring.alerts.first
-                      : null,
-                  lastObservedAt: app.lastObservedAt,
-                  onViewAll: () {
-                    if (widget.onSelectTab != null) {
-                      widget.onSelectTab!(1);
-                    }
-                  },
-                ),
-                if (app.monitoring.alerts.isNotEmpty) ...[
-                  Gap.vMd,
-                  _RecentAlertsSection(
-                    alerts: app.monitoring.alerts,
-                    onAcknowledge: app.acknowledgeAlert,
-                    onOpen: _openAlert,
-                  ),
-                ],
-                Gap.vLg,
-                // Emergency SOS Button (Retained & Elevated)
-                EmergencyButton(
-                  onPressed: app.sosInProgress ? null : _sos,
-                  busy: app.sosInProgress,
-                ),
-                Gap.vMd,
-                const _FamilyLocationCard(),
-                Gap.vMd,
-                _NextDoseSection(
-                  entry: _nextDose,
-                  enabled: !_busy,
-                  onTake: _takeDose,
-                ),
-                Gap.vMd,
-                const _SimulatorBannerCard(),
-                Gap.vLg,
-              ],
+              ),
             ),
-          ),
+            // SOS pinned: «كبير، ظاهر دائمًا» — never scrolled out of reach,
+            // and at the bottom where a trembling thumb lands first.
+            Material(
+              color: Theme.of(context).colorScheme.surface,
+              elevation: 3,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
+                // Center: lets maxWidth apply, so on wide screens the bar
+                // lines up with the 850 dp content column above it.
+                child: Center(
+                  // heightFactor 1: in a bottom bar an unbounded Center fills the
+                  // whole screen and hides the page.
+                  heightFactor: 1,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 850),
+                    child: EmergencyButton(
+                      onPressed: app.sosInProgress ? null : _sos,
+                      busy: app.sosInProgress,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -581,13 +553,16 @@ class _DashboardTopHeader extends StatelessWidget {
             width: 46,
             height: 46,
             decoration: BoxDecoration(
-              color: const Color(0xFFE8F1FC),
+              color: AppColors.accent(context, AccentTone.blue).container,
               shape: BoxShape.circle,
-              border: Border.all(color: const Color(0xFFB9D7FB), width: 1.5),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+                width: 1.5,
+              ),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.person_outline_rounded,
-              color: Color(0xFF1976D2),
+              color: AppColors.accent(context, AccentTone.blue).foreground,
               size: 26,
             ),
           ),
@@ -601,16 +576,19 @@ class _SmartMonitoringHeroCard extends StatelessWidget {
   const _SmartMonitoringHeroCard({
     required this.monitoring,
     required this.onTap,
+    this.onToggle,
   });
 
   final MonitoringService monitoring;
   final VoidCallback onTap;
 
+  /// Starts/stops monitoring. A visible labelled button: the card itself only
+  /// opens the monitoring screen, which was easy to miss as «how to start».
+  final Future<void> Function(bool enable)? onToggle;
+
   @override
   Widget build(BuildContext context) {
     final ar = Localizations.localeOf(context).languageCode == 'ar';
-    final isHeadDevice = monitoring.source == SignalSource.headDevice;
-
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(22),
@@ -655,44 +633,51 @@ class _SmartMonitoringHeroCard extends StatelessWidget {
                           width: 10,
                           height: 10,
                           decoration: BoxDecoration(
-                            color: isHeadDevice
+                            // Green «live» dot only while monitoring really
+                            // runs; a static grey dot (no glow) when stopped.
+                            color: monitoring.running
                                 ? const Color(0xFF00E676)
-                                : const Color(0xFF00E676),
+                                : const Color(0xFFB0BEC5),
                             shape: BoxShape.circle,
                             boxShadow: [
-                              BoxShadow(
-                                color: const Color(
-                                  0xFF00E676,
-                                ).withValues(alpha: 0.8),
-                                blurRadius: 8,
-                                spreadRadius: 2,
-                              ),
+                              if (monitoring.running)
+                                BoxShadow(
+                                  color: const Color(
+                                    0xFF00E676,
+                                  ).withValues(alpha: 0.8),
+                                  blurRadius: 8,
+                                  spreadRadius: 2,
+                                ),
                             ],
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          ar
-                              ? (monitoring.signalSourceLabel ==
-                                        'dataset_cached_replay'
-                                    ? 'إعادة عرض محلية'
-                                    : monitoring.running
-                                    ? 'المراقبة الذكية نشطة'
-                                    : 'المراقبة متوقفة')
-                              : (monitoring.signalSourceLabel ==
-                                        'dataset_cached_replay'
-                                    ? 'Offline replay'
-                                    : monitoring.running
-                                    ? 'Smart Monitoring Active'
-                                    : 'Monitoring stopped'),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.2,
+                        // Expanded: long titles (English, large text) wrap
+                        // instead of overflowing past the arrow.
+                        Expanded(
+                          child: Text(
+                            ar
+                                ? (monitoring.signalSourceLabel ==
+                                          'dataset_cached_replay'
+                                      ? 'إعادة عرض محلية'
+                                      : monitoring.running
+                                      ? 'المراقبة الذكية نشطة'
+                                      : 'المراقبة متوقفة')
+                                : (monitoring.signalSourceLabel ==
+                                          'dataset_cached_replay'
+                                      ? 'Offline replay'
+                                      : monitoring.running
+                                      ? 'Smart Monitoring Active'
+                                      : 'Monitoring stopped'),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.2,
+                            ),
                           ),
                         ),
-                        const Spacer(),
+                        const SizedBox(width: 8),
                         Container(
                           width: 32,
                           height: 32,
@@ -723,7 +708,12 @@ class _SmartMonitoringHeroCard extends StatelessWidget {
                                   : monitoring.running
                                   ? 'يتم تحليل إشارات EEG\nفي الوقت الحقيقي'
                                   : 'ابدأ المراقبة لعرض\nالبيانات المتاحة')
-                            : 'Analyzing EEG signals\nin real-time',
+                            : (monitoring.signalSourceLabel ==
+                                      'dataset_cached_replay'
+                                  ? 'Previously recorded signals\nno current forecast'
+                                  : monitoring.running
+                                  ? 'Analyzing EEG signals\nin real time'
+                                  : 'Start monitoring to see\navailable data'),
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.92),
                           fontSize: 14,
@@ -732,6 +722,31 @@ class _SmartMonitoringHeroCard extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (onToggle != null) ...[
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          // White on the fixed brand gradient in both themes.
+                          backgroundColor: Colors.white,
+                          foregroundColor: const Color(0xFF003B94),
+                          minimumSize: const Size(0, A11y.minTouchTarget),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        onPressed: () => onToggle!(!monitoring.running),
+                        icon: Icon(
+                          monitoring.running
+                              ? Icons.stop_circle_outlined
+                              : Icons.play_circle_outline_rounded,
+                        ),
+                        label: Text(
+                          monitoring.running
+                              ? (ar ? 'إيقاف المراقبة' : 'Stop monitoring')
+                              : (ar ? 'ابدأ المراقبة' : 'Start monitoring'),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -836,17 +851,12 @@ class _SeizureProbabilityCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(5),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE8F1FC),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.stacked_bar_chart_rounded,
-                  color: Color(0xFF1976D2),
-                  size: 18,
-                ),
+              const ToneIcon(
+                icon: Icons.stacked_bar_chart_rounded,
+                tone: AccentTone.blue,
+                size: 18,
+                padding: 5,
+                radius: 8,
               ),
               const SizedBox(width: 8),
               Text(
@@ -923,50 +933,47 @@ class _SeizureProbabilityCard extends StatelessWidget {
 
 class _PastelQuickActionsRow extends StatelessWidget {
   const _PastelQuickActionsRow({
-    required this.onLiveMonitoring,
-    required this.onHistory,
-    required this.onAlerts,
+    required this.onAddRecord,
+    required this.onEmergencyPlan,
+    required this.onTriggers,
     required this.onMore,
   });
 
-  final VoidCallback onLiveMonitoring;
-  final VoidCallback onHistory;
-  final VoidCallback onAlerts;
+  final VoidCallback onAddRecord;
+  final VoidCallback onEmergencyPlan;
+  final VoidCallback onTriggers;
   final VoidCallback onMore;
 
   @override
   Widget build(BuildContext context) {
     final ar = Localizations.localeOf(context).languageCode == 'ar';
-
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
           child: _PastelTile(
-            label: ar ? 'مراقبة مباشرة' : 'Live Monitor',
-            icon: Icons.show_chart_rounded,
-            backgroundColor: const Color(0xFFEBF3FF),
-            foregroundColor: const Color(0xFF1976D2),
-            onTap: onLiveMonitoring,
+            label: ar ? 'إضافة سجل' : 'Add record',
+            icon: Icons.add_circle_outline_rounded,
+            tone: AccentTone.blue,
+            onTap: onAddRecord,
           ),
         ),
         const SizedBox(width: 10),
         Expanded(
           child: _PastelTile(
-            label: ar ? 'السجل' : 'Diary',
-            icon: Icons.assignment_outlined,
-            backgroundColor: const Color(0xFFEEF0FA),
-            foregroundColor: const Color(0xFF3949AB),
-            onTap: onHistory,
+            label: ar ? 'خطة الطوارئ' : 'Emergency plan',
+            icon: Icons.emergency_outlined,
+            tone: AccentTone.red,
+            onTap: onEmergencyPlan,
           ),
         ),
         const SizedBox(width: 10),
         Expanded(
           child: _PastelTile(
-            label: ar ? 'التنبيهات' : 'Alerts',
-            icon: Icons.notifications_active_outlined,
-            backgroundColor: const Color(0xFFFFEEEE),
-            foregroundColor: const Color(0xFFE53935),
-            onTap: onAlerts,
+            label: ar ? 'المحفزات' : 'Triggers',
+            icon: Icons.bolt_outlined,
+            tone: AccentTone.orange,
+            onTap: onTriggers,
           ),
         ),
         const SizedBox(width: 10),
@@ -974,8 +981,7 @@ class _PastelQuickActionsRow extends StatelessWidget {
           child: _PastelTile(
             label: ar ? 'المزيد' : 'More',
             icon: Icons.more_horiz_rounded,
-            backgroundColor: const Color(0xFFF0F4F8),
-            foregroundColor: const Color(0xFF455A64),
+            tone: AccentTone.slate,
             onTap: onMore,
           ),
         ),
@@ -988,44 +994,51 @@ class _PastelTile extends StatelessWidget {
   const _PastelTile({
     required this.label,
     required this.icon,
-    required this.backgroundColor,
-    required this.foregroundColor,
+    required this.tone,
     required this.onTap,
   });
 
   final String label;
   final IconData icon;
-  final Color backgroundColor;
-  final Color foregroundColor;
+  final AccentTone tone;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        children: [
-          Container(
-            height: 64,
-            decoration: BoxDecoration(
-              color: backgroundColor,
-              borderRadius: BorderRadius.circular(18),
+    final c = AppColors.accent(context, tone);
+    // InkWell (not GestureDetector): visible press feedback, and announced
+    // as a button with its label by screen readers.
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Column(
+          children: [
+            Container(
+              height: 64,
+              decoration: BoxDecoration(
+                color: c.container,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Center(child: Icon(icon, color: c.foreground, size: 28)),
             ),
-            child: Center(child: Icon(icon, color: foregroundColor, size: 28)),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF2C3E50),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1057,18 +1070,26 @@ class _RecentActivitiesSection extends StatelessWidget {
       title = latestAlert!.message;
       timeLabel = TimeAgo.clock(latestAlert!.timestamp);
       icon = Icons.warning_amber_rounded;
-      iconColor = const Color(0xFFE65100);
-      iconBg = const Color(0xFFFFF3E0);
-    } else {
-      title = ar ? 'إشارة EEG طبيعية' : 'Normal EEG Signal';
-      timeLabel = lastObservedAt != null
-          ? (ar
-                ? 'اليوم ${TimeAgo.clock(lastObservedAt!)}'
-                : 'Today ${TimeAgo.clock(lastObservedAt!)}')
-          : (ar ? 'اليوم 09:41 صباحًا' : 'Today 09:41 AM');
+      final c = AppColors.accent(context, AccentTone.orange);
+      iconColor = c.foreground;
+      iconBg = c.container;
+    } else if (lastObservedAt != null) {
+      // A reading arrived; no alert is not a clinical «normal» verdict.
+      title = ar ? 'وصلت قراءة، لا تنبيه' : 'Reading received, no alert';
+      timeLabel = ar
+          ? 'اليوم ${TimeAgo.clock(lastObservedAt!)}'
+          : 'Today ${TimeAgo.clock(lastObservedAt!)}';
       icon = Icons.check_rounded;
-      iconColor = const Color(0xFF00A86B);
-      iconBg = const Color(0xFFE8F5E9);
+      final c = AppColors.accent(context, AccentTone.green);
+      iconColor = c.foreground;
+      iconBg = c.container;
+    } else {
+      title = ar ? 'لا توجد قراءات بعد' : 'No readings yet';
+      timeLabel = '—';
+      icon = Icons.hourglass_empty_rounded;
+      final c = AppColors.accent(context, AccentTone.slate);
+      iconColor = c.foreground;
+      iconBg = c.container;
     }
 
     return Column(
@@ -1485,10 +1506,12 @@ class _DeviceSection extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final lastSeen = DateTime.tryParse(monitoring.lastDeviceSeen ?? '');
 
-    final (
-      RiskView view,
-      String status,
-    ) = monitoring.source == SignalSource.simulator
+    final (RiskView view, String status) = !monitoring.running
+        ? (
+            RiskView.unknown,
+            l.isArabic ? 'المراقبة متوقفة' : 'Monitoring stopped',
+          )
+        : monitoring.source == SignalSource.simulator
         ? (
             RiskView.safe,
             l.isArabic
@@ -1498,9 +1521,10 @@ class _DeviceSection extends StatelessWidget {
         : monitoring.source == SignalSource.dataset
         ? (
             RiskView.safe,
+            // Recorded data is replayed, not a live clinical stream.
             l.isArabic
-                ? 'المراقبة السريرية نشطة'
-                : 'Clinical Monitoring Active',
+                ? 'المراقبة نشطة (بيانات مسجّلة)'
+                : 'Monitoring active (recorded data)',
           )
         : monitoring.deviceConnected
         ? (RiskView.safe, l.deviceConnected)
@@ -1573,6 +1597,9 @@ class _MonitoringEngineCard extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final ar = l.isArabic;
 
+    final engineView = app.monitoring.hasUsableAssessment
+        ? RiskView.safe
+        : RiskView.unknown;
     return SectionCard(
       title: ar
           ? 'محرك الذكاء الاصطناعي والمراقبة السريرية'
@@ -1581,15 +1608,15 @@ class _MonitoringEngineCard extends StatelessWidget {
       trailing: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
-          color: const Color(0xFF0F7A4D).withValues(alpha: 0.12),
+          color: AppColors.of(context, engineView).container,
           borderRadius: BorderRadius.circular(Radii.pill),
         ),
         child: Text(
           app.monitoring.hasUsableAssessment
               ? (ar ? 'تقييم حديث متاح' : 'Recent assessment')
               : (ar ? 'لا يوجد تقييم حديث' : 'No recent assessment'),
-          style: const TextStyle(
-            color: Color(0xFF0F7A4D),
+          style: TextStyle(
+            color: AppColors.of(context, engineView).foreground,
             fontSize: 11,
             fontWeight: FontWeight.bold,
           ),
@@ -2111,18 +2138,19 @@ class _FamilyLocationCardState extends State<_FamilyLocationCard> {
             width: double.infinity,
             height: A11y.minTouchTarget,
             child: FilledButton.icon(
+              // Theme «safe» tone (white on Colors.teal was 3.7:1).
               style: FilledButton.styleFrom(
-                backgroundColor: Colors.teal,
-                foregroundColor: Colors.white,
+                backgroundColor: AppColors.of(context, RiskView.safe).solid,
+                foregroundColor: AppColors.of(context, RiskView.safe).onSolid,
               ),
               onPressed: _sharing ? null : () => _share(app),
               icon: _sharing
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: Colors.white,
+                        color: AppColors.of(context, RiskView.safe).onSolid,
                       ),
                     )
                   : const Icon(Icons.my_location),
@@ -2172,9 +2200,9 @@ class _SimulatorBannerCard extends StatelessWidget {
                 color: theme.colorScheme.primary,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.monitor_heart,
-                color: Colors.white,
+                color: theme.colorScheme.onPrimary,
                 size: 22,
               ),
             ),
@@ -2394,9 +2422,11 @@ class _PatientMonitoringScreenState extends State<PatientMonitoringScreen> {
               child: FilledButton.icon(
                 style: FilledButton.styleFrom(
                   backgroundColor: app.monitoring.running
-                      ? const Color(0xFFE53935)
-                      : const Color(0xFF0066FF),
-                  foregroundColor: Colors.white,
+                      ? AppColors.of(context, RiskView.danger).solid
+                      : Theme.of(context).colorScheme.primary,
+                  foregroundColor: app.monitoring.running
+                      ? AppColors.of(context, RiskView.danger).onSolid
+                      : Theme.of(context).colorScheme.onPrimary,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),

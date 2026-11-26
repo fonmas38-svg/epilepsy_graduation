@@ -46,6 +46,30 @@ class EmergencyPlanScreen extends StatelessWidget {
           ),
         ],
       ),
+      // SOS pinned at the bottom, always visible (design §6).
+      bottomNavigationBar: Material(
+        color: Theme.of(context).colorScheme.surface,
+        elevation: 3,
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(Gap.lg, Gap.sm, Gap.lg, Gap.md),
+            child: Center(
+              // heightFactor 1: in a bottom bar an unbounded Center fills the
+              // whole screen and hides the page.
+              heightFactor: 1,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1000),
+                child: EmergencyButton(
+                  label: l.needHelp,
+                  busy: app.sosInProgress,
+                  onPressed: app.sosInProgress ? null : () => app.triggerSos(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
       body: ResponsiveContent(
         maxWidth: 1000,
         child: ListView(
@@ -56,11 +80,67 @@ class EmergencyPlanScreen extends StatelessWidget {
               icon: Icons.offline_bolt_outlined,
             ),
             Gap.vMd,
-            EmergencyButton(
-              label: l.needHelp,
-              busy: app.sosInProgress,
-              onPressed: () => app.triggerSos(),
+            // Responder card first: this screen is often handed to a
+            // bystander or paramedic during a seizure.
+            if (care.hasCardConflict) ...[
+              _CardConflictBanner(
+                onResolve: (keepLocal) =>
+                    care.resolveCardConflict(keepLocal: keepLocal),
+              ),
+              Gap.vMd,
+            ],
+            _MedicalCardSection(card: card),
+            Gap.vSm,
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, A11y.minTouchTarget),
+                ),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const MedicalLockScreen(),
+                  ),
+                ),
+                icon: const Icon(Icons.fullscreen_rounded),
+                label: Text(
+                  l.isArabic
+                      ? 'عرض البطاقة للمسعف بملء الشاشة'
+                      : 'Show card full screen for a responder',
+                ),
+              ),
             ),
+            if (contacts.isNotEmpty) ...[
+              Gap.vMd,
+              // One large call to the highest-priority contact.
+              SizedBox(
+                height: 64,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.of(context, RiskView.safe).solid,
+                    foregroundColor: AppColors.of(
+                      context,
+                      RiskView.safe,
+                    ).onSolid,
+                    textStyle: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                  ),
+                  onPressed: () async {
+                    final ok = await ExternalActions.dial(contacts.first.phone);
+                    if (!ok && context.mounted) {
+                      AppSnack.warn(context, l.errUnknown);
+                    }
+                  },
+                  icon: const Icon(Icons.call_rounded),
+                  label: Text('${l.call} — ${contacts.first.name}'),
+                ),
+              ),
+            ],
             Gap.vMd,
             SectionCard(
               title: l.contactsSection,
@@ -107,18 +187,25 @@ class EmergencyPlanScreen extends StatelessWidget {
                                 _editContact(context, app, contacts[i]),
                             onDelete: () => _delete(context, app, contacts[i]),
                           ),
+                        // The most important action on this screen gets a
+                        // labelled, full-width button, not only the small «+».
+                        Gap.vSm,
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, A11y.minTouchTarget),
+                            ),
+                            onPressed: care.patientId == null
+                                ? null
+                                : () => _editContact(context, app, null),
+                            icon: const Icon(Icons.person_add_alt_1_outlined),
+                            label: Text(l.addContact),
+                          ),
+                        ),
                       ],
                     ),
             ),
-            Gap.vMd,
-            if (care.hasCardConflict) ...[
-              _CardConflictBanner(
-                onResolve: (keepLocal) =>
-                    care.resolveCardConflict(keepLocal: keepLocal),
-              ),
-              Gap.vMd,
-            ],
-            _MedicalCardSection(card: card),
             Gap.vMd,
             const FirstAidView(),
           ],
@@ -310,30 +397,45 @@ class _ContactTile extends StatelessWidget {
             ],
           ),
           Gap.vXs,
-          Row(
-            children: [
-              Expanded(
-                child: SizedBox(
-                  height: A11y.minTouchTarget,
-                  child: FilledButton.icon(
-                    onPressed: () => _call(context),
-                    icon: const Icon(Icons.call_outlined),
-                    label: Text(l.callNow),
-                  ),
+          // Side by side normally; stacked full width under large text so
+          // neither label is clipped (design system: 200 % text check).
+          Builder(
+            builder: (context) {
+              final call = ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minHeight: A11y.minTouchTarget,
                 ),
-              ),
-              Gap.hSm,
-              Expanded(
-                child: SizedBox(
-                  height: A11y.minTouchTarget,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _sms(context),
-                    icon: const Icon(Icons.sms_outlined),
-                    label: Text(l.message),
-                  ),
+                child: FilledButton.icon(
+                  onPressed: () => _call(context),
+                  icon: const Icon(Icons.call_outlined),
+                  label: Text(l.callNow),
                 ),
-              ),
-            ],
+              );
+              final sms = ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minHeight: A11y.minTouchTarget,
+                ),
+                child: OutlinedButton.icon(
+                  onPressed: () => _sms(context),
+                  icon: const Icon(Icons.sms_outlined),
+                  label: Text(l.message),
+                ),
+              );
+              final largeText = MediaQuery.textScalerOf(context).scale(14) > 21;
+              if (largeText) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [call, Gap.vSm, sms],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: call),
+                  Gap.hSm,
+                  Expanded(child: sms),
+                ],
+              );
+            },
           ),
         ],
       ),

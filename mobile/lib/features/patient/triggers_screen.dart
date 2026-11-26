@@ -57,8 +57,8 @@ class TriggersScreen extends StatelessWidget {
       appBar: AppBar(title: Text(l.triggersTitle)),
       floatingActionButton: FloatingActionButton.extended(
         heroTag: null,
-        backgroundColor: const Color(0xFF0066FF),
-        foregroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Theme.of(context).colorScheme.onPrimary,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         elevation: 2,
         onPressed: care.patientId == null

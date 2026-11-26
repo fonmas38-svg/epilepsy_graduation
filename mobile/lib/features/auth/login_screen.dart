@@ -122,10 +122,21 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       if (!mounted) return;
-      await context.read<AppState>().signInWithPassword(
-        username: u,
-        password: p,
-      );
+      final app = context.read<AppState>();
+      try {
+        await app.signInWithPassword(username: u, password: p);
+      } on Failure catch (f) {
+        if (f.kind != FailureKind.conflict || !mounted) rethrow;
+        // Reinstall, cleared data or a new phone: let the owner move the
+        // account here instead of being locked out by a device that is gone.
+        final move = await _confirmMoveHere();
+        if (move != true || !mounted) rethrow;
+        await app.signInWithPassword(
+          username: u,
+          password: p,
+          takeOverDevice: true,
+        );
+      }
       if (mounted) {
         final role = context.read<AppState>().auth.currentUser?.role;
         final target = AppRouter.rootFor(role);
@@ -136,6 +147,33 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<bool?> _confirmMoveHere() {
+    final ar = Localizations.localeOf(context).languageCode == 'ar';
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          ar ? 'نقل الحساب إلى هذا الجهاز؟' : 'Move your account here?',
+        ),
+        content: Text(
+          ar
+              ? 'حسابك مفتوح على جهاز آخر. إن كان هاتفاً قديماً أو أعدت تثبيت التطبيق، انقل الحساب إلى هذا الجهاز. سيُسجَّل خروج الجهاز الآخر وتتوقف المراقبة عليه.'
+              : 'Your account is open on another device. If that is an old phone or you reinstalled the app, move it here. The other device will be signed out and stop monitoring.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(ar ? 'إلغاء' : 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(ar ? 'نقل إلى هذا الجهاز' : 'Move here'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loginWithBiometrics() async {

@@ -991,6 +991,7 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       failure = Failure.from(e);
     }
+    await _requireClinicalSignIn();
     try {
       await notifications.init(
         fallbackTitle: _l10n.notificationFallbackTitle,
@@ -1146,6 +1147,7 @@ class AppState extends ChangeNotifier {
   Future<void> signInWithPassword({
     required String username,
     required String password,
+    bool takeOverDevice = false,
   }) async {
     if (_signOutFuture != null) await _signOutFuture;
     failure = null;
@@ -1159,6 +1161,7 @@ class AppState extends ChangeNotifier {
           username,
           password,
           timeout: const Duration(seconds: 35),
+          takeOverDevice: takeOverDevice,
         );
         final context = await api.sessionContext();
         await auth.applyBackendSession(context);
@@ -1253,7 +1256,14 @@ class AppState extends ChangeNotifier {
             customMessage: _l10n.errAccountLocked,
           );
         } else if (e.statusCode == 409) {
-          throw Failure(FailureKind.validation, customMessage: e.message);
+          // Another installation holds the account; the login screen offers
+          // to move it here (the server message is Arabic-only).
+          throw Failure(
+            FailureKind.conflict,
+            customMessage: _l10n.isArabic
+                ? 'حسابك مفتوح على جهاز آخر.'
+                : 'Your account is open on another device.',
+          );
         }
         throw Failure.from(e);
       }
@@ -1379,6 +1389,33 @@ class AppState extends ChangeNotifier {
       customMessage:
           'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التحقق وإعادة المحاولة.',
     );
+  }
+
+  /// Doctors and admins see many patients' records: a restored session is
+  /// never reused on launch. With fingerprint sign-in enabled only the local
+  /// session is dropped (the fingerprint-protected copy signs back in);
+  /// otherwise the session is revoked and the password is required.
+  Future<void> _requireClinicalSignIn() async {
+    final role = auth.currentUser?.role;
+    if (role != UserRole.doctor && role != UserRole.admin) return;
+    if (auth.isDemoSession) return;
+    try {
+      final username = currentSessionUsername ?? await getLastLoggedInUser();
+      final fingerprint =
+          username != null &&
+          await biometrics.isAvailable &&
+          await biometrics.isEnabledForUser(username);
+      if (fingerprint) {
+        await api.tokens.clear();
+        await auth.signOut();
+      } else {
+        await signOut();
+      }
+    } catch (_) {
+      // Fail closed: never leave a clinical session restored by accident.
+      await api.tokens.clear();
+      await auth.signOut();
+    }
   }
 
   Future<void> signInWithBiometrics(String username) async {

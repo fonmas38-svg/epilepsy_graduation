@@ -462,3 +462,23 @@ def test_concurrent_first_logins_cannot_bind_two_devices(client, role):
     with ThreadPoolExecutor(max_workers=2) as pool:
         statuses = list(pool.map(issue, ["phone-a", "phone-b"]))
     assert sorted(statuses) == [200, 409]
+
+
+def test_confirmed_takeover_moves_patient_account_to_new_device(client):
+    """A reinstall/new phone must not lock the owner out: with the right
+    password and an explicit takeover, the old device's sessions end."""
+    user = make_user()
+    first = client.post("/auth/login", json={"username": user["username"], "password": PASSWORD,
+                                             "device_id": "old-phone"})
+    assert first.status_code == 200
+    old_headers = {"Authorization": f"Bearer {first.json()['access_token']}"}
+    blocked = client.post("/auth/login", json={"username": user["username"], "password": PASSWORD,
+                                               "device_id": "new-phone"})
+    assert blocked.status_code == 409
+    wrong = client.post("/auth/login", json={"username": user["username"], "password": "wrong-password",
+                                             "device_id": "new-phone", "take_over_device": True})
+    assert wrong.status_code == 401
+    moved = client.post("/auth/login", json={"username": user["username"], "password": PASSWORD,
+                                             "device_id": "new-phone", "take_over_device": True})
+    assert moved.status_code == 200
+    assert client.get("/auth/me", headers=old_headers).status_code == 401

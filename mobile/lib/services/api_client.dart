@@ -237,6 +237,7 @@ class ApiClient {
     String password, {
     Duration timeout = const Duration(seconds: 35),
     String? deviceId,
+    bool takeOverDevice = false,
   }) async {
     final origin = _baseUrl;
     final revision = tokens.revision;
@@ -254,6 +255,8 @@ class ApiClient {
                 : 'App on ${defaultTargetPlatform.name}',
             'platform': kIsWeb ? 'web' : defaultTargetPlatform.name,
             'device_id': resolvedDeviceId,
+            // Only after the user confirmed moving the account here.
+            if (takeOverDevice) 'take_over_device': true,
           }),
         )
         .timeout(timeout);

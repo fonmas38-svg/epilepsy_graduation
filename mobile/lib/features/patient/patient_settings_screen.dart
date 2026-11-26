@@ -720,7 +720,9 @@ class _PrivacySectionState extends State<_PrivacySection> {
             Gap.vXs,
           ],
           SwitchListTile(
-            value: s.autoLockEnabled,
+            value: s.autoLockFor(
+              context.read<AppState>().auth.currentUser?.role,
+            ),
             contentPadding: EdgeInsets.zero,
             onChanged: (val) => s.setAutoLockEnabled(val),
             title: Text(
@@ -735,7 +737,9 @@ class _PrivacySectionState extends State<_PrivacySection> {
             ),
             secondary: const Icon(Icons.lock_clock_outlined),
           ),
-          if (s.autoLockEnabled) ...[
+          if (s.autoLockFor(
+            context.read<AppState>().auth.currentUser?.role,
+          )) ...[
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(

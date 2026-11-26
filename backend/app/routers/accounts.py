@@ -111,6 +111,9 @@ class LoginRequest(BaseModel):
     device_name: str = Field(default="Unknown device", min_length=1, max_length=120)
     platform: str = Field(default="unknown", min_length=1, max_length=32)
     device_id: str | None = Field(default=None, max_length=128)
+    # Explicit, confirmed by the user after a 409: the old installation is
+    # gone (reinstall, cleared data, new phone). Requires the right password.
+    take_over_device: bool = False
 
 
 class LoginResponse(BaseModel):
@@ -345,6 +348,23 @@ def login(body: LoginRequest, request: Request):
         conflicting = account_sessions_store.get_active_session_on_other_device(
             user["id"], body.device_id
         )
+        if conflicting and body.take_over_device:
+            # Password already verified above: end the old device's sessions
+            # (and push routes) instead of locking the owner out of the account.
+            account_sessions_store.revoke(user["id"])
+            users_store.log(
+                actor=user["id"],
+                actor_role=user["role"],
+                action="login_device_takeover",
+                target=user["id"],
+                detail={
+                    "ip": client_ip,
+                    "device_id": body.device_id,
+                    "replaced_session_id": conflicting.get("id"),
+                    "replaced_device_id": conflicting.get("device_id"),
+                },
+            )
+            conflicting = None
         if conflicting:
             users_store.log(
                 actor=user["id"],

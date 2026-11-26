@@ -28,6 +28,8 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
   Timer? _timer;
   late final BiometricService _verifier;
   bool _locked = false, _busy = false, _supported = false;
+  final _password = TextEditingController();
+  bool _passwordWrong = false;
   bool _confirmLogout = false, _logoutFailed = false;
   AppUser? _owner;
   String? _origin;
@@ -60,8 +62,33 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
     if (mounted) setState(() => _supported = supported);
   }
 
+  /// Fallback when the phone has no PIN/fingerprint: the account password,
+  /// checked offline, instead of signing out (which stops monitoring).
+  Future<void> _unlockWithPassword(AppState app) async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _passwordWrong = false;
+    });
+    final ok = await app.verifyLockPassword(_password.text);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (ok) {
+        _locked = false;
+        _confirmLogout = false;
+        _logoutFailed = false;
+        _password.clear();
+      } else {
+        _passwordWrong = true;
+      }
+    });
+    if (ok) _resetTimer();
+  }
+
   @override
   void dispose() {
+    _password.dispose();
     _timer?.cancel();
     super.dispose();
   }
@@ -209,13 +236,39 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
                                         : 'Unlock with device security',
                                   ),
                                 )
-                              else
+                              else ...[
                                 Text(
                                   l.isArabic
-                                      ? 'التحقق بقفل الجهاز غير متاح. سجّل الخروج ثم ادخل مجددًا، واضبط حماية الجهاز من إعدادات نظام التشغيل.'
-                                      : 'Device verification is unavailable. Sign out and sign in again, and configure device security in system settings.',
+                                      ? 'لا يوجد قفل للجهاز. أدخل كلمة مرور حسابك للمتابعة.'
+                                      : 'This phone has no screen lock. Enter your account password to continue.',
                                   textAlign: TextAlign.center,
                                 ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _password,
+                                  obscureText: true,
+                                  enabled: !_busy,
+                                  onSubmitted: (_) => _unlockWithPassword(app),
+                                  decoration: InputDecoration(
+                                    labelText: l.isArabic
+                                        ? 'كلمة المرور'
+                                        : 'Password',
+                                    errorText: _passwordWrong
+                                        ? (l.isArabic
+                                              ? 'كلمة المرور غير صحيحة.'
+                                              : 'Incorrect password.')
+                                        : null,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                FilledButton.icon(
+                                  onPressed: _busy
+                                      ? null
+                                      : () => _unlockWithPassword(app),
+                                  icon: const Icon(Icons.lock_open),
+                                  label: Text(l.isArabic ? 'فتح' : 'Unlock'),
+                                ),
+                              ],
                               const SizedBox(height: 12),
                               if (_logoutFailed)
                                 Semantics(

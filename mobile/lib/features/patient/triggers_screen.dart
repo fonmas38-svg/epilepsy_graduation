@@ -117,15 +117,15 @@ class TriggersScreen extends StatelessWidget {
               title: l.triggerHistory,
               icon: Icons.edit_note_outlined,
               child: triggers.isEmpty
+                  // One add button: the floating one stays on screen, so the
+                  // empty state only explains what to do.
                   ? EmptyState(
                       title: l.emptyTitle,
-                      body: l.emptyBody,
+                      body: l.isArabic
+                          ? 'اضغط «إضافة محفّز» لتسجيل قلة نوم أو توتر أو غيرها.'
+                          : 'Tap «Add trigger» to log poor sleep, stress or others.',
                       icon: Icons.event_note_outlined,
                       compact: true,
-                      actionLabel: l.addTrigger,
-                      action: care.patientId == null
-                          ? null
-                          : () => _openSheet(context, app),
                     )
                   : Column(
                       children: [

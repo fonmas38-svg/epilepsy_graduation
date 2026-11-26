@@ -1414,6 +1414,29 @@ class AppState extends ChangeNotifier {
 
   static const _lastUserKey = 'last_logged_in_username';
 
+  /// Checks [password] against the encrypted offline credential of the
+  /// signed-in account, so the auto-lock can be lifted on a phone without a
+  /// PIN or fingerprint (and without a network) instead of forcing sign-out.
+  Future<bool> verifyLockPassword(String password) async {
+    final user = auth.currentUser;
+    final username = currentSessionUsername ?? await getLastLoggedInUser();
+    if (user == null || username == null || password.isEmpty) return false;
+    try {
+      final cred = await db.getUserCredentials(
+        username: username.trim().toLowerCase(),
+        serverOrigin: api.baseUrl,
+      );
+      if (cred == null || cred['userId'] != user.uid) return false;
+      return await PasswordHasher.verifyAsync(
+        password,
+        cred['salt'] as String,
+        cred['passwordHash'] as String,
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> saveLastLoggedInUser(String username) async {
     try {
       final prefs = await SharedPreferences.getInstance();

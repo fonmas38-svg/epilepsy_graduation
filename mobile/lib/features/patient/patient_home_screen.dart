@@ -158,7 +158,12 @@ class _DashboardTabState extends State<_DashboardTab> {
   ScheduleEntry? get _nextDose {
     final pending = _schedule.where((e) => !e.taken).toList();
     if (pending.isEmpty) return null;
-    final now = TimeAgo.clock(DateTime.now());
+    // Same 24-hour «HH:mm» form as the schedule, so the comparison holds
+    // (the 12-hour display string sorted wrongly against «20:00»).
+    final clock = DateTime.now();
+    final now =
+        '${clock.hour.toString().padLeft(2, '0')}:'
+        '${clock.minute.toString().padLeft(2, '0')}';
     for (final e in pending) {
       if (e.time.compareTo(now) >= 0) return e;
     }
@@ -1085,7 +1090,10 @@ class _RecentActivitiesSection extends StatelessWidget {
 
     if (hasAlert) {
       title = latestAlert!.message;
-      timeLabel = TimeAgo.clock(latestAlert!.timestamp);
+      timeLabel = TimeAgo.clock(
+        latestAlert!.timestamp,
+        AppLocalizations.of(context),
+      );
       icon = Icons.warning_amber_rounded;
       final c = AppColors.accent(context, AccentTone.orange);
       iconColor = c.foreground;
@@ -1094,8 +1102,8 @@ class _RecentActivitiesSection extends StatelessWidget {
       // A reading arrived; no alert is not a clinical «normal» verdict.
       title = ar ? 'وصلت قراءة، لا تنبيه' : 'Reading received, no alert';
       timeLabel = ar
-          ? 'اليوم ${TimeAgo.clock(lastObservedAt!)}'
-          : 'Today ${TimeAgo.clock(lastObservedAt!)}';
+          ? 'اليوم ${TimeAgo.clock(lastObservedAt!, AppLocalizations.of(context))}'
+          : 'Today ${TimeAgo.clock(lastObservedAt!, AppLocalizations.of(context))}';
       icon = Icons.check_rounded;
       final c = AppColors.accent(context, AccentTone.green);
       iconColor = c.foreground;

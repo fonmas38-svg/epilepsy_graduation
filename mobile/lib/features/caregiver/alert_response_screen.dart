@@ -605,7 +605,7 @@ class _Headline extends StatelessWidget {
               RiskBadge(view: s.view, labelOverride: s.label),
               const Spacer(),
               Text(
-                TimeAgo.clock(alert.timestamp),
+                TimeAgo.clock(alert.timestamp, AppLocalizations.of(context)),
                 style: theme.textTheme.labelLarge?.copyWith(
                   color: tone.foreground,
                 ),

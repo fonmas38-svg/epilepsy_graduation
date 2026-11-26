@@ -106,7 +106,7 @@ class VitalReading {
     'id': id,
     'patientId': patientId,
     'serverOrigin': serverOrigin,
-    'timestamp': timestamp.toIso8601String(),
+    'timestamp': timestamp.toUtc().toIso8601String(),
     'eeg': eeg,
     'ecg': ecg,
     'motion': motion,
@@ -118,7 +118,7 @@ class VitalReading {
     serverOrigin: map['serverOrigin'] as String? ?? '',
     id: map['id'] as String,
     patientId: map['patientId'] as String,
-    timestamp: DateTime.parse(map['timestamp'] as String),
+    timestamp: DateTime.parse(map['timestamp'] as String).toLocal(),
     eeg: List<double>.from(
       (map['eeg'] as List).map((e) => (e as num).toDouble()),
     ),
@@ -164,7 +164,7 @@ class RiskAssessment {
     'id': id,
     'patientId': patientId,
     'serverOrigin': serverOrigin,
-    'timestamp': timestamp.toIso8601String(),
+    'timestamp': timestamp.toUtc().toIso8601String(),
     'label': label.apiValue,
     'confidence': confidence,
     'features': features,
@@ -175,7 +175,7 @@ class RiskAssessment {
     serverOrigin: map['serverOrigin'] as String? ?? '',
     id: map['id'] as String,
     patientId: map['patientId'] as String,
-    timestamp: DateTime.parse(map['timestamp'] as String),
+    timestamp: DateTime.parse(map['timestamp'] as String).toLocal(),
     label: RiskLabelX.fromApi(map['label'] as String? ?? 'stable'),
     confidence: (map['confidence'] as num?)?.toDouble() ?? 0,
     features: Map<String, dynamic>.from(map['features'] as Map? ?? {}),
@@ -238,7 +238,7 @@ class AlertItem {
     'id': id,
     'patientId': patientId,
     'serverOrigin': serverOrigin,
-    'timestamp': timestamp.toIso8601String(),
+    'timestamp': timestamp.toUtc().toIso8601String(),
     'severity': severity,
     'message': message,
     'recipients': recipients,
@@ -255,7 +255,8 @@ class AlertItem {
     patientId:
         map['patientId'] as String? ?? map['patient_id'] as String? ?? '',
     timestamp:
-        DateTime.tryParse(map['timestamp'] as String? ?? '') ?? DateTime.now(),
+        DateTime.tryParse(map['timestamp'] as String? ?? '')?.toLocal() ??
+        DateTime.now(),
     severity: map['severity'] as String? ?? 'info',
     message: map['message'] as String? ?? '',
     recipients: List<String>.from(

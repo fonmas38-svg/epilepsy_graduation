@@ -668,7 +668,7 @@ class _TimelineRow extends StatelessWidget {
                   ],
                   const SizedBox(height: 2),
                   Text(
-                    TimeAgo.stamp(event.at),
+                    TimeAgo.stamp(event.at, AppLocalizations.of(context)),
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                       fontSize: 11,

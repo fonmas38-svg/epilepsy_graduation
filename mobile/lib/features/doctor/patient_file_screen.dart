@@ -1085,7 +1085,7 @@ class _EventTile extends StatelessWidget {
                   ),
                 Text(
                   [
-                    TimeAgo.stamp(event.at),
+                    TimeAgo.stamp(event.at, AppLocalizations.of(context)),
                     if (event.pending) l.pendingSync,
                   ].join(' · '),
                   style: theme.textTheme.labelSmall?.copyWith(
@@ -1115,7 +1115,9 @@ class _SignalSection extends StatelessWidget {
     return SectionCard(
       title: l.signalWindowSection,
       icon: Icons.show_chart_outlined,
-      subtitle: r == null ? null : TimeAgo.stamp(r.timestamp),
+      subtitle: r == null
+          ? null
+          : TimeAgo.stamp(r.timestamp, AppLocalizations.of(context)),
       child: r == null
           ? EmptyState(
               title: l.chartNoData,
@@ -1269,7 +1271,10 @@ class _NotesSection extends StatelessWidget {
                     Text(n.text, style: theme.textTheme.bodyMedium),
                     Text(
                       [
-                        TimeAgo.stamp(n.writtenAt),
+                        TimeAgo.stamp(
+                          n.writtenAt,
+                          AppLocalizations.of(context),
+                        ),
                         if (!n.synced) l.pendingSync,
                       ].join(' · '),
                       style: theme.textTheme.labelSmall?.copyWith(

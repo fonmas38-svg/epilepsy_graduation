@@ -827,7 +827,10 @@ class _MessageBubble extends StatelessWidget {
                 runSpacing: 2,
                 children: [
                   Text(
-                    TimeAgo.stamp(message.createdAt),
+                    TimeAgo.stamp(
+                      message.createdAt,
+                      AppLocalizations.of(context),
+                    ),
                     style: TextStyle(
                       fontSize: 11,
                       color: own

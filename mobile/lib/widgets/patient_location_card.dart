@@ -101,7 +101,7 @@ class _PatientLocationCardState extends State<PatientLocationCard> {
                 Text(
                   at == null
                       ? (ar ? 'وقت المشاركة غير معروف' : 'Share time unknown')
-                      : TimeAgo.stamp(at),
+                      : TimeAgo.stamp(at, AppLocalizations.of(context)),
                 ),
                 if (source != null)
                   Text(

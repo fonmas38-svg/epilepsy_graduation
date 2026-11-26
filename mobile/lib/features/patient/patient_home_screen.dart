@@ -413,6 +413,7 @@ class _DashboardTabState extends State<_DashboardTab> {
                       Gap.vMd,
                       _SeizureProbabilityCard(
                         riskView: app.riskView,
+                        observedAt: app.lastObservedAt,
                         probability: prediction?.preictalProb,
                         leadTimeMin: prediction?.leadTimeMin,
                       ),
@@ -763,20 +764,36 @@ class _SeizureProbabilityCard extends StatelessWidget {
     required this.riskView,
     required this.probability,
     this.leadTimeMin,
+    this.observedAt,
   });
 
   final RiskView riskView;
   final double? probability;
   final double? leadTimeMin;
+  final DateTime? observedAt;
 
   @override
   Widget build(BuildContext context) {
     final ar = Localizations.localeOf(context).languageCode == 'ar';
 
-    if (probability == null ||
+    final noProbability =
+        probability == null ||
         !probability!.isFinite ||
         probability! < 0 ||
-        probability! > 1) {
+        probability! > 1;
+    // A classification without a forecast percentage (e.g. recorded data) is
+    // still the patient's current status: show it, never «waiting» while the
+    // monitoring screen says «high likelihood».
+    if (noProbability && !riskView.isUnknown) {
+      final l = AppLocalizations.of(context);
+      return RiskGauge(
+        view: riskView,
+        freshnessLabel: observedAt == null
+            ? null
+            : TimeAgo.since(observedAt, l),
+      );
+    }
+    if (noProbability) {
       return Card(
         child: ListTile(
           leading: const Icon(Icons.monitor_heart_outlined),

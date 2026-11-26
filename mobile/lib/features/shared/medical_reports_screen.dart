@@ -531,7 +531,7 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    TimeAgo.stamp(a.timestamp),
+                    TimeAgo.stamp(a.timestamp, AppLocalizations.of(context)),
                     style: TextStyle(
                       fontSize: 12,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -586,7 +586,7 @@ class _MedicalReportsScreenState extends State<MedicalReportsScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${TimeAgo.stamp(e.firedAt)} · ${_outcome(e.outcome, ar)}',
+                    '${TimeAgo.stamp(e.firedAt, AppLocalizations.of(context))} · ${_outcome(e.outcome, ar)}',
                     style: TextStyle(
                       fontSize: 12,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,

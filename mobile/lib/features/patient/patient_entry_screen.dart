@@ -425,7 +425,10 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                TimeAgo.stamp(_occurredAt),
+                                TimeAgo.stamp(
+                                  _occurredAt,
+                                  AppLocalizations.of(context),
+                                ),
                                 style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,

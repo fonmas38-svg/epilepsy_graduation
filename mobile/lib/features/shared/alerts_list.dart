@@ -120,7 +120,10 @@ class AlertCard extends StatelessWidget {
                     child: Text(
                       alert.acknowledged
                           ? '${l.acknowledged}${alert.acknowledgedBy == null ? '' : ' — ${alert.acknowledgedBy}'}'
-                          : TimeAgo.stamp(alert.timestamp),
+                          : TimeAgo.stamp(
+                              alert.timestamp,
+                              AppLocalizations.of(context),
+                            ),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),

@@ -678,7 +678,10 @@ class _PatientCardScreenState extends State<_PatientCardScreen> {
                             children: [
                               for (final s in _seizures.take(10))
                                 LabeledValue(
-                                  label: TimeAgo.stamp(s.occurredAt),
+                                  label: TimeAgo.stamp(
+                                    s.occurredAt,
+                                    AppLocalizations.of(context),
+                                  ),
                                   value: s.notes.isEmpty
                                       ? l.noteLabel
                                       : s.notes,

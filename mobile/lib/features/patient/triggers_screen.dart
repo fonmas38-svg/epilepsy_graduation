@@ -328,7 +328,7 @@ class _TriggerRow extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final subtitle = [
       '${l.triggerIntensity} ${entry.intensity}/5',
-      TimeAgo.stamp(entry.occurredAt),
+      TimeAgo.stamp(entry.occurredAt, AppLocalizations.of(context)),
       if (!entry.synced) l.pendingSync,
     ].join(' · ');
 

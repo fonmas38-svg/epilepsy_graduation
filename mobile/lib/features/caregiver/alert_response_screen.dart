@@ -637,7 +637,7 @@ class _Headline extends StatelessWidget {
           Gap.vXs,
           LabeledValue(
             label: l.alertTime,
-            value: TimeAgo.stamp(alert.timestamp),
+            value: TimeAgo.stamp(alert.timestamp, AppLocalizations.of(context)),
             icon: Icons.schedule_outlined,
           ),
         ],
@@ -1021,7 +1021,7 @@ class _DocumentSection extends StatelessWidget {
                   '${seizureDurationLabel(s.durationSeconds, l)}',
                 ),
                 subtitle: Text(
-                  TimeAgo.stamp(s.occurredAt),
+                  TimeAgo.stamp(s.occurredAt, AppLocalizations.of(context)),
                   style: theme.textTheme.labelSmall,
                 ),
               ),

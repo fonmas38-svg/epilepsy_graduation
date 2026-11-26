@@ -56,14 +56,18 @@ class EmptyState extends StatelessWidget {
               context,
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
-          Gap.vXs,
-          Text(
-            body ?? l.emptyBody,
-            textAlign: TextAlign.center,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-          ),
+          // «Data will appear as soon as it arrives» only fits data that
+          // arrives; with an action the user fills it in, so say nothing.
+          if (body != null || action == null) ...[
+            Gap.vXs,
+            Text(
+              body ?? l.emptyBody,
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
           if (action != null) ...[
             Gap.vLg,
             FilledButton.tonal(

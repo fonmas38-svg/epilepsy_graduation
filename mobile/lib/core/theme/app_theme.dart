@@ -154,7 +154,8 @@ abstract final class AppTheme {
             borderRadius: BorderRadius.circular(16),
           ),
           textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-          backgroundColor: const Color(0xFF0066FF),
+          // No fixed background: it overrode tonal buttons (dark text on
+          // bright blue) and the dark theme's primary. The scheme decides.
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(

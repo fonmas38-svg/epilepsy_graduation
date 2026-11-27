@@ -30,7 +30,11 @@ md("""
 **في Google Colab:**
 1. من القائمة: **Runtime → Change runtime type → T4 GPU** ثم **Save**.
 2. من القائمة: **Runtime → Run all**.
-3. اترك الصفحة مفتوحة حتى النهاية (نحو 40–90 دقيقة). في الآخر يُنزَّل الملف `preictal_model_outputs.zip` إلى جهازك تلقائيًا.
+3. ستظهر نافذة تطلب الوصول إلى **Google Drive**: اختر حسابك واضغط **Allow / السماح**.
+4. يحفظ الدفتر كل شيء في Drive داخل المجلد `MyDrive/epilepsy_preictal/`:
+   ملفات EEG المنزّلة، والمقاطع المستخرجة، ونقطة استكمال التدريب بعد كل دورة، والنتائج.
+5. **إذا انقطعت الجلسة:** افتح الدفتر من جديد وشغّل **Run all** مرة أخرى؛ سيستكمل من حيث توقف ولن يعيد التنزيل أو التدريب من الصفر.
+6. النتيجة النهائية: `MyDrive/epilepsy_preictal/preictal_model_outputs.zip` (وتُنزَّل أيضًا تلقائيًا إن كانت الصفحة مفتوحة).
 
 **في Kaggle:** فعّل **Internet: On** و **GPU T4** ثم **Run All**، وحمّل الملف من قسم **Output**.
 
@@ -56,6 +60,20 @@ DEV = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('device', DEV)
 """)
 
+md("## 0. مكان الحفظ (Google Drive على Colab)")
+code("""
+# Everything (downloads, extracted windows, training checkpoint, outputs) lives
+# in WORK so a disconnected Colab session can resume instead of starting over.
+try:
+    from google.colab import drive
+    drive.mount('/content/drive')
+    WORK = Path('/content/drive/MyDrive/epilepsy_preictal')
+except ImportError:
+    WORK = Path('/kaggle/working') if Path('/kaggle').exists() else Path('work')
+WORK.mkdir(parents=True, exist_ok=True)
+print('saving everything to', WORK)
+""")
+
 md("## 1. الإعدادات")
 code("""
 BASE = 'https://physionet.org/files/chbmit/1.0.0/'
@@ -68,8 +86,11 @@ CHANNELS = ['F7-T7', 'T7-P7', 'FP1-F7']   # first one present in the file is use
 FS, WIN = 256, 262                        # app/model contract
 PRE_START_MIN, PRE_END_MIN = 30, 5        # pre-ictal = 30..5 min before onset
 INTER_GAP_MIN = 60                        # inter-ictal = at least 60 min from any seizure
-DATA = Path('/kaggle/working/chbmit') if Path('/kaggle').exists() else Path('chbmit')
+DATA = WORK / 'chbmit'
 DATA.mkdir(parents=True, exist_ok=True)
+CACHE = WORK / 'windows'          # extracted windows per patient (resume)
+CACHE.mkdir(exist_ok=True)
+CKPT = WORK / 'checkpoint.pt'     # training checkpoint (resume)
 """)
 
 md("## 2. التنزيل من PhysioNet")
@@ -144,6 +165,12 @@ def windows(x, start_s, end_s, stride):
 rng = np.random.default_rng(SEED)
 data = {p: {'pre': [], 'inter': [], 'ictal': []} for p in PATIENTS}
 for p, files in plan.items():
+    cached = CACHE / f'{p}.npz'
+    if cached.exists():               # already extracted in an earlier session
+        z = np.load(cached)
+        data[p] = {k: list(z[k]) for k in ('pre', 'inter', 'ictal')}
+        print(p, {k: len(v) for k, v in data[p].items()}, '(from Drive)')
+        continue
     for f, seizures in files.items():
         x = load_channel(DATA / p / f)
         if x is None:
@@ -162,6 +189,8 @@ for p, files in plan.items():
                     data[p]['inter'].append(x[i:i + WIN])
         else:
             data[p]['inter'] += windows(x, 0, dur, WIN * 4)
+    np.savez_compressed(cached, **{k: (np.stack(v) if v else np.zeros((0, WIN)))
+                                   for k, v in data[p].items()})
     print(p, {k: len(v) for k, v in data[p].items()})
 """)
 
@@ -240,9 +269,15 @@ model = CloudPreictalNet().to(DEV)
 w = torch.tensor([1.0, (ytr == 0).sum() / max((ytr == 1).sum(), 1)], dtype=torch.float32, device=DEV)
 lossf = nn.CrossEntropyLoss(weight=w / w.mean())
 opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-3)
-best, best_state, patience = -1, None, 0
+best, best_state, patience, start = -1, None, 0, 0
+if CKPT.exists():                     # resume after a disconnect
+    ck = torch.load(CKPT, map_location=DEV)
+    model.load_state_dict(ck['model']); opt.load_state_dict(ck['opt'])
+    best, best_state, patience, start = ck['best'], ck['best_state'], ck['patience'], ck['epoch'] + 1
+    print('resuming from epoch', start, 'best val AUC', round(best, 3))
 Xt, yt = torch.from_numpy(Xtr), torch.from_numpy(ytr)
-for epoch in range(25):
+for epoch in range(start, 25):
+    if patience >= 5: break
     model.train(); perm = torch.randperm(len(Xt))
     for i in range(0, len(perm), 256):
         idx = perm[i:i + 256]
@@ -255,7 +290,8 @@ for epoch in range(25):
         best, best_state, patience = auc, {k: v.cpu().clone() for k, v in model.state_dict().items()}, 0
     else:
         patience += 1
-        if patience >= 5: break
+    torch.save({'model': model.state_dict(), 'opt': opt.state_dict(), 'best': best,
+                'best_state': best_state, 'patience': patience, 'epoch': epoch}, CKPT)
 model.load_state_dict(best_state)
 """)
 
@@ -301,7 +337,7 @@ print('TEST events', events)
 
 md("## 7. التصدير (الخادم + الهاتف)")
 code("""
-OUT = Path('/kaggle/working/outputs') if Path('/kaggle').exists() else Path('outputs')
+OUT = WORK / 'outputs'
 OUT.mkdir(parents=True, exist_ok=True)
 model.cpu().eval()
 torch.save(model.state_dict(), OUT / 'cloud_preictal_model.pt')
@@ -354,8 +390,8 @@ np.concatenate(blobs).tofile(OUT / 'seizure_library_chbmit.bin')
     'units': 'normalized_demo (CHB-MIT uV scaled to the Bonn calm spread)',
     'source': 'CHB-MIT test patients ' + ','.join(TEST_PATIENTS) + ' (never used in training)',
     'categories': cats}, indent=2))
-with zipfile.ZipFile('/kaggle/working/preictal_model_outputs.zip' if Path('/kaggle').exists()
-                     else 'preictal_model_outputs.zip', 'w') as z:
+ZIP = WORK / 'preictal_model_outputs.zip'
+with zipfile.ZipFile(ZIP, 'w') as z:
     for f in OUT.iterdir():
         z.write(f, f.name)
 print('done:', [f.name for f in OUT.iterdir()])
@@ -365,9 +401,10 @@ md("## 9. تنزيل النتائج (Colab)")
 code("""
 try:
     from google.colab import files   # only exists on Colab
-    files.download('preictal_model_outputs.zip')
-except ImportError:
-    print('Not on Colab: download preictal_model_outputs.zip from the Output / files panel.')
+    files.download(str(ZIP))
+except Exception:
+    pass
+print('Results saved to', ZIP)
 """)
 
 nb = {"cells": CELLS, "metadata": {"kernelspec": {"name": "python3", "display_name": "Python 3"},

@@ -319,7 +319,7 @@ def extract(sub):
             lab, sid, sz, lead = label_epochs(events, n_ep)
             n_sz += len(sz); n_lead += sum(lead)
             F.append(np.concatenate([f_eeg, f_ecg, f_mov], 1)); L.append(lab)
-            S.append(np.where(sid >= 0, sid + 1000 * len(R), -1)); R.append(np.full(n_ep, len(R), np.int16))
+            S.append(np.where(sid >= 0, sid.astype(np.int64) + 1000 * len(R), -1)); R.append(np.full(n_ep, len(R), np.int32))
             if DET is not None:
                 for o, dd in sz:
                     det['seizures'] += 1
@@ -358,6 +358,8 @@ code(r"""
 P = {}
 for f in sorted(FEAT.glob('sub-*.npz')):
     z = np.load(f)
+    if len({len(z[k]) for k in ('X', 'lab', 'sid', 'run')}) != 1:   # damaged file: never mix rows
+        print('skip (inconsistent arrays)', f.stem); continue
     P[f.stem] = {k: z[k] for k in ('X', 'lab', 'sid', 'run')}
     P[f.stem]['missing'] = json.loads(str(z['missing'])); P[f.stem]['det'] = json.loads(str(z['det']))
 

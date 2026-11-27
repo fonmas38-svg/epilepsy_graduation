@@ -39,6 +39,8 @@ if MODE == "extract":
     run(3)
     run(4)
     run(5)
+    if not g["subjects"] or not list(g["FEAT"].glob("sub-*.npz")):
+        sys.exit("no subject produced features: failing the job instead of hiding it")
 elif MODE == "analyze":
     for i in (3, 4, 6, 7, 8):
         run(i)

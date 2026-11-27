@@ -25,10 +25,16 @@ def code(text):
 md("""
 # تدريب نموذج التنبؤ بالنوبة على بيانات CHB-MIT الحقيقية
 
-**قبل التشغيل في Kaggle:** من القائمة الجانبية فعّل **Internet: On**، ويُفضّل **Accelerator: GPU T4**.
-ثم اضغط **Run All**. يستغرق التنزيل والتدريب نحو 40–90 دقيقة حسب عدد المرضى.
+يعمل على **Google Colab** أو **Kaggle**.
 
-في النهاية حمّل الملف `preictal_model_outputs.zip` من قسم **Output**، وانسخ محتوياته:
+**في Google Colab:**
+1. من القائمة: **Runtime → Change runtime type → T4 GPU** ثم **Save**.
+2. من القائمة: **Runtime → Run all**.
+3. اترك الصفحة مفتوحة حتى النهاية (نحو 40–90 دقيقة). في الآخر يُنزَّل الملف `preictal_model_outputs.zip` إلى جهازك تلقائيًا.
+
+**في Kaggle:** فعّل **Internet: On** و **GPU T4** ثم **Run All**، وحمّل الملف من قسم **Output**.
+
+بعدها انسخ محتويات الملف:
 - `cloud_preictal_model.pt` و`cloud_preictal_model.meta.json` و`cloud_preictal_model.onnx` → إلى `backend/models/`
 - `cloud_preictal_model.onnx` و`cloud_preictal_model.meta.json` → إلى `mobile/assets/models/`
 - `seizure_library_chbmit.bin` و`seizure_library_chbmit.json` → إلى `mobile/assets/simulator/`
@@ -353,6 +359,15 @@ with zipfile.ZipFile('/kaggle/working/preictal_model_outputs.zip' if Path('/kagg
     for f in OUT.iterdir():
         z.write(f, f.name)
 print('done:', [f.name for f in OUT.iterdir()])
+""")
+
+md("## 9. تنزيل النتائج (Colab)")
+code("""
+try:
+    from google.colab import files   # only exists on Colab
+    files.download('preictal_model_outputs.zip')
+except ImportError:
+    print('Not on Colab: download preictal_model_outputs.zip from the Output / files panel.')
 """)
 
 nb = {"cells": CELLS, "metadata": {"kernelspec": {"name": "python3", "display_name": "Python 3"},

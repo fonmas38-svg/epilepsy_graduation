@@ -1,0 +1,70 @@
+name: seizeit2-detector
+
+# Research run: 10-s wearable features (both EEG channels, heart, movement)
+# from SeizeIT2 (OpenNeuro ds005873, CC0), then a patient-disjoint seizure
+# detector evaluation. Nothing in the app is changed by this workflow.
+on:
+  push:
+    branches: [research/detector-run]
+  workflow_dispatch:
+
+concurrency:
+  group: seizeit2-detector
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q mne==1.8.0 numpy "scipy<1.15" scikit-learn
+      - name: Extract v2 features (shard ${{ matrix.shard }})
+        env:
+          SHARD: ${{ matrix.shard }}
+          NSHARDS: 10
+          PYTHONUNBUFFERED: "1"
+        run: python research/extract_seizeit2_v2.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v2-features-${{ matrix.shard }}
+          path: work/seizeit2_v2
+          if-no-files-found: warn
+          retention-days: 30
+
+  train:
+    needs: extract
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q numpy "scipy<1.15" scikit-learn
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: v2-features-*
+          path: work/seizeit2_v2
+          merge-multiple: true
+      - name: Train and evaluate the detector
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          ls work/seizeit2_v2 | wc -l
+          python research/train_detector_seizeit2.py work/seizeit2_v2 work/detector_outputs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: detector-results
+          path: work/detector_outputs
+          retention-days: 90

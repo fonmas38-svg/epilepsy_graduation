@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "window": 262,
+  "fs": 256,
+  "scale": 1000,
+  "units": "normalized_demo (CHB-MIT uV scaled to the Bonn calm spread)",
+  "source": "CHB-MIT test patients chb18,chb20 (never used in training)",
+  "categories": {
+    "preictal": {
+      "offset": 0,
+      "count": 400
+    },
+    "interictal_chbmit": {
+      "offset": 400,
+      "count": 400
+    },
+    "ictal_chbmit": {
+      "offset": 800,
+      "count": 400
+    }
+  }
+}

@@ -201,10 +201,10 @@ def ecg_epochs(e, fs, n_ep):
     ok = (rr > 0.3) & (rr < 2.0)
     ok[1:] &= np.abs(np.diff(rr)) < 0.3
     for i in range(n_ep):
-        end = (i + 1) * EPOCH
-        m5 = (tr > end - 300) & (tr <= end); m30 = (tr > end - EPOCH) & (tr <= end)
-        v5, v30 = rr[m5 & ok], rr[m30 & ok]
-        q = (m30 & ok).sum() / max(m30.sum(), 1)
+        end = (i + 1) * EPOCH          # sorted beat times: binary search, not a full scan
+        a5, a30, b = np.searchsorted(tr, [end - 300, end - EPOCH, end], side='right')
+        v5, v30 = rr[a5:b][ok[a5:b]], rr[a30:b][ok[a30:b]]
+        q = ok[a30:b].sum() / max(b - a30, 1)
         if len(v30) >= 10:
             out[i, 0] = 60 / np.median(v30)
         if len(v5) >= 60:

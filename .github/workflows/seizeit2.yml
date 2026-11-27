@@ -1,0 +1,74 @@
+name: seizeit2-multimodal
+
+# Research run: downloads SeizeIT2 (OpenNeuro ds005873, CC0) on GitHub's
+# servers, extracts brain/heart/movement features in 10 parallel shards, then
+# runs the patient-disjoint experiments. Results are uploaded as artifacts.
+on:
+  push:
+    branches: [research/seizeit2-run]
+  workflow_dispatch:
+
+concurrency:
+  group: seizeit2
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q mne==1.8.0 onnxruntime numpy scipy scikit-learn
+      - name: Extract features (shard ${{ matrix.shard }})
+        env:
+          MODE: extract
+          SHARD: ${{ matrix.shard }}
+          NSHARDS: 10
+          PYTHONUNBUFFERED: "1"
+        run: python research/run_seizeit2_ci.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: features-${{ matrix.shard }}
+          path: work/seizeit2_features
+          if-no-files-found: warn
+          retention-days: 30
+
+  analyze:
+    needs: extract
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q mne==1.8.0 onnxruntime numpy scipy scikit-learn
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: features-*
+          path: work/seizeit2_features
+          merge-multiple: true
+      - name: Experiments and summary
+        env:
+          MODE: analyze
+          PYTHONUNBUFFERED: "1"
+        run: |
+          ls work/seizeit2_features | wc -l
+          python research/run_seizeit2_ci.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: seizeit2-results
+          path: |
+            work/seizeit2_multimodal_outputs.zip
+            work/seizeit2_outputs/seizeit2_report.json
+          retention-days: 90

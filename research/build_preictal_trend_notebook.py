@@ -228,7 +228,8 @@ for p in PATIENTS:
     f = CACHE / f'{p}.npz'
     if f.exists():
         z = np.load(f, allow_pickle=True)
-        data[p] = {'pre': list(z['pre']), 'inter': list(z['inter'])}
+        # equal-length segments are saved as one object array: force float32
+        data[p] = {k: [np.asarray(s, np.float32) for s in z[k]] for k in ('pre', 'inter')}
 print('patients ready', len(data))
 """)
 
@@ -238,7 +239,7 @@ def sequences(segments, stride):
     out = []
     for seg in segments:
         for end in range(SEQ, len(seg) + 1, stride):
-            out.append(seg[end - SEQ:end])
+            out.append(np.asarray(seg[end - SEQ:end], np.float32))
     return np.stack(out) if out else np.zeros((0, SEQ, len(FEATURES)), np.float32)
 
 def build(patients, stride_pre=10, stride_inter=60):
@@ -247,7 +248,7 @@ def build(patients, stride_pre=10, stride_inter=60):
         if p not in data: continue
         a = sequences(data[p]['pre'], stride_pre); b = sequences(data[p]['inter'], stride_inter)
         X += [a, b]; y += [np.ones(len(a)), np.zeros(len(b))]
-    return seq_normalize(np.concatenate(X)), np.concatenate(y).astype(np.int64)
+    return seq_normalize(np.concatenate(X).astype(np.float32)), np.concatenate(y).astype(np.int64)
 
 train_p = [p for p in data if p not in TEST_PATIENTS + VAL_PATIENTS]
 Xtr, ytr = build(train_p)

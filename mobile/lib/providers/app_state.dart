@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' show LocationPermission;
@@ -30,6 +29,7 @@ import '../services/prealert_controller.dart';
 import '../services/background_service.dart';
 import '../services/biometric_service.dart';
 import '../services/connectivity_coordinator.dart';
+import '../services/connectivity_orchestrator.dart';
 import '../services/emergency_sms_service.dart';
 import '../services/report_export_service.dart';
 import '../services/settings_service.dart';
@@ -72,10 +72,16 @@ class AppState extends ChangeNotifier {
       useBackgroundIsolate: useBackgroundIsolate,
     );
     monitoring.onUpdate = notifyListeners;
+    connectivity = ConnectivityOrchestrator(api: api)
+      ..onReconnected = (() async {
+        await syncNow();
+      })
+      ..shouldProbe = (() =>
+          auth.currentUser != null && _syncOps == 0 && !_syncProbing)
+      ..isSyncing = (() => isSyncing)
+      ..addListener(notifyListeners);
+    sync.onlineCheck = () async => connectivity.isOnline;
     try {
-      api.wakingNotifier.addListener(_onWakingChanged);
-      api.noInternetNotifier.addListener(_onWakingChanged);
-      api.deviceOffline = () => !deviceHasNetwork;
       api.tokens.onSessionRevoked = _onSessionRevoked;
     } catch (_) {}
     location.hasInternet = () => operatingMode != AppOperatingMode.offlineLocal;
@@ -246,18 +252,26 @@ class AppState extends ChangeNotifier {
   final bool _ownsApi;
   VitalReading? _preAlertReading;
   PredictionState? _preAlertPrediction;
-  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
-  void _onWakingChanged() => notifyListeners();
+  /// The single source of truth for connectivity (see the class docs).
+  late final ConnectivityOrchestrator connectivity;
 
   /// True only while the phone has internet and the backend is being woken.
   /// A phone without internet is [AppOperatingMode.offlineLocal], never this.
-  bool get isWakingServer => operatingMode == AppOperatingMode.wakingServer;
+  bool get isWakingServer {
+    // The real cold-start signal only. The «still establishing the first
+    // connection» state also resolves to wakingServer (so no false «local
+    // mode» bar appears at launch), but it is not a server wake-up.
+    try {
+      return api.isWakingServer &&
+          operatingMode == AppOperatingMode.wakingServer;
+    } catch (_) {
+      return false;
+    }
+  }
 
-  /// OS-level network presence from `connectivity_plus`. It does not prove
-  /// internet access (captive Wi-Fi), which is why [ApiClient] also reports
-  /// DNS/route failures through `noInternetNotifier`.
-  bool deviceHasNetwork = true;
+  /// OS-level network presence, owned by [connectivity].
+  bool get deviceHasNetwork => connectivity.deviceHasNetwork;
 
   int _syncOps = 0;
   bool _syncProbing = false;
@@ -266,46 +280,12 @@ class AppState extends ChangeNotifier {
   bool get isSyncing => _syncOps > 0;
 
   /// The single connectivity state every banner and decision should use.
-  AppOperatingMode get operatingMode {
-    bool waking = false;
-    bool noInternet = false;
-    try {
-      waking = api.isWakingServer;
-      noInternet = api.noInternetDetected;
-    } catch (_) {}
-    return resolveOperatingMode(
-      deviceHasNetwork: deviceHasNetwork,
-      noInternetDetected: noInternet,
-      serverReachable: apiOnline,
-      waking: waking,
-      syncing: isSyncing,
-    );
-  }
+  AppOperatingMode get operatingMode => connectivity.mode;
 
   /// Re-check the backend and flush every pending queue (readings, alerts,
   /// care writes, messages). Returns false when the server is not reachable.
   /// Safe to call repeatedly: overlapping calls are ignored.
-  /// One heartbeat for the whole app: re-checks the server while signed in,
-  /// so a server that comes back (or a cold start that finishes) is noticed
-  /// without waiting for a network change, and pending data is sent at once.
-  Timer? _heartbeat;
   bool _syncAgain = false;
-
-  void _startHeartbeat() {
-    _heartbeat?.cancel();
-    _heartbeat = Timer.periodic(const Duration(seconds: 20), (_) async {
-      if (auth.currentUser == null || !deviceHasNetwork) return;
-      if (_syncOps > 0 || _syncProbing) return;
-      final wasOnline = apiOnline;
-      final ok = await api.health(null, const Duration(seconds: 8), true);
-      if (ok && !wasOnline) {
-        await syncNow();
-      } else if (ok != apiOnline) {
-        apiOnline = ok;
-        notifyListeners();
-      }
-    });
-  }
 
   Future<bool> syncNow() async {
     if (_syncOps > 0 || _syncProbing) {
@@ -381,7 +361,11 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  bool apiOnline = false;
+  /// Whether the backend answered. Reads and writes go to [connectivity]
+  /// (writes are reports of what the server just did), so the whole app
+  /// shares one answer instead of many copies.
+  bool get apiOnline => connectivity.serverReachable;
+  set apiOnline(bool reachable) => connectivity.report(reachable);
   bool isOfflineWorkspace = false;
   AlertItem? lastAlert;
 
@@ -1149,43 +1133,11 @@ class AppState extends ChangeNotifier {
       await _startForUser();
     }
 
-    try {
-      final initial = await Connectivity().checkConnectivity();
-      deviceHasNetwork = initial.any((r) => r != ConnectivityResult.none);
-    } catch (_) {
-      // Unknown platform state: assume a network and let requests decide.
-    }
+    // Network state, live network changes and the server heartbeat.
+    await connectivity.start();
 
     // Initialize server connection asynchronously in background without blocking initial UI
     _serverInit = _initServerConnection();
-
-    // Continuous network connectivity watcher: detects drops and auto-flushes on reconnection
-    _startHeartbeat();
-    _connectivitySub?.cancel();
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((
-      results,
-    ) async {
-      final isNowConnected = results.any((r) => r != ConnectivityResult.none);
-      final wasOnline = apiOnline;
-      deviceHasNetwork = isNowConnected;
-      if (!isNowConnected) {
-        apiOnline = false;
-        notifyListeners();
-        return;
-      }
-      // A new network: forget the previous DNS failure and probe again.
-      try {
-        api.noInternetNotifier.value = false;
-      } catch (_) {}
-      notifyListeners();
-      final health = await api.health(null, const Duration(seconds: 10), true);
-      if (health && !wasOnline) {
-        await syncNow();
-      } else if (health != apiOnline) {
-        apiOnline = health;
-        notifyListeners();
-      }
-    });
   }
 
   Future<void> signInDemo({
@@ -1724,14 +1676,9 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
-    try {
-      api.wakingNotifier.removeListener(_onWakingChanged);
-      api.noInternetNotifier.removeListener(_onWakingChanged);
-      api.deviceOffline = null;
-    } catch (_) {}
     unawaited(background.stopMonitoring());
-    unawaited(_connectivitySub?.cancel());
-    _heartbeat?.cancel();
+    connectivity.removeListener(notifyListeners);
+    connectivity.dispose();
     unawaited(monitoring.dispose());
     notifications.dispose();
     if (_ownsApi) api.dispose();

@@ -72,7 +72,17 @@ class SyncService {
   final Map<String, List<Map<String, dynamic>>> cloudAssessments = {};
   final Map<String, List<Map<String, dynamic>>> cloudAlerts = {};
 
+  /// Set by AppState to the shared connectivity engine, so sync never keeps
+  /// its own idea of «online». Falls back to the OS check when unset (tests).
+  Future<bool> Function()? onlineCheck;
+
   Future<bool> get isOnline async {
+    final shared = onlineCheck;
+    if (shared != null) {
+      try {
+        return await shared();
+      } catch (_) {}
+    }
     try {
       final result = await Connectivity().checkConnectivity();
       return result.any((e) => e != ConnectivityResult.none);

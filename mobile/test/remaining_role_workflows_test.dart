@@ -98,6 +98,10 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(find.text('Patient One'), findsOneWidget);
+        // Opening the screen reads the device copy, then the automatic cloud
+        // pull re-reads it once. Selecting a patient must not reload again.
+        final loadsBeforeTap = db.loads;
+        expect(loadsBeforeTap, lessThanOrEqualTo(2));
         await tester.ensureVisible(find.text('Patient One'));
         await tester.tap(find.text('Patient One'));
         await tester.pumpAndSettle();
@@ -106,7 +110,7 @@ void main() {
         expect(find.text('Patient Two'), findsOneWidget);
         expect(find.textContaining('الوضع مستقر'), findsNothing);
         expect(find.textContaining('100%'), findsNothing);
-        expect(db.loads, 1);
+        expect(db.loads, loadsBeforeTap);
         expect(tester.takeException(), isNull);
         if (capture) {
           await tester.runAsync(() async {
@@ -138,6 +142,10 @@ void main() {
       final app = await state(db, HomeApi(), 'caregiver');
       await tester.pumpWidget(harness(app, const CaregiverHomeScreen()));
       await tester.pumpAndSettle();
+      // Device copy, then the automatic cloud pull: switching tabs must not
+      // reload the dashboard beyond that.
+      final loadsAfterOpen = db.loads;
+      expect(loadsAfterOpen, lessThanOrEqualTo(2));
       final navigation = find.byType(NavigationBar);
       tester.widget<NavigationBar>(navigation).onDestinationSelected!(2);
       await tester.pumpAndSettle();
@@ -146,7 +154,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Patient One'), findsOneWidget);
       await tester.ensureVisible(find.text('Patient One'));
-      expect(db.loads, 1);
+      expect(db.loads, loadsAfterOpen);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       app.dispose();

@@ -75,6 +75,10 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
   bool _busy = false;
   AlertItem? _alert;
   List<AlertResponse> _responses = const [];
+
+  /// The patient's view of their care circle for this alert: who is online
+  /// and how far each person got (null until the server answered).
+  List<Map<String, dynamic>>? _circle;
   Failure? _failure;
 
   /// Caregiver responses are re-read while this screen is open. The mobile
@@ -106,6 +110,16 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
         );
         _pollFailures = 0;
         if (_current) setState(() => _responses = fresh);
+        if (_app.auth.currentUser?.uid == alert.patientId) {
+          final body = await _app.api.getObject(
+            '/patients/${alert.patientId}/alerts/${alert.id}/circle',
+          );
+          final rows = (body['members'] as List? ?? const [])
+              .whereType<Map>()
+              .map((m) => Map<String, dynamic>.from(m))
+              .toList();
+          if (_current) setState(() => _circle = rows);
+        }
       } catch (_) {
         _pollFailures++;
       }
@@ -269,6 +283,7 @@ class _ActiveAlertScreenState extends State<ActiveAlertScreen> {
         builder: (context, alert) => _Body(
           alert: alert,
           responses: _responses,
+          circle: _circle,
           busy: _busy,
           onImOk: () => _acknowledge(app, alert, note: ''),
           onFalseAlarm: () => _falseAlarm(app, alert),
@@ -372,6 +387,7 @@ class _Body extends StatelessWidget {
   const _Body({
     required this.alert,
     required this.responses,
+    this.circle,
     required this.busy,
     required this.onImOk,
     required this.onFalseAlarm,
@@ -381,6 +397,7 @@ class _Body extends StatelessWidget {
 
   final AlertItem alert;
   final List<AlertResponse> responses;
+  final List<Map<String, dynamic>>? circle;
   final bool busy;
   final Future<void> Function() onImOk;
   final Future<void> Function() onFalseAlarm;
@@ -424,6 +441,7 @@ class _Body extends StatelessWidget {
           _NotifiedSection(
             alert: alert,
             responses: responses,
+            circle: circle,
             offline: app.operatingMode == AppOperatingMode.offlineLocal,
           ),
           Gap.vMd,
@@ -1023,11 +1041,15 @@ class _NotifiedSection extends StatelessWidget {
   const _NotifiedSection({
     required this.alert,
     required this.responses,
+    this.circle,
     this.offline = false,
   });
 
   final AlertItem alert;
   final List<AlertResponse> responses;
+
+  /// Per-member status from the server (patient's own alert only).
+  final List<Map<String, dynamic>>? circle;
 
   /// No internet on this phone: caregiver responses cannot be checked, so an
   /// empty list must not read as «nobody answered».
@@ -1052,14 +1074,28 @@ class _NotifiedSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          InfoNote(
-            text: l.isArabic
-                ? 'تأكيد استلام الإشعار غير متاح هنا. تظهر ردود المرافقين أدناه عند وصولها.'
-                : 'Notification delivery is not confirmed here. Caregiver responses appear below when received.',
-            icon: Icons.mark_email_unread_outlined,
-            view: RiskView.unknown,
-          ),
-          Gap.vSm,
+          if (circle != null && !offline) ...[
+            if (circle!.isEmpty)
+              InfoNote(
+                text: l.isArabic
+                    ? 'لا يوجد مرافق أو طبيب مرتبط بحسابك ليصله التنبيه. أضف مرافقًا من الإعدادات.'
+                    : 'No caregiver or doctor is linked to receive this alert. Add a caregiver in settings.',
+                icon: Icons.person_add_alt_1_outlined,
+                view: RiskView.caution,
+              )
+            else
+              for (final m in circle!) _CircleMemberRow(member: m),
+            Gap.vSm,
+          ] else if (!offline) ...[
+            InfoNote(
+              text: l.isArabic
+                  ? 'جارٍ التحقق من وصول التنبيه إلى المرافقين…'
+                  : 'Checking whether the alert reached your caregivers…',
+              icon: Icons.mark_email_unread_outlined,
+              view: RiskView.unknown,
+            ),
+            Gap.vSm,
+          ],
           if (offline)
             InfoNote(
               text: l.isArabic
@@ -1069,7 +1105,9 @@ class _NotifiedSection extends StatelessWidget {
               view: RiskView.caution,
             ),
           if (offline && responses.isNotEmpty) Gap.vSm,
-          if (responses.isEmpty && !offline)
+          if (circle != null && !offline)
+            const SizedBox.shrink()
+          else if (responses.isEmpty && !offline)
             EmptyState(
               title: l.noRespondersYet,
               body: l.respondersHint,
@@ -1090,6 +1128,93 @@ class _NotifiedSection extends StatelessWidget {
                   style: theme.textTheme.labelSmall,
                 ),
               ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One care-circle member: online now or not, and how far they got with the
+/// alert (not seen yet → saw it → responded → on the way → arrived).
+class _CircleMemberRow extends StatelessWidget {
+  const _CircleMemberRow({required this.member});
+
+  final Map<String, dynamic> member;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final ar = l.isArabic;
+    final online = member['online'] == true;
+    final doctor = member['role'] == 'doctor';
+    final response = member['response'] as String?;
+    final (IconData icon, RiskView view, String label) = switch (response) {
+      'arrived' => (Icons.where_to_vote, RiskView.safe, l.arrived),
+      'on_way' => (Icons.directions_run, RiskView.safe, l.onWay),
+      'acknowledged' => (
+        Icons.task_alt,
+        RiskView.safe,
+        ar ? 'استجاب' : 'Responded',
+      ),
+      'seen' => (
+        Icons.done_all,
+        RiskView.safe,
+        ar ? 'رأى التنبيه' : 'Saw the alert',
+      ),
+      _ => (
+        Icons.schedule,
+        RiskView.unknown,
+        online
+            ? (ar ? 'لم يفتح التنبيه بعد' : 'Has not opened it yet')
+            : (ar
+                  ? 'غير متصل الآن — سيصله عند الاتصال'
+                  : 'Offline — will get it when back online'),
+      ),
+    };
+    final tone = AppColors.of(context, view);
+    final dot = online
+        ? AppColors.of(context, RiskView.safe).solid
+        : Theme.of(context).colorScheme.outline;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(doctor ? Icons.medical_services_outlined : Icons.person_outline),
+          PositionedDirectional(
+            end: -2,
+            bottom: -2,
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: dot,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.surface,
+                  width: 1.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      title: Text(
+        '${member['name'] ?? ''}${doctor ? (ar ? ' (الطبيب)' : ' (doctor)') : ''}',
+      ),
+      subtitle: Text(
+        online
+            ? (ar ? 'متصل الآن' : 'Online now')
+            : (ar ? 'غير متصل' : 'Offline'),
+        style: Theme.of(context).textTheme.labelSmall,
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: tone.foreground),
+          const SizedBox(width: 4),
+          Text(label, style: TextStyle(color: tone.foreground, fontSize: 12)),
         ],
       ),
     );

@@ -371,10 +371,6 @@ class NotificationService {
 
   void Function(String token)? _onToken;
 
-  /// In-app banner sink, captured from [init]. Used by [showLocal] so local
-  /// notifications surface in-app as well as through the OS notification tray.
-  void Function(String title, String body)? _sink;
-
   /// Update the patient context so FCM messages are filtered by owner.
   /// Call this after every login / patient switch / sign-out.
   void setActivePatient(String? patientId) {
@@ -392,7 +388,6 @@ class NotificationService {
   }) async {
     await dispose();
     if (fallbackTitle != null) this.fallbackTitle = fallbackTitle;
-    _sink = onMessage;
     _onToken = onToken;
 
     try {
@@ -470,7 +465,11 @@ class NotificationService {
       payload: payload,
       channel: channel,
     );
-    _sink?.call(title, body);
+    // Deliberately not forwarded to the in-app alert sink: a local
+    // notification (pre-alert, medication reminder, seizure alert raised by
+    // this app) already has its own in-app state. Forwarding it created a fake
+    // "critical" alert that replaced the real one and auto-opened the
+    // full-screen seizure view for a mere forecast.
   }
 
   /// Schedule a timezone-safe OS reminder for [scheduledUtc] in [location].

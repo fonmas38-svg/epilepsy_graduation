@@ -42,6 +42,8 @@ abstract final class Routes {
   static const adminAccounts = '/admin/accounts';
   static const adminLinks = '/admin/links';
   static const adminDevices = '/admin/devices';
+  static const adminSystemHealth = '/admin/system-health';
+  static const adminMohRegistry = '/admin/moh-registry';
 
   /// Full-screen active alert (§3.2). Shared by all roles: a family member
   /// tapping the push notification and the patient whose device raised it land

@@ -538,7 +538,7 @@ DECLARE
     tbl text;
     role_name text;
 BEGIN
-    FOREACH tbl IN ARRAY ARRAY['alembic_version', 'users', 'doctor_profiles', 'moh_registry', 'idempotency_keys', 'account_sessions', 'patients', 'assignments', 'caregiver_links', 'devices', 'audit_logs', 'care_records', 'readings', 'assessments', 'alerts', 'alert_acknowledgments', 'outcomes', 'alert_outbox', 'prescriptions', 'medication_logs', 'device_streams', 'sso_codes', 'push_tokens', 'messages', 'store_imports']
+    FOREACH tbl IN ARRAY ARRAY['alembic_version', 'users', 'doctor_profiles', 'moh_registry', 'idempotency_keys', 'account_sessions', 'patients', 'assignments', 'caregiver_links', 'devices', 'audit_logs', 'care_records', 'readings', 'assessments', 'alerts', 'alert_acknowledgments', 'outcomes', 'alert_outbox', 'prescriptions', 'medication_logs', 'device_streams', 'sso_codes', 'push_tokens', 'messages', 'message_receipts', 'store_imports']
     LOOP
         IF to_regclass(format('public.%I', tbl)) IS NULL THEN CONTINUE; END IF;
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tbl);
@@ -576,4 +576,23 @@ BEGIN
     END IF;
 END $$;
 
-UPDATE alembic_version SET version_num = '20261124_12';
+-- Per-recipient message receipts (delivered / read), migration 20261127_13.
+CREATE TABLE IF NOT EXISTS message_receipts (
+    message_id VARCHAR(64) NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    delivered_at VARCHAR(64) NOT NULL,
+    read_at VARCHAR(64),
+    PRIMARY KEY (message_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS ix_message_receipts_user ON message_receipts (user_id);
+-- Created after the RLS loop above, so lock it down explicitly.
+ALTER TABLE public.message_receipts ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.message_receipts FROM PUBLIC;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        REVOKE ALL ON public.message_receipts FROM anon; END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        REVOKE ALL ON public.message_receipts FROM authenticated; END IF;
+END $$;
+
+UPDATE alembic_version SET version_num = '20261127_13';

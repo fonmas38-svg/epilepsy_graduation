@@ -21,6 +21,20 @@ class MessageService extends ChangeNotifier {
   bool loading = false;
   Failure? failure;
   bool _flushing = false;
+
+  /// Messages the server refused permanently (in-memory: after a restart they
+  /// are simply tried again). The chat shows them as failed with a retry.
+  final Set<String> failedIds = {};
+
+  bool isFailed(String messageId) => failedIds.contains(messageId);
+
+  /// Retry one refused message (the user tapped «retry»).
+  Future<void> retry(String messageId) async {
+    failedIds.remove(messageId);
+    notifyListeners();
+    await flushPendingMessages();
+  }
+
   String? _patientId;
   String? _peerUserId;
   int _session = 0;
@@ -362,7 +376,28 @@ class MessageService extends ChangeNotifier {
             _current(user, origin, generation, row.patientId, row.channelType);
         if (!valid()) break;
         if (row.senderId != user.uid || row.serverOrigin != origin) continue;
-        final server = await _post(row);
+        if (failedIds.contains(row.id)) continue;
+        final ChatMessage server;
+        try {
+          server = await _post(row);
+        } on ApiException catch (e) {
+          final code = e.statusCode;
+          final permanent =
+              code != null &&
+              code >= 400 &&
+              code < 500 &&
+              code != 401 &&
+              code != 408 &&
+              code != 429;
+          // One message the server refuses must not leave every later one
+          // stuck as «waiting»: mark it failed and keep sending the rest.
+          if (permanent) {
+            failedIds.add(row.id);
+            count++;
+            continue;
+          }
+          rethrow;
+        }
         if (!valid()) break;
         await db.replacePendingMessage(row.id, server);
         if (valid() && _patientId == row.patientId) {

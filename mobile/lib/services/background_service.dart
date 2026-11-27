@@ -75,6 +75,11 @@ class BackgroundService {
       await _call<bool>('requestIgnoreBatteryOptimizations') ?? false;
 
   /// Android 14+ lets users revoke full-screen alerts. True elsewhere.
+  /// False only when Android reports no GPS receiver; true when unknown
+  /// (not Android, or the check failed) so no false warning is shown.
+  Future<bool> hasGpsHardware() async =>
+      await _call<bool>('hasGpsHardware') ?? true;
+
   Future<bool> canUseFullScreenIntent() async =>
       await _call<bool>('canUseFullScreenIntent') ?? true;
 

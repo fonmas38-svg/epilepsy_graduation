@@ -1,6 +1,6 @@
 ---
 name: epilepsy-system
-description: Engineering reference and maintenance guide for the epilepsy_graduation_project across Flutter Android/Windows clients, FastAPI backend, Supabase database/storage/realtime, Render hosting, AI models, and device simulation.
+description: Engineering reference and maintenance guide for the epilepsy_graduation_project across Flutter Android/Windows clients (including integrated mobile/desktop administration), FastAPI backend, Supabase database/storage/realtime, Render hosting, AI models, and device simulation.
 ---
 # Epilepsy System — Engineering Skill
 
@@ -10,16 +10,14 @@ Unified architectural and engineering guide for the **Epilepsy Patient Monitorin
 
 ## 1. System Architecture Overview
 
-The project is a multi-tier, **Offline-First** health monitoring platform composed of four main modules:
+The project is a multi-tier, **Offline-First** health monitoring platform composed of three active modules (with all administration consolidated directly inside the Flutter application under maximum security hardening, and no standalone web admin portal):
 
-1. **Client Application (`mobile/` — Flutter for Android & Windows):**
-   - Multi-role application supporting **Patient**, **Caregiver**, **Doctor**, and **Admin** workspaces.
-   - Operates offline-first using encrypted local `SQLite/SQLCipher` (`LocalDatabase`) paired with an idempotent `Outbox` synchronization queue (`SyncService`) and `Provider` state management (`AppState`).
+1. **Client & Administration Application (`mobile/` — Flutter for Android & Windows):**
+   - Multi-role application supporting **Patient**, **Caregiver**, **Doctor**, and **Admin** workspaces in a single hardened native client.
+   - Operates offline-first using encrypted local `SQLite/SQLCipher` (`LocalDatabase`) paired with an idempotent `Outbox` synchronization queue (`SyncService`), `Provider` state management (`AppState`), biometric verification (`local_auth`), idle auto-lock (`InactivityWatcher`), and device-bound sessions.
 2. **Backend API & AI Service (`backend/` — FastAPI + Python):**
-   - Central REST backend (mounted at `/`) handling authentication, RBAC permissions, EEG/vital-sign analysis, seizure risk forecasting, clinical care workflows, messaging, and background notification dispatch.
-3. **Web Admin Portal (`admin-dashboard/` — React + Vite):**
-   - Browser-based administrative dashboard for managing system users, doctor registry verification, patient-caregiver-doctor links, and audit oversight.
-4. **Hardware Signal Simulator (`partners/hardware-sim/` & In-App Emulator):**
+   - Central REST backend (mounted at `/`) handling authentication, RBAC permissions, EEG/vital-sign analysis, seizure risk forecasting, clinical care workflows, messaging, administrative governance, and background notification dispatch.
+3. **Hardware Signal Simulator (`partners/hardware-sim/` & In-App Emulator):**
    - Simulates wearable headband streams (EEG, ECG, motion, heart rate at 256 Hz) for testing and evaluation via Python (`sim_client.py` -> `/device/ingest`) and an in-app polymorphic interface (`IEegHardwareDevice`).
 
 ---
@@ -81,6 +79,6 @@ For complete architectural details, refer to [Architecture and Infrastructure](r
 
 0. **Explicit Build Rule**: Only build or export distributable binaries (APK, AAB, EXE, etc.) when explicitly requested.
 1. **Verify Local Versions**: Confirm dependency and schema state from `mobile/pubspec.yaml`, `backend/requirements.txt`, and `backend/alembic/versions/` before making changes.
-2. **Preserve Architecture & Role Boundaries**: Respect existing frameworks, routing, hosting, and strict isolation across patient, caregiver, doctor, and admin roles. Never fabricate clinical values or mock identities in production flows.
-3. **Resilience & Idempotency**: Keep writes safe against retries and timeouts using idempotency keys and local outbox persistence.
+2. **Preserve Architecture & Virtual-Hardware-First Mandate**: Respect existing frameworks, security boundaries, and strict isolation across patient, caregiver, doctor, and admin roles. Because physical wearable EEG hardware is not yet attached, the **in-app/cloud Signal Simulator acts as the active virtual hardware stream** across all patient UI, local Edge AI inference, and cloud AI inference (to be swapped cleanly to real hardware drivers later via `IEegHardwareDevice`). Do not block live monitoring or prediction flows with artificial "no data" dead-ends when virtual hardware is active; tag virtual telemetry cleanly in internal metadata rather than exposing raw technical jargon to end users.
+3. **Unified Online/Offline Failover & Resilience**: Maintain a single unified connectivity/orchestration state machine (`Online` ↔ `Offline`) with zero-loss local SQLite/Outbox persistence, idempotency keys, and full local functional parity (local simulator, active local prediction, offline SMS SOS, offline GNSS location). Never surface internal server cold-start/infrastructure messages (such as "waking cloud server") to patients.
 4. **Honest Reporting**: Base technical statements strictly on verified code and executed checks/tests; distinguish static analysis/tests from distributable builds.

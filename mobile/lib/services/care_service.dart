@@ -1217,12 +1217,18 @@ class CareService extends ChangeNotifier {
         } catch (e) {
           if (!current()) break;
           final f = Failure.from(e);
-          await db.bumpOutboxAttempt(item.id, f.kind.name);
+          final code = e is ApiException ? e.statusCode : null;
+          final serverDown = code != null && code >= 500;
+          // Outages, cold starts (502/503), auth and rate limits are not the
+          // write's fault: they must never use up its attempts, or a long
+          // offline period would exhaust and abandon queued changes.
           if (f.isConnectivity ||
+              serverDown ||
               f.isAuth ||
               f.kind == FailureKind.rateLimited) {
             break;
           }
+          await db.bumpOutboxAttempt(item.id, f.kind.name);
           blocked.add(resource);
         }
       }

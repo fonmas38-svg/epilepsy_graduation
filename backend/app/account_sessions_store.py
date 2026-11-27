@@ -185,3 +185,24 @@ def refresh_session(session_id: str, user_id: str, version: int, *, extension_se
         ).values(last_seen_at=now, expires_at=new_expiry))
         return dict(row)
 
+
+
+def last_seen_for(user_ids: list[str]) -> dict[str, str]:
+    """Latest activity time per user across their live sessions (presence)."""
+    from sqlalchemy import func
+
+    if not user_ids:
+        return {}
+    with transaction() as conn:
+        rows = conn.execute(
+            select(
+                account_sessions.c.user_id,
+                func.max(account_sessions.c.last_seen_at).label("seen"),
+            )
+            .where(
+                account_sessions.c.user_id.in_(user_ids),
+                account_sessions.c.revoked_at.is_(None),
+            )
+            .group_by(account_sessions.c.user_id)
+        ).all()
+    return {r.user_id: r.seen for r in rows if r.seen}

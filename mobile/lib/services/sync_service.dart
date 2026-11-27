@@ -14,6 +14,7 @@ import 'api_client.dart';
 import 'auth_service.dart';
 import 'edge_model_service.dart';
 import 'edge_onnx_runner.dart';
+import 'preictal_onnx_runner.dart';
 import 'local_database.dart';
 import 'location_service.dart';
 
@@ -24,7 +25,12 @@ class SyncService {
     required this.api,
     required this.auth,
     EdgeOnnxRunner? edgeRunner,
-  }) : edgeRunner = edgeRunner ?? EdgeOnnxRunner.instance;
+    PreictalOnnxRunner? preictalRunner,
+  }) : edgeRunner = edgeRunner ?? EdgeOnnxRunner.instance,
+       preictalRunner = preictalRunner ?? PreictalOnnxRunner.instance;
+
+  /// On-device copy of the cloud forecasting network (early warning offline).
+  final PreictalOnnxRunner preictalRunner;
 
   /// On-device EdgeSeizureNet (detection only). Used offline for every
   /// account when a native runtime is available.
@@ -262,16 +268,21 @@ class SyncService {
   final Map<String, DateTime> _lastAlertAt = {};
   static const _alertCooldown = Duration(minutes: 2);
 
+  /// [force] raises the alert regardless of label and cooldown: used when the
+  /// virtual device is held in a critical seizure scenario.
   Future<AlertItem?> maybeCreateAlert(
     VitalReading reading,
-    RiskAssessment assessment,
-  ) async {
-    if (assessment.label != RiskLabel.highRisk) return null;
+    RiskAssessment assessment, {
+    bool force = false,
+  }) async {
+    if (!force && assessment.label != RiskLabel.highRisk) return null;
 
     final now = DateTime.now();
     final scope = '${reading.serverOrigin}::${reading.patientId}';
     final lastAlert = _lastAlertAt[scope];
-    if (lastAlert != null && now.difference(lastAlert) < _alertCooldown) {
+    if (!force &&
+        lastAlert != null &&
+        now.difference(lastAlert) < _alertCooldown) {
       return null;
     }
     _lastAlertAt[scope] = now;
@@ -298,15 +309,19 @@ class SyncService {
       patientId: reading.patientId,
       serverOrigin: reading.serverOrigin,
       timestamp: DateTime.now(),
-      severity: remote?['severity'] as String? ?? 'critical',
+      // A detected seizure is always critical and always reaches the care
+      // circle; the server may only refine the wording.
+      severity: 'critical',
       message: remote?['message'] as String? ?? defaultMsg,
-      recipients: List<String>.from(
-        remote?['recipients'] as List? ??
-            const ['patient', 'caregiver', 'doctor'],
-      ),
+      recipients: _recipientsOr(remote?['recipients']),
     );
     await _persistAlert(alert, reading, assessment: assessment);
     return alert;
+  }
+
+  static List<String> _recipientsOr(Object? raw) {
+    final list = raw is List ? List<String>.from(raw) : const <String>[];
+    return list.isEmpty ? const ['patient', 'caregiver', 'doctor'] : list;
   }
 
   Future<void> _persistAlert(
@@ -348,8 +363,42 @@ class SyncService {
   }
 
   bool _flushingAlerts = false;
+  bool _flushAlertsAgain = false;
+
+  /// A rejection the server will repeat forever (bad or conflicting payload),
+  /// as opposed to a network, auth or server-side failure worth retrying.
+  static bool isPermanentRejection(Object error) {
+    if (error is! ApiException) return false;
+    final code = error.statusCode;
+    if (code == null || code < 400 || code >= 500) return false;
+    return code != 401 && code != 403 && code != 408 && code != 429;
+  }
+
+  Future<void>? _alertFlush;
 
   Future<void> flushPendingAlerts() async {
+    final running = _alertFlush;
+    if (running != null) {
+      // Never drop a newly queued alert (an SOS) just because a flush is
+      // already running: ask for one more pass and wait for it.
+      _flushAlertsAgain = true;
+      return running;
+    }
+    final run = () async {
+      do {
+        _flushAlertsAgain = false;
+        await _flushPendingAlertsOnce();
+      } while (_flushAlertsAgain);
+    }();
+    _alertFlush = run;
+    try {
+      await run;
+    } finally {
+      _alertFlush = null;
+    }
+  }
+
+  Future<void> _flushPendingAlertsOnce() async {
     final owner = auth.currentUser?.uid;
     final endpoint = api.baseUrl;
     final origin = dataOrigin;
@@ -383,8 +432,15 @@ class SyncService {
             await db.markSynced([readingId], serverOrigin: origin);
           }
           await db.deleteOutbox(item.id);
-        } catch (_) {
-          // Keep the durable intent on all transport/server failures.
+        } catch (e) {
+          if (isPermanentRejection(e)) {
+            // One rejected item must never hold every later alert (an SOS)
+            // behind it: count the attempt and move on. After the maximum
+            // attempts it leaves the queue (kept for review, not resent).
+            await db.bumpOutboxAttempt(item.id, e.toString());
+            continue;
+          }
+          // Network / server unavailable: keep order and retry later.
           break;
         }
       }
@@ -547,32 +603,41 @@ class SyncService {
     }
   }
 
-  /// Offline scoring, in order:
-  /// 1. EdgeSeizureNet via ONNX — all accounts (`engine: edge_onnx`,
-  ///    detection only, never a forecast).
-  /// 2. Demo accounts only: the arithmetic heuristic (`engine: edge_heuristic`).
-  ///    Real patients never silently receive demo rules as a neural fallback.
-  /// 3. Otherwise an explicit «not assessed» result with the reason.
+  /// Offline scoring: the same two layers as the cloud model, on the phone.
+  ///
+  /// * Detection: EdgeSeizureNet (ONNX) where the runtime exists; otherwise
+  ///   the on-device multimodal detector. Like the cloud, a high-risk label
+  ///   needs physiological support unless the network is near-certain.
+  /// * Forecast: the on-device preictal layer, an exact port of the cloud's
+  ///   driver breakdown with the same 0.60 threshold, so the early warning
+  ///   (pre-alert countdown) keeps working without internet.
+  /// Only when neither can run is an explicit «not assessed» result returned.
+  /// The on-phone model's verdict for [reading] (also used to compare it with
+  /// the cloud model on identical input).
+  Future<AnalyzeResult> offlineInference(VitalReading reading) =>
+      _offlineEdgeInference(reading);
+
   Future<AnalyzeResult> _offlineEdgeInference(VitalReading reading) async {
+    AnalyzeResult? local;
     try {
-      final neural = await edgeRunner.detect(reading.eeg);
-      if (neural != null) return neural;
+      local = EdgeModelService.instance.infer(reading, horizonMin: horizonMin);
+    } catch (_) {}
+    AnalyzeResult? neural;
+    try {
+      neural = await edgeRunner.detect(reading.eeg);
     } catch (_) {
       // Fall through: a runtime error must not stop monitoring.
     }
-    if (auth.isDemoSession) {
-      try {
-        final r = EdgeModelService.instance.infer(
-          reading,
-          horizonMin: horizonMin,
-        );
-        return AnalyzeResult(
-          label: r.label,
-          confidence: r.confidence,
-          features: {...r.features, 'engine': 'edge_heuristic'},
-          processingMs: r.processingMs,
-        );
-      } catch (_) {}
+    double? neuralForecast;
+    try {
+      neuralForecast = await preictalRunner.forecast(reading.eeg);
+    } catch (_) {}
+    if (neural != null || local != null) {
+      return _withLocalForecast(
+        neural: neural,
+        local: local,
+        neuralForecast: neuralForecast,
+      );
     }
     return AnalyzeResult(
       label: RiskLabel.watch,
@@ -588,6 +653,85 @@ class SyncService {
             'local_neural_runtime_not_integrated',
       },
       processingMs: 0,
+    );
+  }
+
+  /// Minimum physiological evidence for a local forecast or a borderline
+  /// neural detection: same values as the cloud (`classifier.py`).
+  static const double forecastCorroborationMin = 0.10;
+  static const double neuralAloneMin = 0.97;
+  static const double forecastThreshold = 0.60;
+
+  AnalyzeResult _withLocalForecast({
+    AnalyzeResult? neural,
+    AnalyzeResult? local,
+    double? neuralForecast,
+  }) {
+    final lf = local?.features ?? const <String, dynamic>{};
+    final drivers = Map<String, dynamic>.from(
+      (lf['preictal_drivers'] as Map?) ?? const {},
+    );
+    final corroboration = drivers.entries
+        .where((e) => e.key != 'ecg')
+        .fold<double>(0, (sum, e) => sum + ((e.value as num?) ?? 0).toDouble());
+    // The trained forecasting network when it can run on this phone (same
+    // model and threshold as the cloud); otherwise the driver-based score.
+    final rawForecast =
+        neuralForecast ?? ((lf['preictal_prob'] as num?) ?? 0).toDouble();
+    final weight = (corroboration / forecastCorroborationMin).clamp(0.0, 1.0);
+    final forecast = rawForecast * weight;
+    final threshold = neuralForecast != null
+        ? preictalRunner.decisionThreshold
+        : forecastThreshold;
+    final predicted =
+        rawForecast >= threshold && corroboration >= forecastCorroborationMin;
+
+    var label = neural?.label ?? local!.label;
+    var confidence = neural?.confidence ?? local!.confidence;
+    final neuralProb = (neural?.features['ictal_prob'] as num?)?.toDouble();
+    if (neural != null &&
+        label == RiskLabel.highRisk &&
+        (neuralProb ?? 0) < neuralAloneMin &&
+        local?.label == RiskLabel.stable) {
+      // Same rule as the cloud: no physiological sign, borderline network
+      // score → watch, never a critical alert to the whole care circle.
+      label = RiskLabel.watch;
+    }
+    if (predicted && label == RiskLabel.stable) {
+      label = RiskLabel.watch;
+      confidence = forecast.clamp(0.5, 0.99);
+    }
+    final source = neural != null ? 'edge_onnx' : 'edge_multimodal';
+    return AnalyzeResult(
+      label: label,
+      confidence: confidence,
+      features: {
+        ...lf,
+        ...?neural?.features,
+        'engine': source,
+        'task': 'detection_and_forecast',
+        'assessment_valid': true,
+        'offline': true,
+        'clinically_validated': false,
+        'preictal_prob': double.parse(forecast.toStringAsFixed(4)),
+        'predicted': predicted,
+        'prediction_source': neuralForecast != null
+            ? 'edge_preictal_net'
+            : 'edge_forecast',
+        'horizon_min': horizonMin,
+        'lead_time_min': null,
+        'components': {
+          'preictal_prob': double.parse(forecast.toStringAsFixed(4)),
+          'preictal_prob_raw': double.parse(rawForecast.toStringAsFixed(4)),
+          'preictal_drivers': drivers,
+          'forecast_corroboration': double.parse(
+            corroboration.toStringAsFixed(4),
+          ),
+          'lead_time_status': 'not_estimated',
+          'offline_failover': true,
+        },
+      },
+      processingMs: (neural?.processingMs ?? 0) + (local?.processingMs ?? 0),
     );
   }
 }

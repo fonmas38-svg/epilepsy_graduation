@@ -304,8 +304,8 @@ class _SeizureEntryScreenState extends State<SeizureEntryScreen> {
       AppSnack.success(
         context,
         ar
-            ? 'حُفظ البلاغ محليًا وأُضيف إلى طابور المزامنة.'
-            : 'Report saved locally and added to the synchronization queue.',
+            ? 'حُفظ البلاغ وسيُرسل تلقائيًا عند عودة الاتصال.'
+            : 'Report saved; it will be sent automatically when you are back online.',
       );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Navigator.pop(context, true);

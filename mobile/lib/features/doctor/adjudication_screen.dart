@@ -292,11 +292,11 @@ class _AdjudicationScreenState extends State<AdjudicationScreen> {
               InfoNote(
                 text: _remote
                     ? (l.isArabic
-                          ? 'طابور الخادم؛ التحديث يجلب قرارات الأطباء الآخرين.'
-                          : 'Server queue; refresh reconciles other clinicians’ reviews.')
+                          ? 'محدّث من الخدمة؛ اسحب للتحديث لرؤية قرارات الأطباء الآخرين.'
+                          : 'Up to date; pull to refresh for other clinicians’ reviews.')
                     : (l.isArabic
-                          ? 'نسخة محلية؛ قد توجد تنبيهات وقرارات أحدث على الخادم.'
-                          : 'Local copy; newer alerts and decisions may exist on the server.'),
+                          ? 'معروض من الجهاز دون اتصال؛ قد توجد تنبيهات وقرارات أحدث.'
+                          : 'Shown offline from this device; newer alerts and decisions may exist.'),
                 icon: Icons.sync,
               ),
               InfoNote(text: l.adjudicationIntro, icon: Icons.rule_outlined),

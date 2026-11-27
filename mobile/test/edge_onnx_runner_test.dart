@@ -130,7 +130,7 @@ void main() {
       expect(a.features['model_executed'], isTrue);
     });
 
-    test('real patient without runtime never gets demo heuristics', () async {
+    test('real patient without runtime still gets on-device analysis and forecast', () async {
       final sync = _Sync(
         Store(),
         Cloud(),
@@ -138,11 +138,12 @@ void main() {
         EdgeOnnxRunner(loadAsset: assets()),
       );
       final a = await sync.analyzeAndStore(reading());
-      expect(a.features['engine'], 'unavailable');
-      expect(a.features['capability_reason'], 'onnx_runtime_not_installed');
+      expect(a.features['engine'], 'edge_multimodal');
+      expect(a.features['assessment_valid'], isTrue);
+      expect(a.features['prediction_source'], 'edge_forecast');
     });
 
-    test('demo account without runtime falls back to the heuristic', () async {
+    test('demo account without runtime uses the same on-device engine', () async {
       final sync = _Sync(
         Store(),
         Cloud(),
@@ -150,7 +151,7 @@ void main() {
         EdgeOnnxRunner(loadAsset: assets()),
       );
       final a = await sync.analyzeAndStore(reading());
-      expect(a.features['engine'], 'edge_heuristic');
+      expect(a.features['engine'], 'edge_multimodal');
     });
   });
 }

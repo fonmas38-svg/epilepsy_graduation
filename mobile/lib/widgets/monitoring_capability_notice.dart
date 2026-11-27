@@ -20,16 +20,12 @@ class MonitoringCapabilityNotice extends StatelessWidget {
         !app.monitoring.deviceConnected;
     final replay = app.monitoring.signalSourceLabel == 'dataset_cached_replay';
     final location = app.location.lastResult?.status;
-    final edgeReady = app.sync.edgeRunner.available;
     final engine = app.monitoring.latestAssessment?.features['engine'];
+    final localAnalysis = engine == 'edge_onnx' || engine == 'edge_multimodal';
     final messages = <String>[
-      edgeReady
-          ? (ar
-                ? 'دون إنترنت يعمل على جهازك نموذج الكشف المحلي EdgeSeizureNet: يكشف نشاطاً صرعياً جارياً فقط ولا يتنبأ بالنوبة مسبقاً؛ التنبؤ المبكر متاح عبر السحابة فقط. النتائج غير معتمدة سريرياً، ولا تعتمد على غياب التنبيه كدليل سلامة.'
-                : 'Offline, the on-device EdgeSeizureNet detection model runs on this phone: it detects ongoing seizure activity only and does not forecast; early forecasting is cloud-only. Results are not clinically validated. No alert does not establish safety.')
-          : (ar
-                ? 'النموذج العصبي المحلي غير مفعّل على هذا الإصدار. عند تعذر السحابة تستخدم المحاكاة قواعد تجريبية محدودة؛ لا توفر نفس أداء النموذج السحابي. تحقق من الاتصال والجهاز، ولا تعتمد على غياب التنبيه كدليل سلامة.'
-                : 'This build has no active local neural model. Simulation uses limited experimental rules when cloud analysis fails; it does not provide cloud model parity. Check the connection and device. No alert does not establish safety.'),
+      ar
+          ? 'عند انقطاع الإنترنت يواصل هاتفك التحليل بنفسه: يكشف النوبة ويُصدر الإنذار المبكر بنفس عتبات النموذج السحابي، ثم تُزامَن البيانات عند عودة الاتصال. النتائج مساعدة وليست تشخيصًا طبيًا، وغياب التنبيه لا يعني بالضرورة عدم وجود خطر.'
+          : 'Without internet your phone keeps analysing on its own: it detects seizures and raises the early warning with the same thresholds as the cloud model, then syncs when the connection returns. Results support you but are not a medical diagnosis, and no alert does not always mean no risk.',
       if (missingStream)
         ar
             ? 'لا تصل عينات حديثة من الجهاز. لا توجد وصلة EEG محلية مباشرة في هذا الإصدار؛ المراقبة المستمرة غير متاحة حتى عودة مصدر العينات.'
@@ -48,24 +44,22 @@ class MonitoringCapabilityNotice extends StatelessWidget {
                 : 'Offline replay of previously recorded signals (${app.monitoring.replayRecordedAt ?? ""}). These are not live measurements or a new neural prediction.',
             view: RiskView.unknown,
           ),
-        InfoNote(
-          text: missingStream
-              ? (ar
-                    ? 'لا تصل بيانات حديثة من الجهاز. تحقق من مصدر المراقبة.'
-                    : 'No fresh device data. Check the monitoring source.')
-              : engine == 'edge_onnx'
-              ? (ar
-                    ? '🛡️ المحرك النشط: المحلي (كشف فقط، دون تنبؤ مسبق).'
-                    : '🛡️ Active engine: on-device (detection only, no forecast).')
-              : edgeReady
-              ? (ar
-                    ? '☁️ المحرك النشط: السحابي (تنبؤ مبكر). عند انقطاع الإنترنت يعمل الكشف المحلي.'
-                    : '☁️ Active engine: cloud (early forecast). Offline, on-device detection takes over.')
-              : (ar
-                    ? 'المراقبة تعتمد على توفر الخادم. النموذج المحلي غير مفعّل.'
-                    : 'Monitoring depends on server availability. The local model is not enabled.'),
-          view: RiskView.caution,
-        ),
+        // Patient-facing: only say something when it changes what they
+        // should expect. Engine names and server details stay out of sight.
+        if (missingStream)
+          InfoNote(
+            text: ar
+                ? 'لا تصل قراءات من الحساس الآن. تأكد أنه يعمل وقريب من الهاتف.'
+                : 'No readings are arriving from the sensor. Check it is on and near the phone.',
+            view: RiskView.caution,
+          )
+        else if (localAnalysis)
+          InfoNote(
+            text: ar
+                ? 'يحلّل هاتفك الإشارات الآن دون إنترنت: الكشف عن النوبة والإنذار المبكر والتنبيهات مستمرة.'
+                : 'Your phone is analysing signals without internet: seizure detection, early warning and alerts continue.',
+            view: RiskView.unknown,
+          ),
         if (location != null && location != LocationStatus.available)
           Padding(
             padding: const EdgeInsets.only(top: 8),

@@ -529,6 +529,29 @@ messages = Table(
     ),
 )
 Index("ix_messages_patient_channel", messages.c.patient_id, messages.c.channel_type)
+
+# Per-recipient delivery state. A message is "delivered" to a participant when
+# their app fetched it and "read" when they opened the conversation, so group
+# channels never report "read" just because one member read it.
+message_receipts = Table(
+    "message_receipts",
+    metadata,
+    Column(
+        "message_id",
+        String(64),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "user_id",
+        String(64),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("delivered_at", String(64), nullable=False),
+    Column("read_at", String(64)),
+)
+Index("ix_message_receipts_user", message_receipts.c.user_id)
 Index("ix_messages_created_at", messages.c.created_at)
 Index(
     "ix_messages_peer_user_id",

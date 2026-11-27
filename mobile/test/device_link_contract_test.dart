@@ -14,7 +14,7 @@ import 'redesign_navigation_test.dart' show harness;
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  testWidgets('DeviceLinkScreen fallback aligns 1:1 with canonical /device/contract (262 window & 4 channels)', (tester) async {
+  testWidgets('sensor status screen speaks plainly; technical details stay under advanced', (tester) async {
     final state = AppState(
       useBackgroundIsolate: false,
       apiClient: ApiClient(
@@ -33,12 +33,18 @@ void main() {
     await tester.pumpWidget(harness(state, const DeviceLinkScreen()));
     await tester.pumpAndSettle();
 
-    expect(find.text('256'), findsOneWidget);
-    expect(find.text('262'), findsOneWidget);
-    expect(find.text('1'), findsOneWidget);
-    expect(find.text('eeg, ecg, motion, hr'), findsOneWidget);
-    expect(find.text('normalized_demo'), findsOneWidget);
-    expect(find.textContaining('العقد الحالي بحثي'), findsOneWidget);
+    // Plain status for the patient.
+    expect(find.text('حالة الحساس'), findsOneWidget);
+    expect(find.text('المراقبة متوقفة'), findsOneWidget);
+    // No sample rates, contracts or transport names on the main screen.
+    expect(find.textContaining('Hz'), findsNothing);
+    expect(find.textContaining('normalized_demo'), findsNothing);
+    // Source switching is available, but collapsed under advanced options.
+    expect(find.text('خيارات متقدمة'), findsOneWidget);
+    expect(find.text('الحساس الافتراضي'), findsNothing);
+    await tester.tap(find.text('خيارات متقدمة'));
+    await tester.pumpAndSettle();
+    expect(find.text('الحساس الافتراضي'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox());

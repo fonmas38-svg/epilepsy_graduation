@@ -222,12 +222,13 @@ class _AppOverlayState extends State<_AppOverlay> with WidgetsBindingObserver {
                           view: RiskView.caution,
                           icon: Icons.online_prediction,
                           title: state.preAlert!.message,
-                          subtitle:
-                              'تنفس بهدوء واسترخِ — اضغط إن كنت بخير لإلغاء التنبيه',
+                          subtitle: l.isArabic
+                              ? 'تنفّس بهدوء واجلس في مكان آمن — اضغط إن كنت بخير لإلغاء التنبيه'
+                              : 'Breathe slowly and sit somewhere safe — tap if you are fine to cancel',
                           action: FilledButton.tonal(
                             onPressed: state.cancelPreAlert,
                             child: Text(
-                              'أنا بخير (${state.preAlertSecondsLeft})',
+                              '${l.isArabic ? 'أنا بخير' : "I'm fine"} (${state.preAlertSecondsLeft})',
                             ),
                           ),
                         )
@@ -238,8 +239,7 @@ class _AppOverlayState extends State<_AppOverlay> with WidgetsBindingObserver {
                           view: RiskView.danger,
                           icon: AppColors.iconFor(RiskView.danger),
                           title: state.lastAlert!.message,
-                          subtitle:
-                              '${l.activeAlertTitle} — ${state.lastAlert!.patientId}',
+                          subtitle: _alertSubtitle(state, l),
                           onTap: () => AppRouter.openAlert(
                             alertId: state.lastAlert!.id,
                             patientId: state.lastAlert!.patientId,
@@ -247,17 +247,6 @@ class _AppOverlayState extends State<_AppOverlay> with WidgetsBindingObserver {
                           action: IconButton(
                             icon: const Icon(Icons.close),
                             onPressed: state.dismissAlertBanner,
-                          ),
-                        )
-                      else if (state.isWakingServer)
-                        _TopBanner(
-                          view: RiskView.unknown,
-                          icon: Icons.cloud_sync_outlined,
-                          title: l.wakingCloudServer,
-                          action: const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                         ),
                     ],
@@ -271,8 +260,22 @@ class _AppOverlayState extends State<_AppOverlay> with WidgetsBindingObserver {
     );
   }
 
+  /// Who the alert is about, by name: never a raw patient id.
+  String _alertSubtitle(AppState state, AppLocalizations l) {
+    final alert = state.lastAlert!;
+    final user = state.auth.currentUser;
+    if (user?.role == UserRole.patient && user?.uid == alert.patientId) {
+      return l.activeAlertTitle;
+    }
+    final name = state.auth.patientById(alert.patientId)?.name;
+    return name == null || name.isEmpty
+        ? l.activeAlertTitle
+        : '${l.activeAlertTitle} — $name';
+  }
+
   /// Drop any pushed route when the session ends.
   void _syncSession(AppState state) {
+    if (state.signingIn) return;
     final owner = state.auth.currentUser;
     final origin = state.api.baseUrl;
     if (AppUser.sameSessionOwner(owner, _sessionOwner) &&
@@ -282,8 +285,11 @@ class _AppOverlayState extends State<_AppOverlay> with WidgetsBindingObserver {
     final previous = _sessionOwner;
     _sessionOwner = owner;
     _sessionOrigin = origin;
-    _restoreScheduled = false;
     _autoOpenedAlertId = null;
+    // Last-route restore belongs to a cold app launch only. After an explicit
+    // sign-in the user lands on their home screen, never on a stale route
+    // (typically Settings, where the previous session signed out).
+    if (owner == null) _restoreScheduled = true;
     if (previous == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!AppUser.sameSessionOwner(state.auth.currentUser, owner) ||
@@ -298,8 +304,12 @@ class _AppOverlayState extends State<_AppOverlay> with WidgetsBindingObserver {
   }
 
   void _scheduleRestore(AppState state) {
-    if (_restoreScheduled || !state.ready) return;
-    if (state.auth.currentUser == null) return;
+    if (_restoreScheduled || !state.ready || state.signingIn) return;
+    if (state.auth.currentUser == null) {
+      // The launch found no session: nothing to restore for this app run.
+      _restoreScheduled = true;
+      return;
+    }
     _restoreScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => widget.router.restore(),
@@ -474,7 +484,9 @@ class _RootShellState extends State<RootShell> {
     }
 
     final user = state.auth.currentUser;
-    if (user == null) return const LoginScreen();
+    // A sign-in in flight keeps the login screen (with its progress state) up:
+    // the role home appears only once the whole session is ready.
+    if (user == null || state.signingIn) return const LoginScreen();
 
     return KeyedSubtree(
       key: ValueKey((user.uid, user.role, state.api.baseUrl)),

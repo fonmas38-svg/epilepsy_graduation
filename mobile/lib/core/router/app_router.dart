@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../features/admin/admin_resources_screen.dart';
 import '../../features/admin/admin_links_screen.dart';
+import '../../features/admin/moh_registry_screen.dart';
+import '../../features/admin/system_health_screen.dart';
 import '../../features/shared/account_screen.dart';
 import '../../features/shared/account_sessions_screen.dart';
 import '../../features/shared/device_permissions_screen.dart';
@@ -167,6 +169,7 @@ class AppRouter {
     Routes.patientSettings: _Spec(
       build: (_) => const PatientSettingsScreen(),
       roles: null,
+      restorable: false,
     ),
     Routes.patientConsents: _Spec(
       build: (_) => const ConsentsScreen(),
@@ -255,6 +258,16 @@ class AppRouter {
     ),
     Routes.adminDevices: _Spec(
       build: (_) => const AdminResourcesScreen(devices: true),
+      roles: _adminOnly,
+      restorable: false,
+    ),
+    Routes.adminSystemHealth: _Spec(
+      build: (_) => const SystemHealthScreen(),
+      roles: _adminOnly,
+      restorable: false,
+    ),
+    Routes.adminMohRegistry: _Spec(
+      build: (_) => const MohRegistryScreen(),
       roles: _adminOnly,
       restorable: false,
     ),

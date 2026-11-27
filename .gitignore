@@ -105,3 +105,9 @@ htmlcov/
 مخططات.txt
 
 
+
+# Simulator evaluation outputs (regenerate with test/tool/dump_simulator_episodes_test.dart
+# and research/scripts/evaluate_simulator_models.py)
+research/data/sim_episodes.json
+research/data/sim_forecast_seq.pkl
+backend/.pytest_temp*/

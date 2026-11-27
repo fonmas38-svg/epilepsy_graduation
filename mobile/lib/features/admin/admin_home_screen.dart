@@ -1,6 +1,7 @@
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/risk_view.dart';
 import '../../core/utils/doctor_title_formatter.dart';
+import '../../core/utils/time_ago.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/enums.dart';
@@ -12,6 +13,9 @@ import '../../core/ui/workspace_scaffold.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
+import '../shared/account_screen.dart';
+import 'admin_security_guard.dart';
+import 'admin_user_detail_sheet.dart';
 import 'create_doctor_dialog.dart';
 
 class AdminHomeScreen extends StatefulWidget {
@@ -27,8 +31,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   final _errors = <String, Failure>{};
   final _revisions = <String, int>{};
   final _filter = TextEditingController();
+  final _doctorSearch = TextEditingController();
   AppUser? _owner;
   String? _origin;
+  String _doctorStatusFilter = '';
+  String _auditRoleFilter = '';
   int _auditLimit = 20;
   int _section = 0;
   bool get ar => AppLocalizations.of(context).isArabic;
@@ -45,6 +52,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   @override
   void dispose() {
     _filter.dispose();
+    _doctorSearch.dispose();
     super.dispose();
   }
 
@@ -76,10 +84,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       _errors.remove(section);
     });
     try {
+      if (section == 'audit') {
+        final rows = await app.api.getAdminAudit(
+          limit: _auditLimit,
+          actorRole: _auditRoleFilter.isEmpty ? null : _auditRoleFilter,
+          query: _filter.text.trim(),
+        );
+        if (!_current() || _revisions[section] != revision) return;
+        setState(() => _audit = rows);
+        return;
+      }
       final path = switch (section) {
         'overview' => '/admin/overview',
-        'users' => '/admin/users',
-        _ => '/admin/audit?limit=$_auditLimit',
+        _ => '/admin/users',
       };
       final body = await app.api.getObject(path);
       Map<String, dynamic>? counts;
@@ -98,13 +115,12 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         }
         counts = Map<String, dynamic>.from(raw);
       } else {
-        rows = _rows(body, section == 'users' ? 'users' : 'audit');
+        rows = _rows(body, 'users');
       }
       if (!_current() || _revisions[section] != revision) return;
       setState(() {
         if (section == 'overview') _counts = counts;
         if (section == 'users') _users = rows;
-        if (section == 'audit') _audit = rows;
       });
     } catch (error) {
       if (_current() && _revisions[section] == revision) {
@@ -122,52 +138,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     }
   }
 
-  // Confirmation is not password reauthentication; the API enforces admin access.
-  Future<bool> _requireAdminSecurityVerification(String actionTitle) async {
-    final app = context.read<AppState>();
-    final owner = app.auth.currentUser;
-    final origin = app.api.baseUrl;
-    if (owner?.role != UserRole.admin) return false;
-    if (await app.biometrics.isAvailable && await app.biometrics.isEnabled()) {
-      final accepted = await app.biometrics.authenticate(
-        localizedReason: actionTitle,
-      );
-      return mounted &&
-          accepted &&
-          AppUser.sameSessionOwner(app.auth.currentUser, owner) &&
-          app.api.baseUrl == origin;
-    }
-    if (!mounted ||
-        !AppUser.sameSessionOwner(app.auth.currentUser, owner) ||
-        app.api.baseUrl != origin) {
-      return false;
-    }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text((ar ? 'تأكيد العملية' : 'Confirm action')),
-        content: Text(
-          ar
-              ? '$actionTitle\nسيتحقق الخادم من صلاحية حساب المشرف عند التنفيذ.'
-              : '$actionTitle\nThe server checks the administrator account when this runs.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text((ar ? 'إلغاء' : 'Cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text((ar ? 'متابعة' : 'Continue')),
-          ),
-        ],
-      ),
-    );
-    return mounted &&
-        confirmed == true &&
-        AppUser.sameSessionOwner(app.auth.currentUser, owner) &&
-        app.api.baseUrl == origin;
-  }
+  Future<bool> _requireAdminSecurityVerification(String actionTitle) =>
+      requireAdminVerification(context, actionTitle);
 
   Future<void> _toggleDoctorDisabled(Map<String, dynamic> doctor) async {
     final docId = doctor['id']?.toString() ?? '';
@@ -535,6 +507,41 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                 : 'Counts include disabled accounts. Account management shows each account’s status.',
           ),
         ),
+        if (_counts!['devices'] is Map) ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              Chip(
+                avatar: const Icon(Icons.devices_outlined, size: 16),
+                label: Text(
+                  ar
+                      ? 'الأجهزة: ${(_counts!['devices'] as Map)['total'] ?? 0} (معطّل ${(_counts!['devices'] as Map)['disabled'] ?? 0})'
+                      : 'Devices: ${(_counts!['devices'] as Map)['total'] ?? 0} (disabled ${(_counts!['devices'] as Map)['disabled'] ?? 0})',
+                ),
+              ),
+              if ((_counts!['pendingDeletionRequests'] as num? ?? 0) > 0)
+                Chip(
+                  avatar: const Icon(Icons.person_remove_outlined, size: 16),
+                  label: Text(
+                    ar
+                        ? 'طلبات حذف معلّقة: ${_counts!['pendingDeletionRequests']}'
+                        : 'Pending erasures: ${_counts!['pendingDeletionRequests']}',
+                  ),
+                ),
+              if ((_counts!['mohOverrides'] as num? ?? 0) > 0)
+                Chip(
+                  avatar: const Icon(Icons.verified_user_outlined, size: 16),
+                  label: Text(
+                    ar
+                        ? 'تجاوزات تراخيص MOH: ${_counts!['mohOverrides']}'
+                        : 'MOH overrides: ${_counts!['mohOverrides']}',
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
       ],
       _shortcut(
         Icons.manage_accounts_outlined,
@@ -551,6 +558,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         ar ? 'إدارة الأجهزة' : 'Manage devices',
         Routes.adminDevices,
       ),
+      _shortcut(
+        Icons.person_remove_outlined,
+        ar ? 'طلبات حذف الحسابات' : 'Account erasure requests',
+        Routes.privacyRequests,
+      ),
+      _shortcut(
+        Icons.monitor_heart_outlined,
+        ar ? 'صحة النظام والذكاء الاصطناعي' : 'System & AI health',
+        Routes.adminSystemHealth,
+      ),
+      _shortcut(
+        Icons.verified_outlined,
+        ar ? 'سجل التراخيص الطبية (MOH)' : 'MOH license registry',
+        Routes.adminMohRegistry,
+      ),
     ],
   );
 
@@ -564,7 +586,24 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   );
 
   Widget _accounts() {
-    final doctors = _users?.where((u) => u['role'] == 'doctor').toList();
+    final docQuery = _doctorSearch.text.trim().toLowerCase();
+    final doctors = _users?.where((u) {
+      if (u['role'] != 'doctor') return false;
+      final isDisabled = u['disabled'] == true;
+      if (_doctorStatusFilter == 'enabled' && isDisabled) return false;
+      if (_doctorStatusFilter == 'disabled' && !isDisabled) return false;
+      if (docQuery.isEmpty) return true;
+      final meta = u['meta'] as Map? ?? {};
+      final text = [
+        u['name'],
+        u['username'],
+        u['email'],
+        meta['licenseNumber'],
+        meta['specialization'],
+        meta['hospitalAffiliation'],
+      ].whereType<Object>().map((v) => v.toString().toLowerCase()).join(' ');
+      return text.contains(docQuery);
+    }).toList();
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
@@ -585,6 +624,34 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               onPressed: () => Navigator.pushNamed(context, Routes.adminLinks),
               child: Text(ar ? 'إدارة الروابط' : 'Manage links'),
             ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _doctorSearch,
+          onChanged: (_) => setState(() {}),
+          decoration: InputDecoration(
+            labelText: ar
+                ? 'بحث باسم الطبيب أو الترخيص أو التخصص'
+                : 'Search doctor name, license or specialty',
+            prefixIcon: const Icon(Icons.search),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          children: [
+            for (final entry in [
+              ('', ar ? 'الكل' : 'All'),
+              ('enabled', ar ? 'نشط' : 'Active'),
+              ('disabled', ar ? 'معطّل' : 'Disabled'),
+            ])
+              ChoiceChip(
+                label: Text(entry.$2),
+                selected: _doctorStatusFilter == entry.$1,
+                onSelected: (_) =>
+                    setState(() => _doctorStatusFilter = entry.$1),
+              ),
           ],
         ),
         const SizedBox(height: 16),
@@ -815,6 +882,16 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       alignment: WrapAlignment.end,
                       children: [
                         OutlinedButton.icon(
+                          onPressed: () => showModalBottomSheet<void>(
+                            context: context,
+                            isScrollControlled: true,
+                            builder: (_) =>
+                                AdminUserDetailSheet(userId: '${doctor['id']}'),
+                          ),
+                          icon: const Icon(Icons.info_outline, size: 16),
+                          label: Text(ar ? 'التفاصيل' : 'Details'),
+                        ),
+                        OutlinedButton.icon(
                           onPressed: () => Navigator.pushNamed(
                             context,
                             Routes.adminLinks,
@@ -895,7 +972,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     final parsed = DateTime.tryParse(value?.toString() ?? '');
     return parsed == null
         ? (ar ? 'وقت غير متاح' : 'Time unavailable')
-        : parsed.toLocal().toString().split('.').first;
+        : TimeAgo.stamp(parsed);
   }
 
   Widget _auditLog() {
@@ -922,6 +999,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         TextField(
           controller: _filter,
           onChanged: (_) => setState(() {}),
+          onSubmitted: (_) => _load('audit'),
           decoration: InputDecoration(
             labelText: ar
                 ? 'بحث بالعملية أو معرف الحساب أو الهدف'
@@ -930,26 +1008,69 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        DropdownButtonFormField<int>(
-          initialValue: _auditLimit,
-          isExpanded: true,
-          decoration: InputDecoration(
-            labelText: ar ? 'عدد السجلات' : 'Record limit',
-          ),
-          items: [20, 100, 200]
-              .map(
-                (value) =>
-                    DropdownMenuItem(value: value, child: Text('$value')),
-              )
-              .toList(),
-          onChanged: _loading.contains('audit')
-              ? null
-              : (value) {
-                  if (value != null) {
-                    setState(() => _auditLimit = value);
-                    _load('audit');
-                  }
-                },
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _auditRoleFilter,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: ar ? 'الدور المنفّذ' : 'Actor role',
+                ),
+                items: [
+                  DropdownMenuItem(value: '', child: Text(ar ? 'الكل' : 'All')),
+                  DropdownMenuItem(
+                    value: 'admin',
+                    child: Text(ar ? 'مشرف' : 'Admin'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'doctor',
+                    child: Text(ar ? 'طبيب' : 'Doctor'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'patient',
+                    child: Text(ar ? 'مريض' : 'Patient'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'caregiver',
+                    child: Text(ar ? 'مرافق' : 'Caregiver'),
+                  ),
+                ],
+                onChanged: _loading.contains('audit')
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          setState(() => _auditRoleFilter = value);
+                          _load('audit');
+                        }
+                      },
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: DropdownButtonFormField<int>(
+                initialValue: _auditLimit,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: ar ? 'عدد السجلات' : 'Record limit',
+                ),
+                items: [20, 100, 200]
+                    .map(
+                      (value) =>
+                          DropdownMenuItem(value: value, child: Text('$value')),
+                    )
+                    .toList(),
+                onChanged: _loading.contains('audit')
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          setState(() => _auditLimit = value);
+                          _load('audit');
+                        }
+                      },
+              ),
+            ),
+          ],
         ),
         _status('audit'),
         if (rows != null && !_errors.containsKey('audit')) ...[
@@ -1028,12 +1149,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           icon: const Icon(Icons.history),
           label: ar ? 'سجل التدقيق' : 'Audit log',
         ),
+        NavigationDestination(
+          icon: const Icon(Icons.person_outline),
+          label: ar ? 'حسابي' : 'Account',
+        ),
       ],
       body: ResponsiveContent(
         maxWidth: 1100,
         child: IndexedStack(
           index: _section,
-          children: [_overview(), _accounts(), _auditLog()],
+          children: [
+            _overview(),
+            _accounts(),
+            _auditLog(),
+            const AccountScreen(embedded: true),
+          ],
         ),
       ),
     );

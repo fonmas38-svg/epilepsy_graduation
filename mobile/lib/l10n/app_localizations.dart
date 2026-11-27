@@ -686,7 +686,7 @@ const Map<String, String> _ar = {
   'justNow': 'الآن',
 
   'errNoConnection': 'لا يوجد اتصال. تحقق من الإنترنت ثم أعد المحاولة.',
-  'errTimeout': 'الخادم بطيء الاستجابة.',
+  'errTimeout': 'الاتصال بطيء. حاول مرة أخرى.',
   'errSessionExpired': 'انتهت الجلسة. سجّل الدخول مرة أخرى.',
   'errInvalidCredentials': 'اسم المستخدم أو كلمة المرور غير صحيحة.',
   'errAccountLocked':
@@ -714,12 +714,12 @@ const Map<String, String> _ar = {
   'offlineNoData': 'غير متصل — لم تتم المزامنة بعد.',
   'savedLocallyWillSync': 'حُفظ على الجهاز، وسيُرسل عند عودة الاتصال.',
   'pendingSync': 'بانتظار المزامنة',
-  'wakingCloudServer': 'جاري إيقاظ الخادم السحابي...',
+  'wakingCloudServer': 'جارٍ الاتصال…',
   'offlineLocalMode':
-      'الوضع المحلي (دون إنترنت): التطبيق يعمل على جهازك، وتُرسل البيانات عند عودة الاتصال.',
+      'تعمل الآن في الوضع المحلي دون إنترنت. المراقبة والتنبيهات مستمرة، وستتم المزامنة تلقائيًا.',
   'serverUnreachableMode':
-      'تعذّر الوصول إلى الخادم — يعمل التطبيق محلياً وتُرسل البيانات لاحقاً.',
-  'syncingNow': 'عاد الاتصال — جارٍ إرسال البيانات المعلّقة...',
+      'تعمل الآن في الوضع المحلي. المراقبة والتنبيهات مستمرة، وستتم المزامنة تلقائيًا.',
+  'syncingNow': 'عاد الاتصال — تتم المزامنة…',
   'syncNow': 'مزامنة الآن',
 
   'riskSafeTitle': 'الوضع مستقر',
@@ -909,7 +909,7 @@ const Map<String, String> _ar = {
   'languageEnglish': 'English',
   'horizonTitle': 'أفق التنبؤ (SPH)',
   'horizonNote':
-      'المدة التي يحاول النظام التنبؤ بالنوبة قبلها. تُطبَّق على التنبؤ دون اتصال والمحاكاة؛ أما الخادم فيستخدم PREICTAL_HORIZON_MIN.',
+      'المدة التي يحاول النظام التنبؤ بالنوبة قبلها. تُستخدم في التنبؤ على الهاتف والمحاكاة.',
   'reduceMotionNote':
       'التطبيق يتبع إعداد «تقليل الحركة» في نظامك، ولا يستخدم وميضاً ولا رسوماً سريعة.',
 
@@ -1144,7 +1144,8 @@ const Map<String, String> _ar = {
   'liveEngine': 'محرّك التنبؤ الحيّ: نموذج عصبي مُدرَّب',
   'modelAvailableOffline':
       'محرّك التنبؤ الحيّ: محاكاة استدلالية شفافة (النموذج المُدرَّب متاح دون اتصال)',
-  'metricsUnavailable': 'تعذّر جلب مقاييس النموذج — تحقّق من اتصال الخادم.',
+  'metricsUnavailable':
+      'تعذّر عرض مقاييس النموذج الآن. تحقّق من الاتصال وحاول لاحقًا.',
   'taskPrediction': 'التنبؤ بالنوبة (ما قبل النوبة ضد ما بينها)',
   'taskDetection': 'كشف النوبة (أثناء النوبة ضد غيرها)',
   'perWindow': 'لكل نافذة',
@@ -1283,7 +1284,7 @@ const Map<String, String> _en = {
   'justNow': 'just now',
 
   'errNoConnection': 'No connection. Check your internet and try again.',
-  'errTimeout': 'The server is slow to respond.',
+  'errTimeout': 'The connection is slow. Please try again.',
   'errSessionExpired': 'Your session expired. Please sign in again.',
   'errInvalidCredentials': 'Invalid username or password.',
   'errAccountLocked':
@@ -1312,12 +1313,12 @@ const Map<String, String> _en = {
   'savedLocallyWillSync':
       'Saved on this device; it will sync when back online.',
   'pendingSync': 'Pending sync',
-  'wakingCloudServer': 'Waking up cloud server...',
+  'wakingCloudServer': 'Connecting…',
   'offlineLocalMode':
-      'Local mode (no internet): the app keeps working on this device; data is sent when the connection returns.',
+      'Working in local mode without internet. Monitoring and alerts continue; data syncs automatically.',
   'serverUnreachableMode':
-      'Server unreachable — the app works locally and sends data later.',
-  'syncingNow': 'Back online — sending pending data...',
+      'Working in local mode. Monitoring and alerts continue; data syncs automatically.',
+  'syncingNow': 'Back online — syncing…',
   'syncNow': 'Sync now',
 
   'riskSafeTitle': 'Stable',
@@ -1509,7 +1510,7 @@ const Map<String, String> _en = {
   'languageEnglish': 'English',
   'horizonTitle': 'Prediction horizon (SPH)',
   'horizonNote':
-      'How far ahead the system tries to predict. Applies to the offline forecast and the simulator; the server uses PREICTAL_HORIZON_MIN.',
+      'How far ahead the system tries to predict. Used by the on-phone forecast and the simulator.',
   'reduceMotionNote':
       'This app follows your system “reduce motion” setting and uses no flashing or fast animation.',
 

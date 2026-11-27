@@ -25,7 +25,7 @@ Future<AppState> session(MessageDb db, {String role = 'patient'}) async {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
   testWidgets(
-    'draft is retained on local failure and saved messages use accurate pending text',
+    'draft is retained on local failure and saved messages show the pending clock',
     (tester) async {
       final db = MessageDb();
       final state = await session(db);
@@ -46,7 +46,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<TextField>(input).controller!.text, isEmpty);
       expect(db.rows.single.content, 'Keep this draft');
-      expect(find.text('محفوظ محليًا · بانتظار الإرسال'), findsOneWidget);
+      expect(find.byIcon(Icons.schedule_rounded), findsOneWidget);
       expect(find.text('تم التسليم'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       state.dispose();

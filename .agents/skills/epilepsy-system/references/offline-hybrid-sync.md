@@ -15,19 +15,20 @@ This guide establishes the engineering protocols for local-to-cloud parity, edge
 1. **Model Packaging:**
    * Package both `cloud_preictal_model.onnx` and `edge_seizure_model.onnx` as assets in the client application.
    * Total model size is under 700 KB, easily fitting within mobile memory and cold-start constraints.
-2. **Dynamic Failover State Machine:**
-   * When `apiOnline == true`:
-     - Stream EEG/vital windows to the cloud endpoint (`/analyze`).
-     - Mobile CPU stays cool; battery consumption is minimized.
-     - Predictions synchronize directly to doctor/caregiver cloud dashboards.
-   * When `apiOnline == false` (or request latency exceeds 1500 ms):
-     - Trigger immediate failover to the local ONNX inference engine.
-     - Compute window features and execute ONNX session locally on NPU/CPU.
-     - Output the same `AnalyzeResult` schema (`preictal_prob`, `lead_time_min`, `predicted`).
-     - Persist local prediction results into `prediction_events` SQLite table with `serverOrigin` isolation.
+2. **Unified Online/Offline Orchestration State Machine (Patient Account):**
+   * Provide a single authoritative connectivity & failover orchestrator coordinating all patient services:
+   * When `apiOnline == true` (**Online Mode**):
+     - Activate cloud DB sync, virtual hardware/simulator streaming, cloud high-accuracy seizure prediction (`/analyze`), cloud alerts/SOS dispatch, caregiver reachability/online presence & alert-receipt verification, accurate GPS geolocation, and real-time messaging/clinical updates.
+     - Keep mobile CPU cool and sync state seamless without exposing raw cloud wake-up messages ("جاري إيقاظ الخادم السحابي").
+   * When `apiOnline == false` (**Full Local Offline Mode**):
+     - Surface a clear, simple, non-technical indicator showing the user is in **Local Offline Mode** (`وضع محلي — دون اتصال بالإنترنت`).
+     - Immediately switch **every service** to local execution with zero data loss:
+       1. Local simulator telemetry continues uninterrupted.
+       2. `EdgeModelService` performs **active local seizure prediction** matching the cloud model's output contract (`preictal_prob`, `lead_time_min`, `predicted`, severity escalation) across all valid patient sessions.
+       3. All readings, medication logs, messages, and prediction events persist atomically in SQLCipher + durable outbox (`serverOrigin`-scoped).
+       4. Offline emergency alerts trigger local alarms + **native SMS SOS fallback** with direct satellite GNSS coordinates (`Geolocator`, `forceLocationManager: true` on Android).
    * When `apiOnline` returns:
-     - Halt local redundant inference after the current window completes.
-     - Reconcile outbox queue; upload pending offline events with original timestamps.
+     - Reconcile outbox queue atomically in chronological order with idempotency keys, then hand inference back to the cloud cleanly without dropping in-flight packets.
 
 ---
 

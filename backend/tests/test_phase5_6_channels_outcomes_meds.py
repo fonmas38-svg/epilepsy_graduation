@@ -98,7 +98,9 @@ def test_care_circle_five_channels_rbac_and_read_receipts():
     msg_dc = r_dc.json()["message"]
     assert msg_dc["channelType"] == "doctor_caregiver"
     assert msg_dc["peerUserId"] == cg_id
-    assert msg_dc["deliveredAt"] is not None
+    # Accepted by the server; "delivered" only once a recipient's app fetched it.
+    assert msg_dc["acceptedAt"] is not None
+    assert msg_dc["deliveredAt"] is None
     assert msg_dc["readAt"] is None
 
     # 5. Caregiver marks doctor_caregiver as read

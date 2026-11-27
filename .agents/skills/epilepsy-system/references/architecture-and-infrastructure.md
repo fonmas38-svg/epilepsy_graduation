@@ -6,18 +6,15 @@ A unified, general-purpose architectural reference for the **Epilepsy Patient Mo
 
 ## 1. System Architecture (Multi-Tier Offline-First Topology)
 
-The system is organized into four main components communicating over HTTPS/REST, real-time subscriptions, and local encrypted persistence:
+The system is organized into three active components communicating over HTTPS/REST, real-time subscriptions, and local encrypted persistence (the standalone web admin portal is retired; all system administration is consolidated into the hardened Flutter client):
 
-1. **Client Application (`mobile/` — Flutter for Android & Windows):**
-   - **Role & Benefit:** Primary user interface serving four distinct roles (**Patient**, **Caregiver**, **Doctor**, **System Admin**). Built with an **Offline-First** architecture so monitoring, emergency alerting, medication tracking, and local record storage remain operational even without internet connectivity.
-   - **Core Stack:** Flutter/Dart (`Provider` state management via `AppState`), local encrypted `SQLite/SQLCipher` (`LocalDatabase`), `FlutterSecureStorage` for tokens and device keys, and `SyncService` + `Outbox` for reliable background synchronization.
+1. **Client & Administration Application (`mobile/` — Flutter for Android & Windows):**
+   - **Role & Benefit:** Unified native application serving all four roles (**Patient**, **Caregiver**, **Doctor**, **System Admin**). Built with an **Offline-First** architecture and maximum security hardening (SQLCipher local encryption, biometric verification for sensitive actions, idle auto-lock, device-bound sessions, and strict RBAC) so monitoring, emergency alerting, medication tracking, and administrative operations remain secure and resilient.
+   - **Core Stack:** Flutter/Dart (`Provider` state management via `AppState`), local encrypted `SQLite/SQLCipher` (`LocalDatabase`), `FlutterSecureStorage` for tokens and device keys, `local_auth` for biometrics, and `SyncService` + `Outbox` for reliable background synchronization.
 2. **Backend API & AI Engine (`backend/` — FastAPI + Python):**
-   - **Role & Benefit:** Central REST API service (mounted directly at `/`) responsible for authentication, role-based access control (RBAC), EEG/vital-sign signal classification and seizure forecasting, clinical record management, medication prescriptions, alert routing, and cloud synchronization.
+   - **Role & Benefit:** Central REST API service (mounted directly at `/`) responsible for authentication, role-based access control (RBAC), EEG/vital-sign signal classification and seizure forecasting, clinical record management, medication prescriptions, alert routing, administrative auditing, and cloud synchronization.
    - **Core Stack:** FastAPI, Uvicorn, Pydantic v2, SQLAlchemy 2.0, Alembic migrations, `psycopg` 3, PyJWT, NumPy/SciPy/scikit-learn, and `firebase-admin`.
-3. **Web Administration Portal (`admin-dashboard/` — React + Vite):**
-   - **Role & Benefit:** Browser-based administrative console for managing doctor, patient, and caregiver accounts, handling doctor registry verification, managing patient-caregiver-doctor links, and reviewing system resources.
-   - **Core Stack:** React 18, React Router DOM, Vite.
-4. **Hardware Signal Simulator (`partners/hardware-sim/` & In-App Emulator):**
+3. **Hardware Signal Simulator (`partners/hardware-sim/` & In-App Emulator):**
    - **Role & Benefit:** Generates multi-channel physiological telemetry (EEG, ECG, motion, heart rate at 256 Hz across `stable`, `watch`, `high_risk`, and `ramp` patterns) for end-to-end testing and demonstration in place of physical wearable EEG hardware.
    - **Core Stack:** Python simulator client (`sim_client.py` targeting `/device/ingest`) and in-app polymorphic device abstraction (`IEegHardwareDevice` / `SoftwareEmulatorEegDevice`).
 

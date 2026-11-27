@@ -34,6 +34,7 @@ import '../services/emergency_sms_service.dart';
 import '../services/report_export_service.dart';
 import '../services/settings_service.dart';
 import '../services/signal_simulator.dart';
+import '../services/simulator/sim_types.dart';
 import '../services/sync_service.dart';
 import '../services/edge_model_service.dart';
 
@@ -75,6 +76,7 @@ class AppState extends ChangeNotifier {
       api.wakingNotifier.addListener(_onWakingChanged);
       api.noInternetNotifier.addListener(_onWakingChanged);
       api.deviceOffline = () => !deviceHasNetwork;
+      api.tokens.onSessionRevoked = _onSessionRevoked;
     } catch (_) {}
     location.hasInternet = () => operatingMode != AppOperatingMode.offlineLocal;
     monitoring.onAlert = (alert) {
@@ -283,8 +285,35 @@ class AppState extends ChangeNotifier {
   /// Re-check the backend and flush every pending queue (readings, alerts,
   /// care writes, messages). Returns false when the server is not reachable.
   /// Safe to call repeatedly: overlapping calls are ignored.
+  /// One heartbeat for the whole app: re-checks the server while signed in,
+  /// so a server that comes back (or a cold start that finishes) is noticed
+  /// without waiting for a network change, and pending data is sent at once.
+  Timer? _heartbeat;
+  bool _syncAgain = false;
+
+  void _startHeartbeat() {
+    _heartbeat?.cancel();
+    _heartbeat = Timer.periodic(const Duration(seconds: 20), (_) async {
+      if (auth.currentUser == null || !deviceHasNetwork) return;
+      if (_syncOps > 0 || _syncProbing) return;
+      final wasOnline = apiOnline;
+      final ok = await api.health(null, const Duration(seconds: 8), true);
+      if (ok && !wasOnline) {
+        await syncNow();
+      } else if (ok != apiOnline) {
+        apiOnline = ok;
+        notifyListeners();
+      }
+    });
+  }
+
   Future<bool> syncNow() async {
-    if (_syncOps > 0 || _syncProbing) return false;
+    if (_syncOps > 0 || _syncProbing) {
+      // A sync is already running: run once more afterwards instead of
+      // silently dropping this reconnect.
+      _syncAgain = true;
+      return false;
+    }
     // Probe first: «syncing» must not be shown before the server answered.
     _syncProbing = true;
     final bool ok;
@@ -303,6 +332,7 @@ class AppState extends ChangeNotifier {
     try {
       final pid = monitoring.activePatientId ?? auth.currentUser?.uid;
       if (pid != null) await sync.syncPending(pid);
+      await sync.flushPendingAlerts();
       await care.flushOutbox();
       await messages.flushPendingMessages();
       return true;
@@ -312,6 +342,10 @@ class AppState extends ChangeNotifier {
     } finally {
       _syncOps--;
       notifyListeners();
+      if (_syncAgain) {
+        _syncAgain = false;
+        unawaited(syncNow());
+      }
     }
   }
 
@@ -319,6 +353,34 @@ class AppState extends ChangeNotifier {
       monitoring.getDiagnostics();
 
   bool ready = false;
+
+  /// True while a sign-in is in flight. The UI keeps the login screen up until
+  /// the whole session (care data, monitoring, routes) is ready, so a partial
+  /// session can never be rendered or have a stale route restored over it.
+  bool get signingIn => _signingInDepth > 0;
+  int _signingInDepth = 0;
+  Future<void>? _serverInit;
+
+  Future<T> _guardSignIn<T>(Future<T> Function() body) async {
+    _signingInDepth++;
+    notifyListeners();
+    try {
+      // Never log in while the background server probe may still switch the
+      // base URL: that rotates the token revision and fails the login with a
+      // fake "invalid credentials".
+      final init = _serverInit;
+      if (init != null) {
+        try {
+          await init.timeout(const Duration(seconds: 10));
+        } catch (_) {}
+      }
+      return await body();
+    } finally {
+      _signingInDepth--;
+      notifyListeners();
+    }
+  }
+
   bool apiOnline = false;
   bool isOfflineWorkspace = false;
   AlertItem? lastAlert;
@@ -446,6 +508,14 @@ class AppState extends ChangeNotifier {
       if (auth.currentUser?.uid != user?.uid) return;
       lastAlert = saved;
       notifyListeners();
+      // Offline: open the SMS composer now, with the last remembered fix,
+      // instead of after a GNSS fix that can take half a minute. The better
+      // live fix is still shared below once it arrives.
+      if (operatingMode == AppOperatingMode.offlineLocal) {
+        final quick = await location.lastKnownFix();
+        if (auth.currentUser?.uid != user?.uid) return;
+        unawaited(_prepareEmergencySms(saved, fix: quick, locate: false));
+      }
       final fix = await fixFuture;
       if (auth.currentUser?.uid != user?.uid) return;
 
@@ -590,10 +660,12 @@ class AppState extends ChangeNotifier {
     }
     _preparingEmergencySms.add(alert.id);
     try {
-      // No internet on the phone: go straight to SMS without a probe that
-      // can only fail. Otherwise confirm the cloud path is really up.
+      // No internet on the phone: go straight to SMS. Otherwise SMS is only
+      // skipped once the server has really accepted THIS alert (it then
+      // notifies the care circle); a reachable server that rejected or has
+      // not yet received it is no reason to stay silent.
       if (operatingMode != AppOperatingMode.offlineLocal &&
-          await api.health(null, const Duration(seconds: 4))) {
+          await _alertAccepted(alert.id)) {
         return;
       }
       if (auth.currentUser?.uid != owner!.uid) return;
@@ -606,6 +678,7 @@ class AppState extends ChangeNotifier {
         fix: actualFix,
         eventId: alert.id,
         occurredAt: alert.timestamp,
+        usualAddress: _usualAddressFor(alert.patientId),
       );
       if (lastSmsOutcome == SmsOutcome.composerOpened) {
         _smsPrepared.add(alert.id);
@@ -617,6 +690,29 @@ class AppState extends ChangeNotifier {
       _preparingEmergencySms.remove(alert.id);
       notifyListeners();
     }
+  }
+
+  /// True once [alertId] has left the delivery queue (the server accepted
+  /// it), trying for up to [within].
+  Future<bool> _alertAccepted(
+    String alertId, {
+    Duration within = const Duration(seconds: 5),
+  }) async {
+    final deadline = DateTime.now().add(within);
+    while (true) {
+      try {
+        await sync.flushPendingAlerts();
+        if (!await db.hasPendingAlertDelivery(alertId)) return true;
+      } catch (_) {}
+      if (DateTime.now().isAfter(deadline)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+    }
+  }
+
+  /// The medical card's usual address, for an SMS that has no location fix.
+  String? _usualAddressFor(String patientId) {
+    final card = care.medicalCard;
+    return card?.patientId == patientId ? card?.usualAddress : null;
   }
 
   /// Patient-initiated SMS (re)open for [alert]: after the composer was closed,
@@ -642,6 +738,7 @@ class AppState extends ChangeNotifier {
         fix: fix,
         eventId: alert.id,
         occurredAt: alert.timestamp,
+        usualAddress: _usualAddressFor(alert.patientId),
       );
     } catch (_) {
       lastSmsOutcome = SmsOutcome.failed;
@@ -889,6 +986,7 @@ class AppState extends ChangeNotifier {
       if (!apiOnline && mode == ServerMode.auto && !api.tokens.hasSession) {
         Future.delayed(const Duration(seconds: 4), () async {
           if (!apiOnline &&
+              !signingIn &&
               serverMode == ServerMode.auto &&
               !api.tokens.hasSession) {
             debugPrint(
@@ -899,6 +997,7 @@ class AppState extends ChangeNotifier {
               timeout: const Duration(seconds: 12),
             );
             if (retryPing != null &&
+                !signingIn &&
                 !api.tokens.hasSession &&
                 serverMode == ServerMode.auto) {
               api.updateBaseUrl(AppConfig.cloudProductionUrl);
@@ -996,6 +1095,9 @@ class AppState extends ChangeNotifier {
       await notifications.init(
         fallbackTitle: _l10n.notificationFallbackTitle,
         onMessage: (title, body) {
+          // A push without alert data only reaches the patient themself; for
+          // other roles it carries no patient to open, so it stays in the tray.
+          if (auth.currentUser?.role != UserRole.patient) return;
           lastAlert = AlertItem(
             id: 'fcm-${DateTime.now().millisecondsSinceEpoch}',
             patientId: auth.currentUser?.uid ?? 'unknown',
@@ -1055,9 +1157,10 @@ class AppState extends ChangeNotifier {
     }
 
     // Initialize server connection asynchronously in background without blocking initial UI
-    _initServerConnection();
+    _serverInit = _initServerConnection();
 
     // Continuous network connectivity watcher: detects drops and auto-flushes on reconnection
+    _startHeartbeat();
     _connectivitySub?.cancel();
     _connectivitySub = Connectivity().onConnectivityChanged.listen((
       results,
@@ -1086,6 +1189,12 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> signInDemo({
+    required String name,
+    required String email,
+    required UserRole role,
+  }) => _guardSignIn(() => _signInDemo(name: name, email: email, role: role));
+
+  Future<void> _signInDemo({
     required String name,
     required String email,
     required UserRole role,
@@ -1148,6 +1257,18 @@ class AppState extends ChangeNotifier {
     required String username,
     required String password,
     bool takeOverDevice = false,
+  }) => _guardSignIn(
+    () => _signInWithPassword(
+      username: username,
+      password: password,
+      takeOverDevice: takeOverDevice,
+    ),
+  );
+
+  Future<void> _signInWithPassword({
+    required String username,
+    required String password,
+    bool takeOverDevice = false,
   }) async {
     if (_signOutFuture != null) await _signOutFuture;
     failure = null;
@@ -1181,10 +1302,14 @@ class AppState extends ChangeNotifier {
         await saveLastLoggedInUser(username);
         apiOnline = true;
         isOfflineWorkspace = false;
-        await _cacheUserCredentials(
-          username: username,
-          password: password,
-          context: context,
+        // Hashing for offline sign-in is deliberately slow (key stretching):
+        // it runs after the home screen appears, never behind the spinner.
+        _inBackground(
+          _cacheUserCredentials(
+            username: username,
+            password: password,
+            context: context,
+          ),
         );
         notifyListeners();
         return;
@@ -1209,6 +1334,7 @@ class AppState extends ChangeNotifier {
               username,
               password,
               timeout: const Duration(seconds: 15),
+              takeOverDevice: takeOverDevice,
             );
             final context = await api.sessionContext();
             await auth.applyBackendSession(context);
@@ -1418,7 +1544,10 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> signInWithBiometrics(String username) async {
+  Future<void> signInWithBiometrics(String username) =>
+      _guardSignIn(() => _signInWithBiometrics(username));
+
+  Future<void> _signInWithBiometrics(String username) async {
     if (_signOutFuture != null) await _signOutFuture;
     final saved = await biometrics.takeSession(username, api.baseUrl);
     if (saved == null) throw const Failure(FailureKind.unauthorized);
@@ -1440,6 +1569,7 @@ class AppState extends ChangeNotifier {
       currentSessionUsername = username;
       await _registerCurrentPushToken();
       await _startForUser();
+      await saveLastLoggedInUser(username);
       apiOnline = true;
       notifyListeners();
     } catch (e) {
@@ -1504,6 +1634,16 @@ class AppState extends ChangeNotifier {
     if (auth.currentUser?.uid == user.uid) notifyListeners();
   }
 
+  /// Set when the server ended this session (account moved to another
+  /// device, password changed, admin revoke). The login screen explains it once.
+  bool sessionRevokedNotice = false;
+
+  void _onSessionRevoked() {
+    if (signingIn || auth.currentUser == null || auth.isDemoSession) return;
+    sessionRevokedNotice = true;
+    unawaited(signOut());
+  }
+
   Future<void>? _signOutFuture;
   Future<void> signOut() {
     if (_signOutFuture != null) return _signOutFuture!;
@@ -1512,7 +1652,28 @@ class AppState extends ChangeNotifier {
     return operation.whenComplete(() => _signOutFuture = null);
   }
 
+  /// Bumped on every sign-out so a session start still awaiting I/O cannot
+  /// start monitoring for an account that has already signed out.
+  int _sessionGeneration = 0;
+
+  /// Session work that runs after the home screen is shown (refreshes,
+  /// reminders, offline-credential caching). Tests await it.
+  final List<Future<void>> _backgroundWork = [];
+  void _inBackground(Future<void> work) {
+    final f = work.catchError((Object _) {});
+    _backgroundWork.add(f);
+    f.whenComplete(() => _backgroundWork.remove(f));
+  }
+
+  @visibleForTesting
+  Future<void> get backgroundWorkDone async {
+    while (_backgroundWork.isNotEmpty) {
+      await Future.wait(List.of(_backgroundWork));
+    }
+  }
+
   Future<void> _performSignOut() async {
+    _sessionGeneration++;
     final realSession = !auth.isDemoSession && api.tokens.hasSession;
     messages.clearSession();
     care.clearSession();
@@ -1570,6 +1731,7 @@ class AppState extends ChangeNotifier {
     } catch (_) {}
     unawaited(background.stopMonitoring());
     unawaited(_connectivitySub?.cancel());
+    _heartbeat?.cancel();
     unawaited(monitoring.dispose());
     notifications.dispose();
     if (_ownsApi) api.dispose();
@@ -1580,6 +1742,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _startForUser() async {
+    final generation = _sessionGeneration;
     final session = auth.currentUser;
     notifications.configureSession(
       session?.uid,
@@ -1605,27 +1768,57 @@ class AppState extends ChangeNotifier {
         if (profile != null && auth.isDemoSession) {
           await medication.seedFromProfile(profile);
         }
-        await medication.synchronize(patientId);
       } catch (_) {}
-      // Schedule patient OS medication reminders completely independently of
-      // EEG monitoring. Non-patient roles must never schedule patient alarms.
-      if (user.role == UserRole.patient) {
-        try {
-          await medication.syncReminders(user.uid, _l10n);
-        } catch (_) {}
-      }
       // Care data loads from SQLite first, so the emergency screen is usable
       // before the network is even tried. Best-effort: a failure here must never
       // stop monitoring from starting.
       try {
-        await care.loadFor(patientId);
-        await messages.loadFor(patientId);
+        await care.loadFor(patientId, remote: false);
       } catch (_) {}
+      // Network refreshes run after the home screen is shown: about a dozen
+      // sequential requests must never hold the patient behind the login
+      // spinner. Each one notifies when it lands.
+      _inBackground(() async {
+        try {
+          await medication.synchronize(patientId);
+        } catch (_) {}
+        // OS medication reminders, independent of EEG monitoring. Non-patient
+        // roles must never schedule patient alarms.
+        if (user.role == UserRole.patient && generation == _sessionGeneration) {
+          try {
+            await medication.syncReminders(user.uid, _l10n);
+          } catch (_) {}
+        }
+      }());
+      _inBackground(() async {
+        try {
+          if (generation != _sessionGeneration) return;
+          await care.refresh();
+          if (generation != _sessionGeneration) return;
+          await messages.loadFor(patientId);
+        } catch (_) {}
+      }());
 
       // MonitoringService enforces read-only observers and real-vs-demo sources.
-      await monitoring.start(patientId);
+      if (generation != _sessionGeneration ||
+          !AppUser.sameSessionOwner(auth.currentUser, user)) {
+        return;
+      }
+      // Started, not awaited: the first window (connect + scoring) can take
+      // seconds and must never hold the home screen behind the login spinner.
+      // Only the patient's own session streams live by default; a doctor or
+      // caregiver gets a live stream when they open a patient
+      // ([selectPatient]), not for whoever happens to be first in the list.
+      if (user.role == UserRole.patient) {
+        _inBackground(monitoring.start(patientId));
+      }
     }
-    apiOnline = await api.health();
+    _inBackground(() async {
+      final online = await api.health();
+      if (generation != _sessionGeneration) return;
+      apiOnline = online;
+      notifyListeners();
+    }());
   }
 
   Future<void> _seedPatientTelemetry(String pid) async {
@@ -1798,6 +1991,16 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Demo control: start [type] now (restarts it if a seizure is running).
+  /// Switches the patient's source to the virtual sensor first if needed.
+  Future<void> startSimulatedSeizure(SimSeizureType type) async {
+    if (monitoring.source != SignalSource.simulator) {
+      await monitoring.setSource(SignalSource.simulator);
+    }
+    monitoring.simulationControl((s) => s.startSeizure(type));
+    notifyListeners();
+  }
+
   Future<void> forceHighRiskDemo() async {
     if (monitoring.source == SignalSource.headDevice) return;
     await monitoring.tick(forcePattern: RiskLabel.highRisk);
@@ -1829,6 +2032,34 @@ class AppState extends ChangeNotifier {
   /// this device already held — while the button said the list was up to date.
   /// Everything written here lands in SQLite, which is what the per-patient list
   /// screens read.
+  /// Re-read who this account may see (`/auth/me`): a new caregiver link or
+  /// doctor assignment appears, and a revoked one disappears, without
+  /// signing in again.
+  Future<void> refreshAccess() async {
+    if (!api.tokens.hasSession || auth.isDemoSession) return;
+    final owner = auth.currentUser;
+    if (owner == null) return;
+    final revision = api.tokens.revision;
+    try {
+      final context = await api.sessionContext();
+      if (!AppUser.sameSessionOwner(owner, auth.currentUser) ||
+          revision != api.tokens.revision) {
+        return;
+      }
+      await auth.applyBackendSession(context);
+      await api.tokens.cacheSessionContext(context);
+      notifications.configureSession(
+        owner.uid,
+        owner.role == UserRole.patient
+            ? [owner.uid]
+            : auth.accessiblePatients().map((p) => p.patientId),
+      );
+      notifyListeners();
+    } catch (_) {
+      // Offline or server busy: keep the list this device already has.
+    }
+  }
+
   Future<void> refreshFromCloud() async {
     final owner = auth.currentUser;
     final origin = api.baseUrl;
@@ -1837,6 +2068,8 @@ class AppState extends ChangeNotifier {
         AppUser.sameSessionOwner(owner, auth.currentUser) &&
         origin == api.baseUrl &&
         revision == api.tokens.revision;
+    if (owner?.role != UserRole.patient) await refreshAccess();
+    if (!current()) return;
     final patients = auth.accessiblePatients();
     if (patients.isEmpty) return;
     for (final p in patients) {

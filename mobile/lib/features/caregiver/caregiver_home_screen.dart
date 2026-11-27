@@ -1,3 +1,4 @@
+import 'dart:async';
 import '../shared/clinical_messages_screen.dart';
 import '../shared/account_screen.dart';
 import '../../core/ui/workspace_scaffold.dart';
@@ -52,12 +53,27 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   Failure? _failure;
   List<_Row> _rows = const [];
 
+  /// Keeps the list current while it is on screen: cloud pull on open, then
+  /// every minute (new patients, links, alerts and statuses).
+  Timer? _autoRefresh;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await _load();
+      if (mounted) unawaited(_refresh());
     });
+    _autoRefresh = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) unawaited(_refresh());
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoRefresh?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {

@@ -134,7 +134,8 @@ void main() {
       );
       expect(outcome, SmsOutcome.composerOpened);
       expect(opened!.path, '+967777123456');
-      expect(Uri.decodeComponent(opened!.query), contains('event-1'));
+      // Internal ids mean nothing to the family: never in the SMS.
+      expect(Uri.decodeComponent(opened!.query), isNot(contains('event-1')));
       expect(
         Uri.decodeComponent(opened!.query),
         contains('12.000000, 45.000000'),

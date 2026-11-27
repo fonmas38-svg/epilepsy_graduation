@@ -39,6 +39,21 @@ extension SeizurePhaseX on SeizurePhase {
   };
 }
 
+/// Severity levels the control panel can drive the virtual device to.
+enum ScenarioLevel {
+  /// Calm baseline; ends any running scenario.
+  stable,
+
+  /// Unusual activity worth watching; no alert.
+  watch,
+
+  /// Pre-ictal changes and an early-warning countdown.
+  preIctal,
+
+  /// A full seizure: onset, ictal discharges, alert and escalation, recovery.
+  critical,
+}
+
 /// Controls progression through a complete seizure cycle.
 /// Call [nextPhase] on each tick; the cycle is:
 ///   interictal (N ticks) → preIctal (M ticks) → ictal (P ticks)
@@ -49,7 +64,49 @@ class SeizureCycleController {
     this.preIctalTicks = 2,
     this.ictalTicks = 3,
     this.postIctalTicks = 2,
+    this.autoCycle = true,
   });
+
+  /// When false the controller stays at baseline between scenarios instead of
+  /// cycling into a seizure every few ticks (the live virtual device).
+  final bool autoCycle;
+
+  List<(SeizurePhase, int)> _scenario = const [];
+  int _scenarioStep = 0;
+  ScenarioLevel? _scenarioLevel;
+
+  /// The scenario currently held by the virtual device, if any.
+  ScenarioLevel? get scenarioLevel => _scenarioLevel;
+  bool get scenarioActive => _scenarioLevel != null;
+
+  /// Hold the virtual device in a timed, multi-phase scenario. Each step is a
+  /// phase and its length in ticks. Regular polls cannot override it; it ends
+  /// on its own and returns to baseline.
+  void startScenario(ScenarioLevel level) {
+    _phaseTickCount = 0;
+    _scenarioStep = 0;
+    _scenario = scenarioSteps(level);
+    if (_scenario.isEmpty) {
+      _scenarioLevel = null;
+      _phase = SeizurePhase.interictal;
+      return;
+    }
+    _scenarioLevel = level;
+    _phase = _scenario.first.$1;
+  }
+
+  /// Phase timeline per level, in ticks of the device's poll interval.
+  static List<(SeizurePhase, int)> scenarioSteps(ScenarioLevel level) =>
+      switch (level) {
+        ScenarioLevel.stable => const [],
+        ScenarioLevel.watch => const [(SeizurePhase.preIctal, 8)],
+        ScenarioLevel.preIctal => const [(SeizurePhase.preIctal, 12)],
+        ScenarioLevel.critical => const [
+          (SeizurePhase.preIctal, 1),
+          (SeizurePhase.ictal, 6),
+          (SeizurePhase.postIctal, 5),
+        ],
+      };
 
   final int interictalTicks;
   final int preIctalTicks;
@@ -63,6 +120,12 @@ class SeizureCycleController {
 
   /// Returns the pattern for the CURRENT tick, then advances the counter.
   RiskLabel advance() {
+    if (_scenarioLevel != null) return _advanceScenario();
+    if (!autoCycle) {
+      _phase = SeizurePhase.interictal;
+      _phaseTickCount = 0;
+      return _phase.riskLabel;
+    }
     final label = _phase.riskLabel;
     _phaseTickCount++;
     final limit = switch (_phase) {
@@ -83,6 +146,25 @@ class SeizureCycleController {
     return label;
   }
 
+  RiskLabel _advanceScenario() {
+    final (phase, ticks) = _scenario[_scenarioStep];
+    _phase = phase;
+    final label = phase.riskLabel;
+    _phaseTickCount++;
+    if (_phaseTickCount >= ticks) {
+      _phaseTickCount = 0;
+      _scenarioStep++;
+      if (_scenarioStep >= _scenario.length) {
+        _scenario = const [];
+        _scenarioLevel = null;
+        _phase = SeizurePhase.interictal;
+      } else {
+        _phase = _scenario[_scenarioStep].$1;
+      }
+    }
+    return label;
+  }
+
   /// Jump directly to a specific phase (used by the UI escalation buttons).
   void forcePhase(SeizurePhase phase) {
     _phase = phase;
@@ -91,6 +173,9 @@ class SeizureCycleController {
 
   /// Reset to the beginning of the cycle.
   void reset() {
+    _scenario = const [];
+    _scenarioLevel = null;
+    _scenarioStep = 0;
     _phase = SeizurePhase.interictal;
     _phaseTickCount = 0;
   }

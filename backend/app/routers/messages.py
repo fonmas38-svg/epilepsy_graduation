@@ -242,7 +242,20 @@ def share_location(
         content=location_msg,
     )
 
-    users_store.log(sub, role, "share_location", target=patient_id, detail=loc_data)
+    # The audit trail records that a location was shared, never where: exact
+    # coordinates are clinical-grade personal data and audit logs are kept
+    # far longer and read by more people (administrators) than the location.
+    users_store.log(
+        sub,
+        role,
+        "share_location",
+        target=patient_id,
+        detail={
+            "source": loc_data.get("source"),
+            "accuracy": loc_data.get("accuracy"),
+            "capturedAt": loc_data.get("capturedAt") or loc_data.get("timestamp"),
+        },
+    )
     return {"location": loc_data, "ok": True}
 
 

@@ -221,3 +221,47 @@ def list_entries(status: str | None = None, limit: int = 50) -> list[dict]:
         query = query.where(alert_outbox.c.status == status)
     with connection() as conn:
         return [_row_to_dict(row) for row in conn.execute(query).all()]
+
+
+def summary() -> dict[str, Any]:
+    """Return aggregate outbox delivery status counts and recent failure samples."""
+    counts = stats()
+    errors = list_entries(status=FAILED, limit=5) + list_entries(status=DEAD, limit=5)
+    return {
+        "pending": counts[PENDING],
+        "sent": counts[SENT],
+        "failed": counts[FAILED],
+        "dead": counts[DEAD],
+        "total": counts["total"],
+        "recentErrors": [
+            {
+                "id": e["id"],
+                "alertId": e["alert_id"],
+                "patientId": e["patient_id"],
+                "status": e["status"],
+                "attempts": e["attempts"],
+                "lastError": e["last_error"],
+                "updatedAt": e["updated_at"],
+            }
+            for e in errors
+        ],
+    }
+
+
+def retry_failed() -> int:
+    """Re-queue all failed or dead outbox entries for immediate delivery retry."""
+    now = _iso(_now())
+    with transaction() as conn:
+        result = conn.execute(
+            update(alert_outbox)
+            .where(alert_outbox.c.status.in_([FAILED, DEAD]))
+            .values(
+                status=PENDING,
+                attempts=0,
+                next_attempt_at=now,
+                lease_token=None,
+                lease_expires_at=None,
+                updated_at=now,
+            )
+        )
+        return int(result.rowcount or 0)

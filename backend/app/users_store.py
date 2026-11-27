@@ -10,15 +10,18 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import delete, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app import security
 from app.database import (
+    alert_outbox,
     assignments,
     audit_logs,
+    care_records,
     caregiver_links,
     connection,
+    devices,
     doctor_profiles,
     dump_json,
     idempotency_keys,
@@ -168,16 +171,29 @@ def delete_user(user_id: str) -> bool:
         return bool(conn.execute(delete(users).where(users.c.id == user_id)).rowcount)
 
 
-def list_users(role: str | None = None, q: str | None = None,
-               include_disabled: bool = True) -> list[dict]:
+def list_users(
+    role: str | None = None,
+    q: str | None = None,
+    include_disabled: bool = True,
+    disabled_only: bool = False,
+) -> list[dict]:
     stmt = select(users)
     if role:
         stmt = stmt.where(users.c.role == role)
-    if not include_disabled:
+    if disabled_only:
+        stmt = stmt.where(users.c.disabled.is_(True))
+    elif not include_disabled:
         stmt = stmt.where(users.c.disabled.is_(False))
-    if q:
+    if q and q.strip():
         needle = f"%{q.strip()}%"
-        stmt = stmt.where(users.c.name.ilike(needle) | users.c.username.ilike(needle))
+        stmt = stmt.where(
+            or_(
+                users.c.name.ilike(needle),
+                users.c.username.ilike(needle),
+                users.c.email.ilike(needle),
+                users.c.meta_json.ilike(needle),
+            )
+        )
     stmt = stmt.order_by(users.c.role, func.lower(users.c.name))
     with connection() as conn:
         return [_user(row) for row in conn.execute(stmt)]
@@ -320,10 +336,32 @@ def log(actor: str | None, actor_role: str | None, action: str,
     return entry
 
 
-def list_audit(limit: int = 200) -> list[dict]:
+def list_audit(
+    limit: int = 200,
+    *,
+    actor_role: str | None = None,
+    action: str | None = None,
+    q: str | None = None,
+) -> list[dict]:
+    stmt = select(audit_logs)
+    if actor_role and actor_role.strip():
+        stmt = stmt.where(audit_logs.c.actor_role == actor_role.strip())
+    if action and action.strip():
+        stmt = stmt.where(audit_logs.c.action == action.strip())
+    if q and q.strip():
+        needle = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(
+                audit_logs.c.action.ilike(needle),
+                audit_logs.c.actor.ilike(needle),
+                audit_logs.c.target.ilike(needle),
+                audit_logs.c.detail_json.ilike(needle),
+            )
+        )
     with connection() as conn:
-        return [_audit(row) for row in conn.execute(select(audit_logs).order_by(
-            audit_logs.c.sequence.desc()).limit(limit))]
+        return [_audit(row) for row in conn.execute(
+            stmt.order_by(audit_logs.c.sequence.desc()).limit(limit)
+        )]
 
 
 def counts() -> dict:
@@ -331,12 +369,59 @@ def counts() -> dict:
         role_rows = dict(
             conn.execute(select(users.c.role, func.count()).group_by(users.c.role)).all()
         )
+        device_total = conn.scalar(select(func.count()).select_from(devices)) or 0
+        device_disabled = conn.scalar(
+            select(func.count()).select_from(devices).where(devices.c.disabled.is_(True))
+        ) or 0
+        device_enrolled = conn.scalar(
+            select(func.count()).select_from(devices).where(devices.c.last_enrolled_at.isnot(None))
+        ) or 0
+        deletion_requests = conn.scalar(
+            select(func.count())
+            .select_from(care_records)
+            .where(care_records.c.kind == "deletion-request", care_records.c.deleted.is_(False))
+        ) or 0
+        deletion_rejected = conn.scalar(
+            select(func.count())
+            .select_from(care_records)
+            .where(
+                care_records.c.kind == "deletion-review",
+                care_records.c.deleted.is_(False),
+                care_records.c.payload_json.ilike('%"status": "rejected"%'),
+            )
+        ) or 0
+        moh_overrides = conn.scalar(
+            select(func.count())
+            .select_from(doctor_profiles)
+            .where(
+                doctor_profiles.c.moh_verified.is_(False),
+                doctor_profiles.c.moh_override_by.isnot(None),
+            )
+        ) or 0
+        outbox_rows = dict(
+            conn.execute(
+                select(alert_outbox.c.status, func.count()).group_by(alert_outbox.c.status)
+            ).all()
+        )
         return {
             "totalUsers": conn.scalar(select(func.count()).select_from(users)) or 0,
             "byRole": {role: int(role_rows.get(role, 0)) for role in ROLES},
             "disabled": conn.scalar(select(func.count()).select_from(users).where(
                 users.c.disabled.is_(True))) or 0,
             "assignments": conn.scalar(select(func.count()).select_from(assignments)) or 0,
+            "devices": {
+                "total": int(device_total),
+                "disabled": int(device_disabled),
+                "enrolled": int(device_enrolled),
+            },
+            "pendingDeletionRequests": max(0, int(deletion_requests) - int(deletion_rejected)),
+            "mohOverrides": int(moh_overrides),
+            "outbox": {
+                "pending": int(outbox_rows.get("pending", 0)),
+                "failed": int(outbox_rows.get("failed", 0)),
+                "dead": int(outbox_rows.get("dead", 0)),
+                "sent": int(outbox_rows.get("sent", 0)),
+            },
         }
 
 
@@ -657,3 +742,64 @@ def get_doctor_profile(user_id: str) -> dict | None:
         "mohCheckedAt": r["moh_checked_at"],
         "mohOverrideBy": r["moh_override_by"],
     }
+
+
+def list_moh_registry(
+    *,
+    status: str | None = None,
+    q: str | None = None,
+) -> list[dict]:
+    ensure_default_moh_registry()
+    stmt = select(moh_registry)
+    if status and status.strip():
+        stmt = stmt.where(moh_registry.c.status == status.strip())
+    if q and q.strip():
+        needle = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(
+                moh_registry.c.license_number.ilike(needle),
+                moh_registry.c.national_id.ilike(needle),
+                moh_registry.c.full_name_ar.ilike(needle),
+                moh_registry.c.full_name_en.ilike(needle),
+                moh_registry.c.specialization.ilike(needle),
+            )
+        )
+    with connection() as conn:
+        rows = conn.execute(stmt.order_by(moh_registry.c.license_number)).all()
+    return [
+        {
+            "licenseNumber": r._mapping["license_number"],
+            "nationalId": r._mapping["national_id"],
+            "fullNameAr": r._mapping["full_name_ar"],
+            "fullNameEn": r._mapping["full_name_en"],
+            "specialization": r._mapping["specialization"],
+            "hospitalAffiliation": r._mapping["hospital_affiliation"],
+            "status": r._mapping["status"],
+            "expirationDate": r._mapping["expiration_date"],
+        }
+        for r in rows
+    ]
+
+
+def reverify_doctor_moh(user_id: str) -> dict | None:
+    user = get_user(user_id)
+    profile = get_doctor_profile(user_id)
+    if not user or user.get("role") != "doctor" or not profile:
+        return None
+    result = verify_moh_license(
+        license_number=profile["licenseNumber"],
+        national_id=profile["nationalId"],
+        name=user["name"],
+    )
+    updated = upsert_doctor_profile(
+        user_id,
+        license_number=profile["licenseNumber"],
+        specialization=profile["specialization"],
+        hospital_affiliation=profile["hospitalAffiliation"],
+        national_id=profile["nationalId"],
+        phone=profile["phone"],
+        moh_verified=bool(result["verified"]),
+        moh_status=result["status"],
+        moh_override_by=None if result["verified"] else profile.get("mohOverrideBy"),
+    )
+    return {"verification": result, "doctorProfile": get_doctor_profile(user_id) or updated}

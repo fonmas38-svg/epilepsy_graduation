@@ -366,7 +366,7 @@ class Medication {
     'schedule': schedule,
     'times': times,
     'active': active,
-    'createdAt': createdAt.toIso8601String(),
+    'createdAt': createdAt.toUtc().toIso8601String(),
     if (timezoneOffsetMin != null) 'timezoneOffsetMin': timezoneOffsetMin,
     'prescriptionId': prescriptionId,
     'periodContext': periodContext,

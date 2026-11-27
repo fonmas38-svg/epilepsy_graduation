@@ -95,8 +95,8 @@ class _AccountSessionsScreenState extends State<AccountSessionsScreen> {
             title: Text(_ar ? 'إلغاء الدخول؟' : 'Revoke access?'),
             content: Text(
               _ar
-                  ? 'سيتوقف وصول ${row == null ? 'الأجهزة الأخرى' : 'هذه الجلسة'} إلى الخادم والإشعارات الجديدة عند التحقق من الجلسة. لا تُمسح بيانات الجهاز أو الرسائل التي وصلته سابقًا.'
-                  : 'This ends ${row == null ? 'other sessions' : 'this session'} access to the server and new notifications when the session is checked. Stored device data and previously delivered messages are not erased.',
+                  ? 'سيتوقف وصول ${row == null ? 'الأجهزة الأخرى' : 'هذه الجلسة'} إلى حسابك وإشعاراته الجديدة. لا تُمسح البيانات أو الرسائل الموجودة على ذلك الجهاز.'
+                  : 'This ends ${row == null ? 'other sessions' : 'this session'} access to your account and its new notifications. Data and messages already on that device are not erased.',
             ),
             actions: [
               TextButton(

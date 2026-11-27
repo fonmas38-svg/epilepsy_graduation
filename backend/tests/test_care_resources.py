@@ -93,7 +93,7 @@ def test_upload_clinical_report_endpoint(monkeypatch):
             'success': True,
             'bucket': 'clinical-reports',
             'path': name,
-            'url': f'https://mock.supabase.co/storage/v1/object/public/clinical-reports/{name}',
+            'url': f'https://mock.supabase.co/storage/v1/object/sign/clinical-reports/{name}?token=t',
         },
     )
 
@@ -129,3 +129,61 @@ def test_upload_clinical_report_endpoint(monkeypatch):
         )
         assert res.status_code == 403
 
+        # Declared type must match the file's own signature.
+        fake = base64.b64encode(b'MZ not a pdf').decode('ascii')
+        res = client.post(
+            f'/patients/{pid}/reports/upload',
+            headers=patient_headers,
+            json={'filename': 'x.pdf', 'file_base64': fake, 'content_type': 'application/pdf'},
+        )
+        assert res.status_code == 415
+        res = client.post(
+            f'/patients/{pid}/reports/upload',
+            headers=patient_headers,
+            json={'filename': 'x.exe', 'file_base64': valid_b64, 'content_type': 'application/x-msdownload'},
+        )
+        assert res.status_code == 415
+
+
+def test_report_storage_has_no_hardcoded_credentials(monkeypatch):
+    from app import supabase_storage
+
+    source = open(supabase_storage.__file__, encoding='utf-8').read()
+    assert 'sb_secret_' not in source
+    assert '.supabase.co"' not in source
+    monkeypatch.delenv('SUPABASE_URL', raising=False)
+    monkeypatch.delenv('SUPABASE_SERVICE_ROLE_KEY', raising=False)
+    monkeypatch.setattr(supabase_storage.Path, 'exists', lambda self: False)
+    res = supabase_storage.upload_clinical_report(b'%PDF', 'p/x.pdf')
+    assert res == {'success': False, 'error': 'storage_not_configured'}
+
+
+
+def test_alert_circle_shows_each_member_and_their_response():
+    from datetime import datetime, timezone
+
+    with TestClient(app) as client:
+        pid, patient = account('patient', 'circle-patient')
+        cid, caregiver = account('caregiver', 'circle-cg')
+        users_store.link_caregiver(pid, cid)
+        alert_id = str(uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        reading = {'id': str(uuid4()), 'patientId': pid, 'timestamp': now,
+                   'eeg': [0.1] * 8, 'ecg': [0.1] * 8, 'motion': [0.0] * 8, 'hr': 70}
+        alert = {'id': alert_id, 'patientId': pid, 'timestamp': now,
+                 'severity': 'critical', 'message': 'SOS', 'recipients': ['caregiver']}
+        assert client.post('/cloud/sync', headers=patient,
+                           json={'patient_id': pid, 'reading': reading, 'alert': alert}).status_code == 200
+
+        path = f'/patients/{pid}/alerts/{alert_id}/circle'
+        members = client.get(path, headers=patient).json()['members']
+        assert [m['id'] for m in members] == [cid]
+        assert members[0]['response'] is None
+
+        assert client.post(
+            f'/patients/{pid}/alerts/{alert_id}/responses', headers=caregiver,
+            json={'id': str(uuid4()), 'alert_id': alert_id, 'status': 'seen', 'at': now},
+        ).status_code == 201
+        member = client.get(path, headers=patient).json()['members'][0]
+        assert member['response'] == 'seen'
+        assert isinstance(member['online'], bool)

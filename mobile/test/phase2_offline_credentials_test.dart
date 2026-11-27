@@ -226,6 +226,7 @@ void main() {
           username: 'patient1',
           password: 'Password123',
         );
+        await appState.backgroundWorkDone;
 
         expect(appState.auth.currentUser?.uid, 'user-1');
         expect(appState.isOfflineWorkspace, isFalse);
@@ -303,6 +304,7 @@ void main() {
         username: 'offline_user',
         password: 'MyOfflinePass',
       );
+      await appState.backgroundWorkDone;
 
       expect(appState.auth.currentUser?.uid, 'offline-pat-1');
       expect(appState.auth.currentUser?.name, 'Offline Patient');
@@ -324,6 +326,8 @@ void main() {
           ),
         ),
       );
-    });
+      // Key stretching is slow by design; under a loaded full-suite run the
+      // default 30 s limit is too tight.
+    }, timeout: const Timeout(Duration(minutes: 2)));
   });
 }

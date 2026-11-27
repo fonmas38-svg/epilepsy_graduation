@@ -1067,10 +1067,14 @@ class ApiClient {
   Future<List<Map<String, dynamic>>> getAdminUsers({
     String? role,
     String? query,
+    bool includeDisabled = true,
+    bool disabledOnly = false,
   }) async {
     final params = <String, String>{};
-    if (role != null) params['role'] = role;
+    if (role != null && role.isNotEmpty) params['role'] = role;
     if (query != null && query.isNotEmpty) params['q'] = query;
+    if (!includeDisabled) params['include_disabled'] = 'false';
+    if (disabledOnly) params['disabled_only'] = 'true';
     final pathWithQuery = Uri(
       path: '/admin/users',
       queryParameters: params.isEmpty ? null : params,
@@ -1090,6 +1094,60 @@ class ApiClient {
     final data = jsonDecode(r.body) as Map<String, dynamic>;
     final list = data['users'] as List? ?? [];
     return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<Map<String, dynamic>> getAdminUserDetails(String userId) async {
+    final r = await _requestAuthed(
+      'GET',
+      '/admin/users/${Uri.encodeComponent(userId)}',
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل تفاصيل الحساب'),
+        statusCode: r.statusCode,
+      );
+    }
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    return Map<String, dynamic>.from(data['user'] as Map);
+  }
+
+  Future<Map<String, dynamic>> createAdminPatient({
+    required String username,
+    required String name,
+    String? password,
+    String? email,
+    String? doctorId,
+    required String phone,
+    required int age,
+    required String gender,
+    required String emergencyContact,
+    required String diagnosis,
+    String? idempotencyKey,
+  }) async {
+    final payload = <String, dynamic>{
+      'username': username,
+      'name': name,
+      if (password != null && password.isNotEmpty) 'password': password,
+      if (email != null && email.isNotEmpty) 'email': email,
+      if (doctorId != null && doctorId.isNotEmpty) 'doctor_id': doctorId,
+      'phone': phone,
+      'age': age,
+      'gender': gender,
+      'emergency_contact': emergencyContact,
+      'diagnosis': diagnosis,
+      if (idempotencyKey != null && idempotencyKey.isNotEmpty)
+        'idempotency_key': idempotencyKey,
+    };
+    final r = await _postAuthed('/admin/patients', payload);
+    if (r.statusCode != 201 && r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر إنشاء حساب المريض'),
+        statusCode: r.statusCode,
+      );
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
   Future<void> adminDisableUser(String userId) async {
@@ -1252,10 +1310,22 @@ class ApiClient {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getAdminAudit({int limit = 20}) async {
+  Future<List<Map<String, dynamic>>> getAdminAudit({
+    int limit = 20,
+    String? actorRole,
+    String? action,
+    String? query,
+  }) async {
+    final params = <String, String>{'limit': '$limit'};
+    if (actorRole != null && actorRole.isNotEmpty) {
+      params['actor_role'] = actorRole;
+    }
+    if (action != null && action.isNotEmpty) params['action'] = action;
+    if (query != null && query.isNotEmpty) params['q'] = query;
+    final uri = Uri(path: '/admin/audit', queryParameters: params).toString();
     final r = await _requestAuthed(
       'GET',
-      '/admin/audit?limit=$limit',
+      uri,
       timeout: const Duration(seconds: 10),
       allowColdStartRetry: true,
     );
@@ -1268,6 +1338,172 @@ class ApiClient {
     final data = jsonDecode(r.body) as Map<String, dynamic>;
     final list = data['audit'] as List? ?? [];
     return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getAdminDevices({
+    String? patientId,
+    bool? disabled,
+    bool? enrolled,
+    String? query,
+  }) async {
+    final params = <String, String>{};
+    if (patientId != null && patientId.isNotEmpty) {
+      params['patient_id'] = patientId;
+    }
+    if (disabled != null) params['disabled'] = '$disabled';
+    if (enrolled != null) params['enrolled'] = '$enrolled';
+    if (query != null && query.isNotEmpty) params['q'] = query;
+    final uri = Uri(
+      path: '/admin/devices',
+      queryParameters: params.isEmpty ? null : params,
+    ).toString();
+    final r = await _requestAuthed(
+      'GET',
+      uri,
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل قائمة الأجهزة'),
+        statusCode: r.statusCode,
+      );
+    }
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    final list = data['devices'] as List? ?? [];
+    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<Map<String, dynamic>> updateAdminDevice(
+    String deviceId, {
+    String? name,
+    String? patientId,
+  }) async {
+    final payload = <String, dynamic>{
+      if (name != null && name.isNotEmpty) 'name': name,
+      if (patientId != null && patientId.isNotEmpty) 'patient_id': patientId,
+    };
+    final r = await sendJson(
+      method: 'PATCH',
+      path: '/admin/devices/${Uri.encodeComponent(deviceId)}',
+      body: payload,
+    );
+    return Map<String, dynamic>.from(r['device'] as Map);
+  }
+
+  Future<void> deleteAdminDevice(String deviceId) async {
+    final r = await _client
+        .delete(
+          _u('/admin/devices/${Uri.encodeComponent(deviceId)}'),
+          headers: await _headers(),
+        )
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر حذف الجهاز'),
+        statusCode: r.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> getAdminSystemHealth() async {
+    final r = await _requestAuthed(
+      'GET',
+      '/admin/system-health',
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل حالة النظام'),
+        statusCode: r.statusCode,
+      );
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  Future<int> retryAdminOutbox() async {
+    final r = await _postAuthed('/admin/outbox/retry-failed', {});
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر إعادة جدولة التنبيهات'),
+        statusCode: r.statusCode,
+      );
+    }
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    return (data['retried'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<List<Map<String, dynamic>>> getAdminMohRegistry({
+    String? status,
+    String? query,
+  }) async {
+    final params = <String, String>{};
+    if (status != null && status.isNotEmpty) params['status'] = status;
+    if (query != null && query.isNotEmpty) params['q'] = query;
+    final uri = Uri(
+      path: '/admin/moh-registry',
+      queryParameters: params.isEmpty ? null : params,
+    ).toString();
+    final r = await _requestAuthed(
+      'GET',
+      uri,
+      timeout: const Duration(seconds: 10),
+      allowColdStartRetry: true,
+    );
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر تحميل سجل التراخيص الطبية'),
+        statusCode: r.statusCode,
+      );
+    }
+    final data = jsonDecode(r.body) as Map<String, dynamic>;
+    final list = data['records'] as List? ?? [];
+    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<Map<String, dynamic>> upsertAdminMohRecord({
+    required String licenseNumber,
+    required String nationalId,
+    required String fullNameAr,
+    required String fullNameEn,
+    required String specialization,
+    String? hospitalAffiliation,
+    required String status,
+    required String expirationDate,
+  }) async {
+    final r = await _postAuthed('/admin/moh-registry', {
+      'license_number': licenseNumber,
+      'national_id': nationalId,
+      'full_name_ar': fullNameAr,
+      'full_name_en': fullNameEn,
+      'specialization': specialization,
+      if (hospitalAffiliation != null && hospitalAffiliation.isNotEmpty)
+        'hospital_affiliation': hospitalAffiliation,
+      'status': status,
+      'expiration_date': expirationDate,
+    });
+    if (r.statusCode != 201 && r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر حفظ سجل الترخيص'),
+        statusCode: r.statusCode,
+      );
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> reverifyDoctorMoh(String userId) async {
+    final r = await _postAuthed(
+      '/admin/doctors/${Uri.encodeComponent(userId)}/reverify-moh',
+      {},
+    );
+    if (r.statusCode != 200) {
+      throw ApiException(
+        _detail(r, 'تعذّر إعادة التحقق من الترخيص'),
+        statusCode: r.statusCode,
+      );
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
   // ─────────────────────────────────────── Patient caregiver self-management

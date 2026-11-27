@@ -226,5 +226,30 @@ def require_patient_access(patient_id: str, principal: dict = Depends(get_curren
 
 
 # convenience dependencies
+def authorize_telemetry_write(patient_id: str, principal: dict) -> None:
+    """Who may write a patient's readings, assessments and alerts.
+
+    Reading access is shared with the care circle, but telemetry and alerts
+    are the patient's own record: only the patient's session, a device bound
+    to that patient, or an administrator may write them. A linked doctor or
+    caregiver must never be able to forge readings or push alerts that page
+    the whole care circle.
+    """
+    authorize_patient_access(patient_id, principal)
+    if not settings.require_patient_auth:
+        return
+    role = principal.get("role")
+    if role == "admin":
+        return
+    if role == "patient" and str(principal.get("sub", "")) == patient_id:
+        return
+    if role == "device" and principal.get("patient_id") == patient_id:
+        return
+    raise AuthError(
+        "Only the patient or their device may write monitoring data",
+        code=status.HTTP_403_FORBIDDEN,
+    )
+
+
 require_device = require_role("device", "admin")
 require_clinician = require_role("doctor", "admin")

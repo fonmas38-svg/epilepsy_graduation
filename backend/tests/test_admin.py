@@ -246,3 +246,86 @@ def test_admin_overview_counts(client):
     counts = ov.json()["counts"]
     assert counts["byRole"]["admin"] >= 1
     assert counts["byRole"]["doctor"] >= 1
+    assert "devices" in counts
+    assert "outbox" in counts
+
+
+def test_admin_user_filters_and_device_crud_filters(client):
+    admin = _login(client, TEST_ADMIN_USERNAME, TEST_ADMIN_PASSWORD)["access_token"]
+    p1 = client.post(
+        "/admin/patients",
+        json=patient_payload({"username": "pat_dev_1", "name": "Patient One", "email": "pat1@example.com"}),
+        headers=_auth(admin),
+    ).json()["user"]["id"]
+    p2 = client.post(
+        "/admin/patients",
+        json=patient_payload({"username": "pat_dev_2", "name": "Patient Two"}),
+        headers=_auth(admin),
+    ).json()["user"]["id"]
+
+    # Search by email & disabled_only filter
+    assert client.post(f"/admin/users/{p2}/disable", headers=_auth(admin)).status_code == 200
+    by_email = client.get("/admin/users?q=pat1@example.com", headers=_auth(admin)).json()["users"]
+    assert len(by_email) == 1 and by_email[0]["id"] == p1
+    disabled_only = client.get("/admin/users?disabled_only=true", headers=_auth(admin)).json()["users"]
+    assert any(u["id"] == p2 for u in disabled_only)
+    assert all(u["disabled"] is True for u in disabled_only)
+
+    # Create, filter, update, and delete device
+    dev = client.post(
+        "/admin/devices",
+        json={"device_id": "hb-filter-01", "patient_id": p1, "name": "Band One"},
+        headers=_auth(admin),
+    )
+    assert dev.status_code == 201
+    assert client.get("/admin/devices?disabled=false&enrolled=false&q=Band", headers=_auth(admin)).json()["devices"]
+    assert client.get("/admin/devices?disabled=true", headers=_auth(admin)).json()["devices"] == []
+
+    patched = client.patch(
+        "/admin/devices/hb-filter-01",
+        json={"name": "Band Reassigned", "patient_id": p2},
+        headers=_auth(admin),
+    )
+    assert patched.status_code == 200
+    assert patched.json()["device"]["patientId"] == p2
+    assert patched.json()["device"]["credentialVersion"] == 1
+
+    deleted = client.delete("/admin/devices/hb-filter-01", headers=_auth(admin))
+    assert deleted.status_code == 200
+    assert client.get("/admin/devices?q=hb-filter-01", headers=_auth(admin)).json()["devices"] == []
+
+
+def test_admin_system_health_moh_registry_and_audit_filters(client):
+    admin = _login(client, TEST_ADMIN_USERNAME, TEST_ADMIN_PASSWORD)["access_token"]
+    health = client.get("/admin/system-health", headers=_auth(admin))
+    assert health.status_code == 200
+    assert health.json()["ok"] is True
+    assert "ml" in health.json()
+    assert "outbox" in health.json()
+
+    retried = client.post("/admin/outbox/retry-failed", headers=_auth(admin))
+    assert retried.status_code == 200
+    assert "retried" in retried.json()
+
+    created_moh = client.post(
+        "/admin/moh-registry",
+        json={
+            "license_number": "MOH-777888",
+            "national_id": "1077788899",
+            "full_name_ar": "د. فيصل العصيمي",
+            "full_name_en": "Dr. Faisal Alosaimi",
+            "specialization": "طب الأعصاب",
+            "hospital_affiliation": "مستشفى التخصصي",
+            "status": "active",
+            "expiration_date": "2029-01-01",
+        },
+        headers=_auth(admin),
+    )
+    assert created_moh.status_code == 201
+    listed = client.get("/admin/moh-registry?status=active&q=MOH-777888", headers=_auth(admin))
+    assert listed.status_code == 200
+    assert len(listed.json()["records"]) == 1
+
+    audit = client.get("/admin/audit?actor_role=admin&limit=50", headers=_auth(admin))
+    assert audit.status_code == 200
+    assert all(r["actorRole"] == "admin" for r in audit.json()["audit"])

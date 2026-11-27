@@ -30,6 +30,8 @@ class MedicalCard(BaseModel):
     doctor_name: str = Field(default='', max_length=120)
     doctor_phone: str = Field(default='', max_length=32)
     notes: str = Field(default='', max_length=5000)
+    # Sent in the emergency SMS only when no location fix is available.
+    usual_address: str = Field(default='', max_length=300)
 
 
 class Trigger(BaseModel):
@@ -175,6 +177,58 @@ def alert_responses(patient_id: str, alert_id: str, actor: dict = Depends(read_a
                   key=lambda row: (row['at'], row['id']))
 
 
+ONLINE_WINDOW_SECONDS = 180
+
+
+@router.get('/{patient_id}/alerts/{alert_id}/circle')
+def alert_circle(patient_id: str, alert_id: str, actor: dict = Depends(read_access)):
+    """Who in the care circle can act on this alert right now.
+
+    For each linked caregiver and assigned doctor: whether their app is online
+    (active in the last few minutes) and their latest response to this alert
+    (seen / acknowledged / on the way / arrived). Lets the patient know if the
+    alert actually reached someone instead of hoping it did.
+    """
+    from app import account_sessions_store
+
+    _authorize_alert(patient_id, alert_id, actor)
+    members = [(uid, 'caregiver') for uid in users_store.caregivers_for_patient(patient_id)]
+    members += [(uid, 'doctor') for uid in users_store.doctors_for_patient(patient_id)]
+    seen = account_sessions_store.last_seen_for([uid for uid, _ in members])
+    latest: dict[str, dict] = {}
+    for row in care_store.list_records(patient_id, 'alert-response', None):
+        if row.get('alert_id') != alert_id:
+            continue
+        rid = row.get('responder_id')
+        if rid and (rid not in latest or row['at'] >= latest[rid]['at']):
+            latest[rid] = row
+    now = datetime.now(timezone.utc)
+    out = []
+    for uid, role in members:
+        user = users_store.get_user(uid)
+        if not user or user.get('disabled'):
+            continue
+        last = seen.get(uid)
+        online = False
+        if last:
+            try:
+                age = (now - datetime.fromisoformat(last.replace('Z', '+00:00'))).total_seconds()
+                online = age <= ONLINE_WINDOW_SECONDS
+            except ValueError:
+                online = False
+        response = latest.get(uid)
+        out.append({
+            'id': uid,
+            'name': user['name'],
+            'role': role,
+            'online': online,
+            'lastSeenAt': last,
+            'response': response.get('status') if response else None,
+            'respondedAt': response.get('at') if response else None,
+        })
+    return {'members': out}
+
+
 @router.post('/{patient_id}/alerts/{alert_id}/responses', status_code=201)
 def add_alert_response(patient_id: str, alert_id: str, body: AlertResponse,
                        actor: dict = Depends(require_role('caregiver'))):
@@ -197,33 +251,58 @@ def add_alert_response(patient_id: str, alert_id: str, body: AlertResponse,
         return save(patient_id, 'alert-response', str(body.id), payload, actor)
 
 
+ALLOWED_REPORT_TYPES = {
+    'application/pdf': b'%PDF',
+    'image/png': bytes.fromhex('89504e47'),
+    'image/jpeg': bytes.fromhex('ffd8ff'),
+}
+MAX_REPORT_BYTES = 10 * 1024 * 1024
+
+
 class ReportUploadRequest(BaseModel):
     filename: str = Field(min_length=3, max_length=200)
     file_base64: str = Field(min_length=10)
     content_type: str = Field(default='application/pdf')
 
 
+report_writers = require_role('patient', 'doctor')
+
+
 @router.post('/{patient_id}/reports/upload', status_code=201)
 def upload_report(
     patient_id: str,
     body: ReportUploadRequest,
-    actor: dict = Depends(read_access),
+    actor: dict = Depends(report_writers),
 ):
-    """Upload a medical or EEG report file to Supabase Cloud Storage."""
+    """Upload a medical report (PDF/PNG/JPEG) to private cloud storage.
+
+    Only the patient and their doctors may upload. The object name is random,
+    the declared type must match the file's own signature, and the response
+    carries a short-lived signed link instead of a permanent public URL.
+    """
     import base64
+    from uuid import uuid4
 
     authorize(patient_id, actor)
+    magic = ALLOWED_REPORT_TYPES.get(body.content_type)
+    if magic is None:
+        raise HTTPException(415, 'Only PDF, PNG or JPEG reports are accepted')
     try:
-        data = base64.b64decode(body.file_base64)
+        data = base64.b64decode(body.file_base64, validate=True)
     except Exception as exc:
         raise HTTPException(422, 'Invalid base64 payload') from exc
+    if not data or len(data) > MAX_REPORT_BYTES:
+        raise HTTPException(413, 'Report must be between 1 byte and 10 MB')
+    if not data.startswith(magic):
+        raise HTTPException(415, 'File content does not match its declared type')
 
-    timestamp_prefix = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-    clean_name = body.filename.replace('/', '_').replace('\\', '_')
-    safe_name = f"{patient_id}/{timestamp_prefix}_{clean_name}"
+    ext = {'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg'}[body.content_type]
+    safe_name = f"{patient_id}/{uuid4().hex}.{ext}"
 
     res = upload_clinical_report(data, safe_name, content_type=body.content_type)
     if not res.get('success'):
-        raise HTTPException(502, f"Storage upload failed: {res.get('error', 'Unknown')}")
-    return res
+        code = res.get('error', 'storage_error')
+        status = 503 if code in ('storage_not_configured', 'storage_unreachable') else 502
+        raise HTTPException(status, 'تعذّر حفظ التقرير الآن. حاول لاحقًا.')
+    return {**res, 'filename': body.filename}
 

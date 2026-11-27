@@ -118,8 +118,8 @@ class ConsentsScreen extends StatelessWidget {
                   const SizedBox(height: 12),
                   Text(
                     ar
-                        ? 'يمكنك تفعيل وصول المرافق إلى بياناتك أو إيقافه من صفحة المرافقين. يطبق الخادم صلاحيات العلاقات الفعالة؛ القناة الخاصة بين المريض والطبيب لا تُعرض للمرافق.'
-                        : 'Enable or disable access from the caregivers page. The server enforces active care relationships; the private patient–doctor channel is not shared with caregivers.',
+                        ? 'يمكنك السماح للمرافق برؤية بياناتك أو إيقاف ذلك من صفحة المرافقين. محادثتك الخاصة مع طبيبك لا يراها المرافق أبدًا.'
+                        : 'Allow or stop a caregiver seeing your data from the caregivers page. Your private chat with your doctor is never shown to caregivers.',
                     style: TextStyle(
                       fontSize: 13,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -211,8 +211,8 @@ class ConsentsScreen extends StatelessWidget {
                   const SizedBox(height: 12),
                   Text(
                     ar
-                        ? 'اختيار مستوى مثل «تنبيهات فقط» أو إخفاء الموقع عن مرافق محدد غير مدعوم في الخادم الحالي. أُوقفت أدوات الإعداد المحلية حتى لا توحي بحماية غير مطبقة.'
-                        : 'Levels such as alerts-only or hiding location from a specific caregiver are not supported by the current server. Local configuration controls are disabled to avoid implying unenforced protection.',
+                        ? 'خيارات المشاركة الجزئية (مثل «التنبيهات فقط» أو إخفاء الموقع عن مرافق معيّن) غير متاحة بعد. المرافق المرتبط يرى التنبيهات والموقع وقت الطوارئ.'
+                        : 'Partial sharing (such as alerts-only, or hiding location from one caregiver) is not available yet. A linked caregiver sees alerts and location during emergencies.',
                     style: TextStyle(
                       fontSize: 13,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -224,8 +224,8 @@ class ConsentsScreen extends StatelessWidget {
                       padding: const EdgeInsets.only(top: 12),
                       child: Text(
                         ar
-                            ? 'تفضيلات المشاركة القديمة المحفوظة محليًا لا تثبت تطبيقها على الخادم.'
-                            : 'Previously stored local preferences do not prove server enforcement.',
+                            ? 'تفضيلات المشاركة القديمة على هذا الهاتف لم تعد مستخدمة.'
+                            : 'Older sharing preferences stored on this phone are no longer used.',
                         style: TextStyle(
                           fontSize: 12,
                           color: Theme.of(context).colorScheme.onSurfaceVariant,

@@ -90,7 +90,7 @@ Official visual and interaction design specification for the `epilepsy_graduatio
    - Arabic typography defaults to system Arabic fonts (Cairo/Roboto fallback) with directional chevron flips and margin alignment.
 5. **Touch Target Dimensions:**
    - Minimum standard interactive target: 48×48dp (`A11y.minTouchTarget`).
-   - Emergency SOS target: Minimum 72dp (`A11y.emergencyTouchTarget`) so it can be pressed during auras or trembling.
+   - Emergency SOS target ("أحتاج مساعدة"): Compact, refined, ergonomic button sizing (minimum 48–56dp height/target — **do not** force an oversized 72dp block that crowds the dashboard) while keeping high contrast, clear emergency iconography, and effortless reachability.
 
 ---
 
@@ -116,7 +116,7 @@ Rules:
 
 | Level | Widget | Use | Per screen |
 |---|---|---|---|
-| Emergency | `EmergencyButton` (72dp, danger solid) | SOS only | 1, pinned |
+| Emergency | `EmergencyButton` (compact 48–56dp refined danger CTA) | SOS only | 1, clearly placed without dominating the viewport |
 | Primary | `FilledButton` (52dp, radius 16) | The single main action of the task (save, take dose, start monitoring) | 1 per card/flow |
 | Secondary | `FilledButton.tonal` / `OutlinedButton` | Alternatives (retry, reopen SMS, call) | Any |
 | Tertiary | `TextButton` | Low-emphasis links (later, view all) | Any |

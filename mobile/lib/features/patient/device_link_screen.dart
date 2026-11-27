@@ -1,15 +1,21 @@
-import '../../core/theme/app_colors.dart';
-import '../../core/theme/risk_view.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../../core/errors/failure.dart';
 import '../../core/router/route_names.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/risk_view.dart';
 import '../../core/ui/common.dart';
+import '../../core/utils/time_ago.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/app_state.dart';
 import '../../services/eeg_hardware_device.dart';
 import '../../services/monitoring_service.dart';
 
+/// «حالة الحساس»: what the patient needs to know about their sensor at a
+/// glance — is it connected, is the signal good, when did the last reading
+/// arrive, and who is analysing it right now. Source switching and technical
+/// diagnostics live in a collapsed «advanced» section.
 class DeviceLinkScreen extends StatefulWidget {
   const DeviceLinkScreen({super.key});
   @override
@@ -17,42 +23,7 @@ class DeviceLinkScreen extends StatefulWidget {
 }
 
 class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
-  Future<Map<String, dynamic>>? _contract;
   bool _busy = false;
-  @override
-  void initState() {
-    super.initState();
-    _loadContract();
-  }
-
-  void _loadContract() {
-    final app = context.read<AppState>();
-    _contract = _fetchContract(app);
-  }
-
-  Future<Map<String, dynamic>> _fetchContract(AppState app) async {
-    try {
-      return await app.api.getObject('/device/contract');
-    } catch (_) {
-      return const {
-        'version': 1,
-        'intended_use': 'research_and_simulation_only',
-        'sample_rate_hz': 256,
-        'eeg_channels': 1,
-        'signal_units': 'normalized_demo',
-        'max_batch_samples': 512,
-        'analysis_window_samples': 262,
-        'channels': ['eeg', 'ecg', 'motion', 'hr'],
-        'physical_device_compatible': false,
-        'requirements_for_physical_device': [
-          'Document sensor, electrode montage and reference, units and calibration',
-          'Implement validated sampling, timestamps, signal quality and missing-channel handling',
-          'Match the deployed model preprocessing and training input contract',
-          'Validate on independent continuous annotated patient recordings',
-        ],
-      };
-    }
-  }
 
   Future<void> _select(SignalSource source) async {
     if (_busy) return;
@@ -84,290 +55,194 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
     final app = context.watch<AppState>();
     final l = AppLocalizations.of(context);
     final ar = l.isArabic;
-    final monitor = app.monitoring;
-    final connected =
-        monitor.source == SignalSource.headDevice && monitor.deviceConnected;
+    final m = app.monitoring;
+    final reading = m.latestReading;
+    final receiving = m.running && m.deviceConnected && reading != null;
+    final goodSignal = m.hasUsableAssessment;
+    final engine = m.latestAssessment?.features['engine'] as String?;
+    final onPhone = engine == 'edge_onnx' || engine == 'edge_multimodal';
+    final virtual = m.source == SignalSource.simulator;
+
+    final (RiskView view, IconData icon, String title, String body) = !m.running
+        ? (
+            RiskView.unknown,
+            Icons.sensors_off_outlined,
+            ar ? 'المراقبة متوقفة' : 'Monitoring is off',
+            ar
+                ? 'شغّل المراقبة من الصفحة الرئيسية ليبدأ الحساس بالقراءة.'
+                : 'Start monitoring from the home screen to begin reading.',
+          )
+        : !receiving
+        ? (
+            RiskView.caution,
+            Icons.sensors_off_outlined,
+            ar ? 'لا تصل قراءات من الحساس' : 'No readings from the sensor',
+            ar
+                ? 'تأكد أن الحساس يعمل وقريب من الهاتف. سيُعاد الاتصال تلقائيًا.'
+                : 'Make sure the sensor is on and near the phone. It reconnects automatically.',
+          )
+        : goodSignal
+        ? (
+            RiskView.safe,
+            Icons.sensors,
+            ar ? 'الحساس متصل والإشارة جيدة' : 'Sensor connected, good signal',
+            ar
+                ? 'تصل القراءات باستمرار ويتم تحليلها الآن.'
+                : 'Readings are arriving continuously and being analysed.',
+          )
+        : (
+            RiskView.caution,
+            Icons.sensors,
+            ar ? 'الحساس متصل والإشارة ضعيفة' : 'Sensor connected, weak signal',
+            ar
+                ? 'عدّل وضع الحساس قليلًا حتى تتحسن الإشارة.'
+                : 'Adjust the sensor slightly until the signal improves.',
+          );
+    final tone = AppColors.of(context, view);
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(ar ? 'الجهاز ومصدر البيانات' : 'Device & data source'),
-      ),
+      appBar: AppBar(title: Text(ar ? 'حالة الحساس' : 'Sensor status')),
       body: ResponsiveContent(
         maxWidth: 760,
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            SectionCard(
-              title: ar ? 'حالة المصدر' : 'Source status',
-              icon: Icons.sensors,
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: tone.container,
+                borderRadius: BorderRadius.circular(22),
+              ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    connected
-                        ? (ar
-                              ? 'تصل بيانات الجهاز عبر الخادم'
-                              : 'Device data is arriving through the server')
-                        : (ar
-                              ? 'لا يوجد اتصال جهاز مؤكّد'
-                              : 'No confirmed device connection'),
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  if (monitor.deviceId != null)
-                    Text('${ar ? 'الجهاز' : 'Device'}: ${monitor.deviceId}'),
-                  FutureBuilder<DeviceDiagnostics?>(
-                    future: monitor.getDiagnostics(),
-                    builder: (context, diagSnapshot) {
-                      final diag = diagSnapshot.data;
-                      if (diag == null) return const SizedBox.shrink();
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 8, bottom: 4),
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 6,
-                          children: [
-                            Chip(
-                              avatar: Icon(
-                                diag.isSimulated
-                                    ? Icons.memory_outlined
-                                    : Icons.bluetooth_connected,
-                                size: 16,
+                  Row(
+                    children: [
+                      Icon(icon, color: tone.foreground, size: 30),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(
+                                color: tone.foreground,
+                                fontWeight: FontWeight.w800,
                               ),
-                              label: Text(
-                                diag.isSimulated
-                                    ? (ar ? 'محاكي برمجي' : 'Software Emulator')
-                                    : (ar ? 'جهاز حقيقي' : 'Physical Device'),
-                              ),
-                            ),
-                            Chip(
-                              label: Text(
-                                '${diag.sampleRateHz} Hz • ${diag.samplesBuffered} ${ar ? 'عيّنة' : 'samples'}',
-                              ),
-                            ),
-                            Chip(label: Text(diag.transportMode)),
-                          ],
                         ),
-                      );
-                    },
+                      ),
+                    ],
                   ),
-                  Text(
-                    ar
-                        ? 'اختيار المصدر لا يعني اقتران جهاز. هذا الإصدار يستقبل بيانات الجهاز من الخادم، ولا يوفر ربط EEG مباشرًا بالهاتف.'
-                        : 'Selecting a source does not pair a device. This build receives device data through the server and has no direct EEG connection to the phone.',
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton.icon(
-                    onPressed: _busy
-                        ? null
-                        : () => _select(SignalSource.headDevice),
-                    icon: const Icon(Icons.sensors),
-                    label: Text(
-                      ar
-                          ? 'استخدام تدفق الجهاز من الخادم'
-                          : 'Use the server device stream',
-                    ),
-                  ),
+                  const SizedBox(height: 10),
+                  Text(body, style: TextStyle(color: tone.foreground)),
                 ],
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
             SectionCard(
-              title: ar ? 'متطلبات البيانات' : 'Data requirements',
-              icon: Icons.rule_outlined,
-              child: FutureBuilder<Map<String, dynamic>>(
-                future: _contract,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const LinearProgressIndicator();
-                  }
-                  if (snapshot.hasError) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          ar
-                              ? 'تعذر تحميل مواصفات الخادم.'
-                              : 'Unable to load the server contract.',
-                        ),
-                        TextButton(
-                          onPressed: () => setState(() {
-                            _loadContract();
-                          }),
-                          child: Text(ar ? 'إعادة المحاولة' : 'Retry'),
-                        ),
-                      ],
-                    );
-                  }
-                  final data = snapshot.data ?? {};
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      LabeledValue(
-                        label: ar ? 'تردد العينات (Hz)' : 'Sample rate (Hz)',
-                        value: '${data['sample_rate_hz'] ?? '—'}',
-                      ),
-                      LabeledValue(
-                        label: ar ? 'قنوات EEG' : 'EEG channels',
-                        value: '${data['eeg_channels'] ?? '—'}',
-                      ),
-                      LabeledValue(
-                        label: ar
-                            ? 'عينات نافذة التحليل'
-                            : 'Analysis window samples',
-                        value: '${data['analysis_window_samples'] ?? '—'}',
-                      ),
-                      LabeledValue(
-                        label: ar ? 'القنوات المدعومة' : 'Channels',
-                        value:
-                            (data['channels'] as List?)?.join(', ') ??
-                            'eeg, ecg, motion, hr',
-                      ),
-                      LabeledValue(
-                        label: ar ? 'وحدات الإشارة' : 'Signal units',
-                        value: '${data['signal_units'] ?? 'normalized_demo'}',
-                      ),
-                      const SizedBox(height: 12),
-                      InfoNote(
-                        text: data['physical_device_compatible'] == true
-                            ? (ar
-                                  ? 'تحقق من مطابقة مواصفات جهازك قبل الاستخدام.'
-                                  : 'Verify that your device matches the contract before use.')
-                            : (ar
-                                  ? 'العقد الحالي بحثي وتجريبي؛ لا يؤكد توافق جهاز طبي فعلي.'
-                                  : 'The current contract is for research and simulation; physical medical-device compatibility is unconfirmed.'),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 20),
-            SectionCard(
-              title: ar
-                  ? 'محرك الإشارات واختبار التنبؤ'
-                  : 'Signal Engine & Prediction Testing',
-              icon: Icons.science_outlined,
+              title: ar ? 'التفاصيل' : 'Details',
+              icon: Icons.info_outline,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    ar
-                        ? 'يعمل النظام افتراضياً بنمط تدفق البيانات السريرية المعتمدة (CHB-MIT) مع نموذج الذكاء الاصطناعي، مع التحول التلقائي للمحاكاة المحلية السريعة عند انقطاع الاتصال.'
-                        : 'System operates via clinical EEG dataset replay with deep learning, automatically falling back to local simulation when disconnected.',
-                    style: Theme.of(context).textTheme.bodySmall,
+                  LabeledValue(
+                    label: ar ? 'آخر قراءة' : 'Last reading',
+                    value: reading == null
+                        ? '—'
+                        : TimeAgo.stamp(reading.timestamp, l),
                   ),
-                  const SizedBox(height: 14),
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.of(
-                        context,
-                        RiskView.safe,
-                      ).solid,
-                      foregroundColor: AppColors.of(
-                        context,
-                        RiskView.safe,
-                      ).onSolid,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    onPressed: () =>
-                        Navigator.pushNamed(context, Routes.patientSimulator),
-                    icon: const Icon(Icons.tune, size: 20),
-                    label: Text(
-                      ar
-                          ? 'فتح محاكي الإشارات واختبار النوبات (4 مراحل)'
-                          : 'Open Signal Simulator (4 Phases)',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
+                  LabeledValue(
+                    label: ar ? 'نبض القلب' : 'Heart rate',
+                    value: reading == null
+                        ? '—'
+                        : '${reading.hr.round()} ${ar ? 'نبضة/دقيقة' : 'bpm'}',
+                  ),
+                  LabeledValue(
+                    label: ar ? 'يحلّل الإشارات الآن' : 'Analysed by',
+                    value: !receiving
+                        ? '—'
+                        : onPhone
+                        ? (ar ? 'هاتفك (دون إنترنت)' : 'Your phone (offline)')
+                        : (ar ? 'الخدمة السحابية' : 'Cloud service'),
+                  ),
+                  LabeledValue(
+                    label: ar ? 'نوع الحساس' : 'Sensor type',
+                    value: virtual
+                        ? (ar
+                              ? 'حساس افتراضي (تجريبي)'
+                              : 'Virtual sensor (demo)')
+                        : m.source == SignalSource.dataset
+                        ? (ar ? 'تسجيل سابق' : 'Recorded data')
+                        : (ar ? 'جهاز الرأس' : 'Headset'),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: Theme.of(context).colorScheme.outlineVariant,
-                  width: 1.2,
+            Card(
+              child: ExpansionTile(
+                leading: const Icon(Icons.tune),
+                title: Text(ar ? 'خيارات متقدمة' : 'Advanced options'),
+                subtitle: Text(
+                  ar
+                      ? 'للتجربة والعرض: مصدر الإشارات والمحاكي'
+                      : 'For testing and demos: signal source and simulator',
                 ),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x06000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: Row(
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: app.apiOnline
-                          ? AppColors.accent(
-                              context,
-                              AccentTone.green,
-                            ).container
-                          : AppColors.accent(
-                              context,
-                              AccentTone.orange,
-                            ).container,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(
-                      app.apiOnline
-                          ? Icons.verified_user_outlined
-                          : Icons.cloud_off_outlined,
-                      color: app.apiOnline
-                          ? AppColors.of(context, RiskView.safe).foreground
-                          : AppColors.of(context, RiskView.caution).foreground,
-                      size: 22,
-                    ),
+                  _SourceOption(
+                    selected: m.source == SignalSource.simulator,
+                    busy: _busy,
+                    icon: Icons.memory_outlined,
+                    title: ar ? 'الحساس الافتراضي' : 'Virtual sensor',
+                    subtitle: ar
+                        ? 'يعمل على الهاتف مع الإنترنت ودونه (الافتراضي).'
+                        : 'Runs on the phone, online and offline (default).',
+                    onTap: () => _select(SignalSource.simulator),
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          ar
-                              ? 'حالة المعالجة والاتصال'
-                              : 'Processing & Connection Status',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          app.apiOnline
-                              ? (ar
-                                    ? 'متصل بالخدمة السحابية الآمنة'
-                                    : 'Connected to Secure Cloud Service')
-                              : (ar
-                                    ? 'وضع المعالجة المحلية (دون إنترنت)'
-                                    : 'Local Processing Mode (Offline)'),
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: app.apiOnline
-                                ? AppColors.of(
-                                    context,
-                                    RiskView.safe,
-                                  ).foreground
-                                : AppColors.of(
-                                    context,
-                                    RiskView.caution,
-                                  ).foreground,
-                          ),
-                        ),
-                      ],
+                  _SourceOption(
+                    selected: m.source == SignalSource.dataset,
+                    busy: _busy,
+                    icon: Icons.history_outlined,
+                    title: ar
+                        ? 'تسجيلات سريرية سابقة'
+                        : 'Recorded clinical data',
+                    subtitle: ar
+                        ? 'إعادة عرض تسجيلات EEG من الخادم (يحتاج الإنترنت).'
+                        : 'Replays EEG recordings from the server (needs internet).',
+                    onTap: () => _select(SignalSource.dataset),
+                  ),
+                  _SourceOption(
+                    selected: m.source == SignalSource.headDevice,
+                    busy: _busy,
+                    icon: Icons.sensors,
+                    title: ar ? 'جهاز الرأس عبر الخادم' : 'Headset via server',
+                    subtitle: ar
+                        ? 'يستقبل بيانات جهاز حقيقي أو محاكٍ خارجي عند توفره.'
+                        : 'Receives a real headset or external simulator when available.',
+                    onTap: () => _select(SignalSource.headDevice),
+                  ),
+                  const SizedBox(height: 8),
+                  FutureBuilder<DeviceDiagnostics?>(
+                    future: m.getDiagnostics(),
+                    builder: (context, snap) {
+                      final d = snap.data;
+                      if (d == null) return const SizedBox.shrink();
+                      return Text(
+                        '${d.sampleRateHz} Hz · ${d.samplesBuffered} '
+                        '${ar ? 'عيّنة' : 'samples'} · ${d.transportMode}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        Navigator.pushNamed(context, Routes.patientSimulator),
+                    icon: const Icon(Icons.science_outlined),
+                    label: Text(
+                      ar
+                          ? 'لوحة المحاكي وتصعيد الحالة'
+                          : 'Simulator & escalation panel',
                     ),
                   ),
                 ],
@@ -378,4 +253,37 @@ class _DeviceLinkScreenState extends State<DeviceLinkScreen> {
       ),
     );
   }
+}
+
+class _SourceOption extends StatelessWidget {
+  const _SourceOption({
+    required this.selected,
+    required this.busy,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final bool selected;
+  final bool busy;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+    contentPadding: EdgeInsets.zero,
+    leading: Icon(icon),
+    title: Text(title),
+    subtitle: Text(subtitle),
+    trailing: selected
+        ? Icon(
+            Icons.check_circle,
+            color: AppColors.of(context, RiskView.safe).foreground,
+          )
+        : null,
+    onTap: busy || selected ? null : onTap,
+  );
 }

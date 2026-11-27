@@ -3,6 +3,7 @@ package com.epilepsy.monitor.epilepsy_monitor
 import android.app.NotificationManager
 import android.content.Intent
 import android.net.Uri
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -73,6 +74,16 @@ class MainActivity : FlutterFragmentActivity() {
                             // leave a notification claiming monitoring still runs.
                             stopService(Intent(this, MonitoringForegroundService::class.java))
                             result.success(true)
+                        }
+                        // Whether the phone has a satellite (GPS) receiver
+                        // at all: without one and without internet there is
+                        // no way to locate it in an emergency.
+                        "hasGpsHardware" -> {
+                            result.success(
+                                packageManager.hasSystemFeature(
+                                    PackageManager.FEATURE_LOCATION_GPS,
+                                ),
+                            )
                         }
                         "isIgnoringBatteryOptimizations" -> {
                             val pm = getSystemService(PowerManager::class.java)

@@ -274,6 +274,7 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
     this.pollInterval,
     this.useBackgroundIsolate = true,
     this.seed = 42,
+    this.localSynthesis = false,
     SignalSimulator? fallbackSimulator,
     SeizureCycleController? cycleController,
     RecordedWindowCache? recordedCache,
@@ -298,6 +299,11 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
 
   final String patientId;
   final ApiClient api;
+
+  /// Generate every window on the phone (the virtual hardware) instead of
+  /// asking the server's `/simulate/stream`. The stream then never depends on
+  /// the network; the cloud or edge model still scores each window.
+  final bool localSynthesis;
   final EmulatorTransportMode mode;
   final RecordedWindowCache _recordedCache;
   final String _recordedOrigin;
@@ -542,7 +548,10 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
     if (_disposed) return null;
     if (_pollFuture != null) {
       await _pollFuture;
-      return null;
+      // A forced pattern (severity panel) must never be silently dropped just
+      // because a regular poll was in flight: run it right after.
+      if (forcePattern == null && forcePhase == null) return null;
+      if (_disposed) return null;
     }
     EegPacket? emitted;
     final op = () async {
@@ -575,9 +584,11 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
     SeizurePhase? forcePhase,
   }) async {
     final phase = forcePhase ?? cycleController.currentPhase;
+    final scenario = cycleController.scenarioLevel;
     final pattern = forcePattern ?? cycleController.advance();
 
     try {
+      if (localSynthesis) throw const _LocalSynthesis();
       final body = await api.simulateStream(
         pattern: pattern.apiValue,
         samples: windowSamples,
@@ -641,8 +652,13 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
       return pkt;
     } catch (e) {
       if (_disposed) return null;
-      _lastError = e.toString();
-      _transportModeLabel = 'offline_synthetic';
+      if (e is _LocalSynthesis) {
+        _lastError = null;
+        _transportModeLabel = 'virtual_device';
+      } else {
+        _lastError = e.toString();
+        _transportModeLabel = 'offline_synthetic';
+      }
       final ringRes = await _synthesizeThroughRingBuffer(
         pattern: pattern,
         phase: forcePattern == null ? phase : null,
@@ -666,9 +682,13 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
         sampleRateHz: sampleRateHz,
         sequenceNumber: ++_sequenceNumber,
         isSimulated: true,
-        sourceLabel: 'emulator_synthetic',
+        sourceLabel: localSynthesis ? 'virtual_device' : 'emulator_synthetic',
         samplesBuffered: _samplesBuffered,
-        metadata: {'pattern': pattern.apiValue, 'phase': phase.name},
+        metadata: {
+          'pattern': pattern.apiValue,
+          'phase': phase.name,
+          'scenario': ?scenario?.name,
+        },
       );
       if (!_packetController.isClosed) _packetController.add(pkt);
       return pkt;
@@ -972,4 +992,9 @@ class SoftwareEmulatorEegDevice implements IEegHardwareDevice {
     await _packetController.close();
     await _connectionController.close();
   }
+}
+
+/// Control-flow marker: the virtual device synthesises locally by design.
+class _LocalSynthesis implements Exception {
+  const _LocalSynthesis();
 }

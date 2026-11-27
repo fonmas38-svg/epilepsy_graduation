@@ -217,7 +217,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.textContaining('الوضع المحلي (دون إنترنت)'), findsOneWidget);
+    expect(find.textContaining('الوضع المحلي دون إنترنت'), findsOneWidget);
     expect(find.textContaining('إيقاظ'), findsNothing);
     expect(find.textContaining('(3)'), findsOneWidget);
     expect(tester.takeException(), isNull);

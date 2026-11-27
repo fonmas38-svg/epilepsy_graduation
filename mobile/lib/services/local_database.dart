@@ -278,7 +278,7 @@ class LocalDatabase {
   /// v5 adds alert details through an additive migration, preserving existing rows.
   /// v6 adds origin and account isolation to eliminate cross-server collisions.
   /// v7 adds encrypted user_credentials table for offline authentication.
-  static const _dbVersion = 9;
+  static const _dbVersion = 11;
 
   /// True on desktop platforms where SQLCipher is unavailable.
   static bool get _isDesktop =>
@@ -378,6 +378,17 @@ class LocalDatabase {
     await _createV7Tables(db);
     await migrateClinicalContracts(db);
     await migrateTelemetryOrigins(db);
+    await _addMedicalCardAddress(db);
+  }
+
+  /// v10: the patient's usual address, sent in the SMS when no location fix
+  /// exists (no internet and no GPS hardware). Additive and idempotent.
+  Future<void> _addMedicalCardAddress(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(medical_card)');
+    if (cols.any((c) => c['name'] == 'usualAddress')) return;
+    await db.execute(
+      "ALTER TABLE medical_card ADD COLUMN usualAddress TEXT NOT NULL DEFAULT ''",
+    );
   }
 
   /// Additive migrations preserve existing rows; v5 adds alert context.
@@ -404,6 +415,54 @@ class LocalDatabase {
     }
     if (oldVersion < 8) await migrateClinicalContracts(db);
     if (oldVersion < 9) await migrateTelemetryOrigins(db);
+    if (oldVersion < 10) await _addMedicalCardAddress(db);
+    if (oldVersion < 11) await normalizeTimestampsToUtc(db);
+  }
+
+  /// Columns ordered with `ORDER BY <col> DESC` / compared as text.
+  static const _utcColumns = <(String, String)>[
+    ('readings', 'timestamp'),
+    ('assessments', 'timestamp'),
+    ('alerts', 'timestamp'),
+    ('messages', 'createdAt'),
+    ('medications', 'createdAt'),
+    ('trigger_entries', 'occurredAt'),
+    ('seizure_logs', 'occurredAt'),
+    ('outbox', 'createdAt'),
+  ];
+
+  /// v11: every stored timestamp becomes UTC ISO-8601 (`...Z`).
+  ///
+  /// Earlier versions stored phone-made timestamps in local time without an
+  /// offset next to server timestamps in UTC. Sorted as text, a local row in
+  /// UTC+3 looked three hours "newer" than fresh cloud data, so the live
+  /// monitoring screen kept reloading a stale, invalid assessment and showed
+  /// "not enough data". Offset-less values were written in this phone's local
+  /// time, so they are parsed as local and converted.
+  @visibleForTesting
+  static Future<void> normalizeTimestampsToUtc(Database db) async {
+    for (final (table, column) in _utcColumns) {
+      try {
+        final rows = await db.rawQuery(
+          'SELECT rowid AS rid, $column AS ts FROM $table '
+          "WHERE $column IS NOT NULL AND $column NOT LIKE '%Z'",
+        );
+        for (final row in rows) {
+          final raw = row['ts'];
+          if (raw is! String) continue;
+          final parsed = DateTime.tryParse(raw);
+          if (parsed == null) continue;
+          await db.update(
+            table,
+            {column: parsed.toUtc().toIso8601String()},
+            where: 'rowid = ?',
+            whereArgs: [row['rid']],
+          );
+        }
+      } catch (_) {
+        // Table missing on this install: nothing to normalise.
+      }
+    }
   }
 
   /// Medication-adherence + prediction-event tables (schema v2). Uses
@@ -714,7 +773,7 @@ class LocalDatabase {
     await db.insert('readings', {
       'id': reading.id,
       'patientId': reading.patientId,
-      'timestamp': reading.timestamp.toIso8601String(),
+      'timestamp': reading.timestamp.toUtc().toIso8601String(),
       'eeg': encodeSignal(reading.eeg),
       'ecg': encodeSignal(reading.ecg),
       'motion': encodeSignal(reading.motion),
@@ -727,6 +786,7 @@ class LocalDatabase {
 
   Future<void> _pruneOld(Database db, String patientId, String origin) async {
     final cutoff = DateTime.now()
+        .toUtc()
         .subtract(AppConfig.localRetention)
         .toIso8601String();
     await db.delete(
@@ -819,7 +879,7 @@ class LocalDatabase {
       await txn.insert('assessments', {
         'id': a.id,
         'patientId': a.patientId,
-        'timestamp': a.timestamp.toIso8601String(),
+        'timestamp': a.timestamp.toUtc().toIso8601String(),
         'label': a.label.apiValue,
         'confidence': a.confidence,
         'features': jsonEncode(a.features),
@@ -901,7 +961,7 @@ class LocalDatabase {
       await txn.insert('alerts', {
         'id': alert.id,
         'patientId': alert.patientId,
-        'timestamp': alert.timestamp.toIso8601String(),
+        'timestamp': alert.timestamp.toUtc().toIso8601String(),
         'severity': alert.severity,
         'message': alert.message,
         'recipients': jsonEncode(alert.recipients),
@@ -1003,7 +1063,7 @@ class LocalDatabase {
       'schedule': m.schedule,
       'times': jsonEncode(m.times),
       'active': m.active ? 1 : 0,
-      'createdAt': m.createdAt.toIso8601String(),
+      'createdAt': m.createdAt.toUtc().toIso8601String(),
       'prescriptionId': m.prescriptionId,
       'periodContext': m.periodContext,
       'mealContext': m.mealContext,
@@ -1289,7 +1349,7 @@ class LocalDatabase {
         : 'patientId = ? AND occurredAt >= ?';
     final whereArgs = since == null
         ? <Object?>[patientId]
-        : <Object?>[patientId, since.toIso8601String()];
+        : <Object?>[patientId, since.toUtc().toIso8601String()];
     if (serverOrigin != null && serverOrigin.isNotEmpty) {
       where = '$where AND serverOrigin = ?';
       whereArgs.add(serverOrigin);
@@ -1417,7 +1477,7 @@ class LocalDatabase {
         : 'patientId = ? AND occurredAt >= ?';
     final whereArgs = since == null
         ? <Object?>[patientId]
-        : <Object?>[patientId, since.toIso8601String()];
+        : <Object?>[patientId, since.toUtc().toIso8601String()];
     if (serverOrigin != null && serverOrigin.isNotEmpty) {
       where = '$where AND serverOrigin = ?';
       whereArgs.add(serverOrigin);
@@ -1948,6 +2008,24 @@ class LocalDatabase {
   Future<void> deleteOutbox(String id) async {
     final db = await database;
     await db.delete('outbox', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Whether the cloud delivery of [alertId] is still waiting in the outbox.
+  Future<bool> hasPendingAlertDelivery(String alertId) async {
+    final db = await database;
+    final rows = await db.query(
+      'outbox',
+      columns: ['body'],
+      where: 'path = ?',
+      whereArgs: ['/cloud/sync'],
+    );
+    for (final row in rows) {
+      try {
+        final body = jsonDecode(row['body'] as String) as Map;
+        if ((body['alert'] as Map?)?['id'] == alertId) return true;
+      } catch (_) {}
+    }
+    return false;
   }
 
   Future<void> bumpOutboxAttempt(String id, String? error) async {

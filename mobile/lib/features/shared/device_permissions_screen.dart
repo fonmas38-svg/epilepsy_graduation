@@ -28,6 +28,7 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen>
   // where the OS gives no answer, so nothing false is shown as a failure.
   bool _notificationsAllowed = true;
   bool _exactAlarms = true;
+  bool _hasGps = true;
   final _biometrics = BiometricService();
   final _background = BackgroundService();
   bool _batteryExempt = true;
@@ -60,6 +61,7 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen>
       final bioAvail = await _biometrics.isAvailable;
       final batteryExempt = await _background.isIgnoringBatteryOptimizations();
       final fullScreen = await _background.canUseFullScreenIntent();
+      final hasGps = await _background.hasGpsHardware();
       if (!mounted) return;
       final notifications = context.read<AppState>().notifications;
       final notifAllowed = await notifications.notificationsEnabled();
@@ -72,6 +74,7 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen>
           _biometricsAvailable = bioAvail;
           _batteryExempt = batteryExempt;
           _fullScreenAllowed = fullScreen;
+          _hasGps = hasGps;
           _notificationsAllowed = notifAllowed ?? true;
           _exactAlarms = exact ?? true;
           _loading = false;
@@ -258,6 +261,20 @@ class _DevicePermissionsScreenState extends State<DevicePermissionsScreen>
                       : 'Notification Settings',
                 ),
 
+                if (!_hasGps) ...[
+                  Gap.vMd,
+                  _PermissionTile(
+                    icon: Icons.satellite_alt_outlined,
+                    tone: AccentTone.orange,
+                    title: ar ? 'لا توجد شريحة GPS' : 'No GPS receiver',
+                    subtitle: ar
+                        ? 'هاتفك لا يحتوي شريحة GPS. دون إنترنت لن يُرسَل موقعك في الطوارئ؛ أضف «العنوان المعتاد» في البطاقة الطبية ليصل مع رسالة الاستغاثة.'
+                        : 'This phone has no GPS receiver. Without internet your location cannot be sent in an emergency; add a «usual address» to the medical card so it goes with the SOS message.',
+                    statusLabel: ar ? 'غير متاح' : 'Not available',
+                    isGranted: false,
+                    onAction: null,
+                  ),
+                ],
                 if (!_exactAlarms) ...[
                   Gap.vMd,
                   _PermissionTile(

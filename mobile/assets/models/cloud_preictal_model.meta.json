@@ -1,0 +1,29 @@
+{
+  "arch": "CloudPreictalNet",
+  "in_ch": 1,
+  "n_classes": 2,
+  "hidden_dim": 64,
+  "num_heads": 4,
+  "input_len": 262,
+  "fs": 256,
+  "channel": "eeg",
+  "task": "prediction(preictal_vs_interictal)",
+  "dataset": "synthetic_demo_signals (NOT CHB-MIT recordings)",
+  "decision_threshold": 0.6,
+  "horizon_min": 30.0,
+  "preictal_min": 30,
+  "safety_gap_min": 5,
+  "sensitivity": 1.0,
+  "specificity": 0.9989,
+  "accuracy": 0.9991,
+  "f1_score": 0.9984,
+  "notes": "Multi-scale Conv1D + self-attention + BiLSTM. Trained on SYNTHETIC demonstration pre-ictal signals (train_seizure_cloud.py: load_dataset_b_preictal). Replace with the CHB-MIT model trained by research/kaggle_train_preictal_chbmit.ipynb.",
+  "metrics_scope": "sensitivity/specificity/accuracy/f1 below were measured on the same synthetic generator used for training; they are not clinical or real-EEG performance",
+  "real_eeg_evaluation": {
+    "source": "research/scripts/evaluate_simulator_models.py on Bonn EEG held out of all training",
+    "single_window_false_forecast_rate_calm": 0.033,
+    "artifact_false_forecast_rate": 0.9,
+    "sustained_3_of_5_early_warning": "13/30 episodes, ~0.5 false early warnings per calm hour",
+    "note": "Retrain on real CHB-MIT pre-ictal EEG: research/kaggle_train_preictal_chbmit.ipynb"
+  }
+}

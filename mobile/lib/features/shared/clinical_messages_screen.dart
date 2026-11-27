@@ -3,6 +3,7 @@ import '../../core/theme/risk_view.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/enums.dart';
 import '../../core/errors/failure.dart';
 import '../../core/theme/app_theme.dart';
@@ -207,7 +208,7 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
     final key = _draftKey;
     setState(() => _sending = true);
     try {
-      final message = await app.messages.sendMessage(
+      await app.messages.sendMessage(
         patientId: pid,
         channelType: channel,
         peerUserId: _peer,
@@ -221,14 +222,6 @@ class _ClinicalMessagesScreenState extends State<ClinicalMessagesScreen> {
       _drafts.remove(key);
       if (_selected == pid && _channel == channel && _text.text == content) {
         _text.clear();
-      }
-      if (!message.synced) {
-        AppSnack.show(
-          context,
-          ar
-              ? 'حُفظت الرسالة على الجهاز؛ بانتظار قبول الخادم.'
-              : 'Message saved on this device; awaiting server acceptance.',
-        );
       }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _scroll.hasClients) {
@@ -811,16 +804,7 @@ class _MessageBubble extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              SelectableText(
-                message.content,
-                style: TextStyle(
-                  fontSize: 15,
-                  color: own
-                      ? Theme.of(context).colorScheme.onPrimary
-                      : Theme.of(context).colorScheme.onSurface,
-                  height: 1.35,
-                ),
-              ),
+              _MessageBody(message: message, own: own, ar: ar),
               const SizedBox(height: 6),
               Wrap(
                 spacing: 10,
@@ -840,28 +824,172 @@ class _MessageBubble extends StatelessWidget {
                           : Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  if (own)
-                    Text(
-                      message.readAt != null
-                          ? (ar ? 'قُرئت' : 'Read')
-                          : message.synced
-                          ? (ar ? 'قبله الخادم' : 'Accepted by server')
-                          : (ar
-                                ? 'محفوظ محليًا · بانتظار الإرسال'
-                                : 'Saved locally · pending'),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: own
-                            ? const Color(0xFFBFDBFE)
-                            : Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
+                  if (own) _MessageTicks(message: message, ar: ar),
                 ],
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Delivery state at a glance, WhatsApp style: clock = waiting on this phone,
+/// one tick = sent, two grey ticks = delivered, two blue ticks = read, and a
+/// red mark with «retry» when the server refused the message.
+class _MessageTicks extends StatelessWidget {
+  const _MessageTicks({required this.message, required this.ar});
+
+  final ChatMessage message;
+  final bool ar;
+
+  @override
+  Widget build(BuildContext context) {
+    final service = context.watch<AppState>().messages;
+    final status = message.statusFor(failed: service.isFailed(message.id));
+    final onBubble = Theme.of(context).colorScheme.onPrimary;
+    final dim = onBubble.withValues(alpha: .8);
+    final group = message.isCareTeamTriage;
+    final (IconData icon, Color color, String label) = switch (status) {
+      MessageStatus.pending => (
+        Icons.schedule_rounded,
+        onBubble.withValues(alpha: .75),
+        ar ? 'بانتظار الإرسال' : 'Waiting to send',
+      ),
+      MessageStatus.failed => (
+        Icons.error_outline_rounded,
+        const Color(0xFFFFB4AB),
+        ar ? 'تعذّر الإرسال' : 'Not sent',
+      ),
+      MessageStatus.sent => (Icons.done_rounded, dim, ar ? 'أُرسلت' : 'Sent'),
+      MessageStatus.delivered => (
+        Icons.done_all_rounded,
+        dim,
+        ar ? 'وصلت' : 'Delivered',
+      ),
+      MessageStatus.read => (
+        Icons.done_all_rounded,
+        const Color(0xFF7DD3FC),
+        group && message.readCount > 0
+            ? (ar
+                  ? 'قرأها ${message.readCount}'
+                  : 'Read by ${message.readCount}')
+            : (ar ? 'قُرئت' : 'Read'),
+      ),
+    };
+    final ticks = Semantics(
+      label: label,
+      child: Icon(icon, size: 15, color: color),
+    );
+    if (status != MessageStatus.failed) {
+      return Tooltip(message: label, child: ticks);
+    }
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => service.retry(message.id),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ticks,
+            const SizedBox(width: 4),
+            Text(
+              ar ? 'تعذّر الإرسال · إعادة المحاولة' : 'Not sent · Retry',
+              style: TextStyle(fontSize: 11, color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Message text; a shared location shows as a tappable map card instead of a
+/// raw link.
+class _MessageBody extends StatelessWidget {
+  const _MessageBody({
+    required this.message,
+    required this.own,
+    required this.ar,
+  });
+
+  final ChatMessage message;
+  final bool own;
+  final bool ar;
+
+  static final _maps = RegExp(r'https://maps\.google\.com/\?q=[-0-9.,]+');
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = own ? scheme.onPrimary : scheme.onSurface;
+    final match = _maps.firstMatch(message.content);
+    if (match == null) {
+      return SelectableText(
+        message.content,
+        style: TextStyle(fontSize: 15, color: color, height: 1.35),
+      );
+    }
+    final url = match.group(0)!;
+    final note = message.content
+        .replaceFirst(url, '')
+        .split('\n')
+        .skip(1)
+        .join('\n')
+        .trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Material(
+          color: color.withValues(alpha: .12),
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () =>
+                launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.location_on_rounded, color: color),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          ar ? 'الموقع الحالي' : 'Current location',
+                          style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          ar ? 'اضغط لفتح الخريطة' : 'Tap to open the map',
+                          style: TextStyle(
+                            color: color.withValues(alpha: .8),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (note.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          SelectableText(
+            note,
+            style: TextStyle(fontSize: 15, color: color, height: 1.35),
+          ),
+        ],
+      ],
     );
   }
 }

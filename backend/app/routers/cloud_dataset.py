@@ -16,6 +16,7 @@ from app.device_hub import ALERT_COOLDOWN_SECONDS, DeviceSample, _age
 from app.schemas import VitalWindow
 from app.auth import (
     authorize_patient_access,
+    authorize_telemetry_write,
     get_current_principal,
     get_optional_principal,
 )
@@ -180,13 +181,11 @@ def cloud_patients(principal: dict = Depends(get_optional_principal)):
 @router.get("/cloud/patients/{patient_id}")
 def cloud_patient(patient_id: str, principal: dict = Depends(get_optional_principal)):
     authorize_patient_access(patient_id, principal)
-    p = cloud_store.get_patient(patient_id)
-    if not p:
-        # default demo patient
-        p = cloud_store.upsert_patient(
-            patient_id,
-            {"name": patient_id, "currentStatus": "stable"},
-        )
+    # Reading never creates a record: an unknown id stays unknown.
+    p = cloud_store.get_patient(patient_id) or {
+        "id": patient_id,
+        "currentStatus": "stable",
+    }
     return {
         "patient": p,
         "readings": cloud_store.list_readings(patient_id, 30),
@@ -197,7 +196,7 @@ def cloud_patient(patient_id: str, principal: dict = Depends(get_optional_princi
 
 @router.post("/cloud/sync")
 def cloud_sync(body: CloudReadingIn, principal: dict = Depends(get_optional_principal)):
-    authorize_patient_access(body.patient_id, principal)
+    authorize_telemetry_write(body.patient_id, principal)
     # One transaction: a client never ends up with a reading whose derived
     # assessment/alert failed to persist.
     try:
@@ -206,7 +205,8 @@ def cloud_sync(body: CloudReadingIn, principal: dict = Depends(get_optional_prin
             body.reading,
             assessment=body.assessment or None,
             alert=body.alert or None,
-            patient_profile={"name": body.patient_id},
+            # Never overwrite the patient's real name with their id.
+            patient_profile={},
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -322,6 +322,13 @@ def cloud_sync_batch(
 
     for pid in distinct_patients:
         authorize_patient_access(pid, principal, enforce=True)
+    telemetry_patients = {
+        pid for pid, *_ in bundle_items
+    } | {pid for pid, _ in readings_items} | {pid for pid, _ in assessments_items} | {
+        pid for pid, _ in alerts_items
+    }
+    for pid in telemetry_patients:
+        authorize_telemetry_write(pid, principal)
 
     try:
         saved = cloud_store.save_monitoring_batch(

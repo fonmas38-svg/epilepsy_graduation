@@ -222,7 +222,7 @@ void main() {
     api.dispose();
   });
 
-  testWidgets('OfflineBanner renders waking indicator in Arabic and English without overflow', (tester) async {
+  testWidgets('OfflineBanner hides the internal cloud wake-up from the user', (tester) async {
     final state = AppState(database: db, useBackgroundIsolate: false);
 
     await tester.pumpWidget(
@@ -236,7 +236,7 @@ void main() {
     );
     await tester.pump();
     await tester.pump();
-    expect(find.text('جاري إيقاظ الخادم السحابي...'), findsOneWidget);
+    expect(find.byType(Text), findsNothing);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(
@@ -250,7 +250,7 @@ void main() {
     );
     await tester.pump();
     await tester.pump();
-    expect(find.text('Waking up cloud server...'), findsOneWidget);
+    expect(find.byType(Text), findsNothing);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox());

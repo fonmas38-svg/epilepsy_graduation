@@ -227,12 +227,17 @@ class MedicalCard {
     this.doctorName = '',
     this.doctorPhone = '',
     this.notes = '',
+    this.usualAddress = '',
     this.updatedAt,
     this.synced = false,
     this.serverOrigin = '',
   });
 
   final String patientId;
+
+  /// Where the patient usually is (home, work). Sent in the emergency SMS
+  /// only when no location fix exists.
+  final String usualAddress;
   final String diagnosis;
   final String allergies;
   final String bloodType;
@@ -248,7 +253,8 @@ class MedicalCard {
       allergies.isEmpty &&
       bloodType.isEmpty &&
       doctorName.isEmpty &&
-      notes.isEmpty;
+      notes.isEmpty &&
+      usualAddress.isEmpty;
 
   MedicalCard copyWith({
     String? diagnosis,
@@ -257,6 +263,7 @@ class MedicalCard {
     String? doctorName,
     String? doctorPhone,
     String? notes,
+    String? usualAddress,
     DateTime? updatedAt,
     bool? synced,
     String? serverOrigin,
@@ -268,6 +275,7 @@ class MedicalCard {
     doctorName: doctorName ?? this.doctorName,
     doctorPhone: doctorPhone ?? this.doctorPhone,
     notes: notes ?? this.notes,
+    usualAddress: usualAddress ?? this.usualAddress,
     updatedAt: updatedAt ?? this.updatedAt,
     synced: synced ?? this.synced,
     serverOrigin: serverOrigin ?? this.serverOrigin,
@@ -281,6 +289,7 @@ class MedicalCard {
     'doctorName': doctorName,
     'doctorPhone': doctorPhone,
     'notes': notes,
+    'usualAddress': usualAddress,
     'updatedAt': (updatedAt ?? DateTime.now()).toIso8601String(),
     'synced': synced ? 1 : 0,
     'serverOrigin': serverOrigin,
@@ -293,6 +302,7 @@ class MedicalCard {
     'doctor_name': doctorName,
     'doctor_phone': doctorPhone,
     'notes': notes,
+    'usual_address': usualAddress,
   };
 
   static MedicalCard fromMap(Map<String, dynamic> m) => MedicalCard(
@@ -304,6 +314,8 @@ class MedicalCard {
     doctorPhone:
         m['doctorPhone'] as String? ?? m['doctor_phone'] as String? ?? '',
     notes: m['notes'] as String? ?? '',
+    usualAddress:
+        m['usualAddress'] as String? ?? m['usual_address'] as String? ?? '',
     updatedAt: DateTime.tryParse(
       (m['updatedAt'] ?? m['updated_at'] ?? '') as String,
     ),
@@ -341,7 +353,7 @@ class TriggerEntry {
   Map<String, Object?> toMap() => {
     'id': id,
     'patientId': patientId,
-    'occurredAt': occurredAt.toIso8601String(),
+    'occurredAt': occurredAt.toUtc().toIso8601String(),
     'kind': kind.value,
     'intensity': intensity,
     'note': note,
@@ -543,7 +555,7 @@ class SeizureLog {
   Map<String, Object?> toMap() => {
     'id': id,
     'patientId': patientId,
-    'occurredAt': occurredAt.toIso8601String(),
+    'occurredAt': occurredAt.toUtc().toIso8601String(),
     'durationSeconds': durationSeconds,
     'type': type.value,
     'notes': notes,
@@ -811,7 +823,7 @@ class OutboxItem {
     'method': method,
     'path': path,
     'body': jsonEncode(body),
-    'createdAt': createdAt.toIso8601String(),
+    'createdAt': createdAt.toUtc().toIso8601String(),
     'attempts': attempts,
     'lastError': lastError,
   };

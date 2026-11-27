@@ -1,0 +1,276 @@
+{
+  "cloud": {
+    "calm": {
+      "seizures": 0,
+      "detected": "-",
+      "time_to_detect_s": null,
+      "seizure_window_recall": null,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.005
+    },
+    "tonicClonic": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 3.7,
+      "seizure_window_recall": 0.826,
+      "early_warning": "5/6",
+      "false_alarm_window_rate": 0.01
+    },
+    "focal": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 5.0,
+      "seizure_window_recall": 0.676,
+      "early_warning": "6/6",
+      "false_alarm_window_rate": 0.016
+    },
+    "absence": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 6.3,
+      "seizure_window_recall": 0.703,
+      "early_warning": "6/6",
+      "false_alarm_window_rate": 0.006
+    },
+    "nocturnal": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 4.3,
+      "seizure_window_recall": 0.779,
+      "early_warning": "5/6",
+      "false_alarm_window_rate": 0.014
+    },
+    "gradual": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 3.7,
+      "seizure_window_recall": 0.808,
+      "early_warning": "6/6",
+      "false_alarm_window_rate": 0.02
+    },
+    "artifact": {
+      "seizures": 0,
+      "detected": "-",
+      "time_to_detect_s": null,
+      "seizure_window_recall": null,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.005
+    }
+  },
+  "edge": {
+    "calm": {
+      "seizures": 0,
+      "detected": "-",
+      "time_to_detect_s": null,
+      "seizure_window_recall": null,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.008
+    },
+    "tonicClonic": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 3.3,
+      "seizure_window_recall": 0.848,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.017
+    },
+    "focal": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 5.0,
+      "seizure_window_recall": 0.718,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.032
+    },
+    "absence": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 5.0,
+      "seizure_window_recall": 0.781,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.041
+    },
+    "nocturnal": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 3.3,
+      "seizure_window_recall": 0.799,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.023
+    },
+    "gradual": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 3.0,
+      "seizure_window_recall": 0.838,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.038
+    },
+    "artifact": {
+      "seizures": 0,
+      "detected": "-",
+      "time_to_detect_s": null,
+      "seizure_window_recall": null,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.006
+    }
+  },
+  "phone": {
+    "calm": {
+      "seizures": 0,
+      "detected": "-",
+      "time_to_detect_s": null,
+      "seizure_window_recall": null,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.001
+    },
+    "tonicClonic": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 6.0,
+      "seizure_window_recall": 0.812,
+      "early_warning": "0/6",
+      "false_alarm_window_rate": 0.014
+    },
+    "focal": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 9.7,
+      "seizure_window_recall": 0.366,
+      "early_warning": "0/6",
+      "false_alarm_window_rate": 0.022
+    },
+    "absence": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 10.7,
+      "seizure_window_recall": 0.548,
+      "early_warning": "0/6",
+      "false_alarm_window_rate": 0.024
+    },
+    "nocturnal": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 6.3,
+      "seizure_window_recall": 0.647,
+      "early_warning": "0/6",
+      "false_alarm_window_rate": 0.014
+    },
+    "gradual": {
+      "seizures": 6,
+      "detected": "6/6",
+      "time_to_detect_s": 6.0,
+      "seizure_window_recall": 0.667,
+      "early_warning": "0/6",
+      "false_alarm_window_rate": 0.018
+    },
+    "artifact": {
+      "seizures": 0,
+      "detected": "-",
+      "time_to_detect_s": null,
+      "seizure_window_recall": null,
+      "early_warning": "-",
+      "false_alarm_window_rate": 0.214
+    }
+  },
+  "phase_confusion": {
+    "cloud|ictal": {
+      "high_risk": 784,
+      "watch": 42,
+      "stable": 289
+    },
+    "cloud|offset": {
+      "high_risk": 150,
+      "watch": 33,
+      "stable": 132
+    },
+    "cloud|onset": {
+      "stable": 109,
+      "watch": 21,
+      "high_risk": 104
+    },
+    "cloud|preIctal": {
+      "stable": 1937,
+      "watch": 66,
+      "high_risk": 50
+    },
+    "cloud|recovery": {
+      "stable": 2138,
+      "watch": 17,
+      "high_risk": 2
+    },
+    "cloud|stable": {
+      "stable": 1626,
+      "watch": 22,
+      "high_risk": 8
+    },
+    "edge|ictal": {
+      "high_risk": 796,
+      "watch": 24,
+      "stable": 295
+    },
+    "edge|offset": {
+      "watch": 9,
+      "high_risk": 168,
+      "stable": 138
+    },
+    "edge|onset": {
+      "stable": 110,
+      "high_risk": 120,
+      "watch": 4
+    },
+    "edge|preIctal": {
+      "stable": 1908,
+      "watch": 41,
+      "high_risk": 104
+    },
+    "edge|recovery": {
+      "stable": 2151,
+      "watch": 1,
+      "high_risk": 5
+    },
+    "edge|stable": {
+      "stable": 1638,
+      "high_risk": 14,
+      "watch": 4
+    },
+    "phone|ictal": {
+      "high_risk": 870,
+      "watch": 128,
+      "stable": 117
+    },
+    "phone|offset": {
+      "high_risk": 104,
+      "watch": 63,
+      "stable": 148
+    },
+    "phone|onset": {
+      "stable": 106,
+      "watch": 43,
+      "high_risk": 85
+    },
+    "phone|preIctal": {
+      "stable": 1810,
+      "watch": 178,
+      "high_risk": 65
+    },
+    "phone|recovery": {
+      "stable": 2137,
+      "watch": 19,
+      "high_risk": 1
+    },
+    "phone|stable": {
+      "stable": 1592,
+      "watch": 62,
+      "high_risk": 2
+    }
+  },
+  "cloud_forecast_mean_by_phase": {
+    "stable": 0.109,
+    "preIctal": 0.277,
+    "onset": 0.68,
+    "ictal": 0.804,
+    "offset": 0.669,
+    "recovery": 0.083
+  }
+}

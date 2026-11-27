@@ -24,7 +24,8 @@ class InactivityWatcher extends StatefulWidget {
   State<InactivityWatcher> createState() => _InactivityWatcherState();
 }
 
-class _InactivityWatcherState extends State<InactivityWatcher> {
+class _InactivityWatcherState extends State<InactivityWatcher>
+    with WidgetsBindingObserver {
   Timer? _timer;
   late final BiometricService _verifier;
   bool _locked = false, _busy = false, _supported = false;
@@ -32,13 +33,13 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
   bool _passwordWrong = false;
   bool _confirmLogout = false, _logoutFailed = false;
   AppUser? _owner;
-  String? _origin;
-  int? _revision;
+  DateTime? _backgroundedAt;
 
   @override
   void initState() {
     super.initState();
     _verifier = widget.verifier ?? BiometricService();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_checkSupport());
     if (widget.enabled) {
       _resetTimer();
@@ -86,8 +87,30 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
     if (ok) _resetTimer();
   }
 
+  /// The inactivity timer pauses with the app, so time spent in the
+  /// background is checked on resume.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _backgroundedAt ??= DateTime.now();
+      return;
+    }
+    if (state != AppLifecycleState.resumed) return;
+    final since = _backgroundedAt;
+    _backgroundedAt = null;
+    if (since == null || !mounted || !widget.enabled || _locked) return;
+    if (DateTime.now().difference(since) < widget.timeout) return;
+    final app = context.read<AppState>();
+    if (app.auth.currentUser == null) return;
+    if (app.lastAlert?.severity == 'critical' || app.preAlert != null) return;
+    _timer?.cancel();
+    setState(() => _locked = true);
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _password.dispose();
     _timer?.cancel();
     super.dispose();
@@ -155,12 +178,11 @@ class _InactivityWatcherState extends State<InactivityWatcher> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
-    if (!AppUser.sameSessionOwner(_owner, app.auth.currentUser) ||
-        _origin != app.api.baseUrl ||
-        _revision != app.api.tokens.revision) {
+    // Only a change of account owner (sign-in/sign-out) resets the lock. A
+    // token rotation or revocation must never unlock the screen: a revoked
+    // session is signed out through AppState instead.
+    if (!AppUser.sameSessionOwner(_owner, app.auth.currentUser)) {
       _owner = app.auth.currentUser;
-      _origin = app.api.baseUrl;
-      _revision = app.api.tokens.revision;
       _locked = false;
       _busy = false;
       _confirmLogout = false;

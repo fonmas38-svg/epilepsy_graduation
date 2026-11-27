@@ -266,3 +266,57 @@ def test_private_channels_hide_other_caregiver_and_unfiltered_role_reads(client,
         json={"channel_type": "doctor_caregiver", "content": "missing recipient"}).status_code == 422
     assert client.post(f"/patients/{pid}/messages", headers=doc,
         json={"channel_type": "doctor_caregiver", "peer_user_id": pid, "content": "wrong recipient"}).status_code == 403
+
+
+def test_receipts_track_delivery_and_read_per_recipient(client, test_setup):
+    """WhatsApp-style status: sent → delivered (recipient fetched) → read
+    (recipient opened); in a group, one reader never marks it read for all."""
+    pat_id = test_setup["pat"]["id"]
+    pat = {"Authorization": f"Bearer {test_setup['pat_token']}"}
+    doc = {"Authorization": f"Bearer {test_setup['doc_token']}"}
+    cg = {"Authorization": f"Bearer {test_setup['cg_token']}"}
+
+    sent = client.post(
+        f"/patients/{pat_id}/messages",
+        headers=pat,
+        json={"channel_type": "doctor_patient", "content": "status check"},
+    ).json()["message"]
+    assert sent["deliveredAt"] is None and sent["readAt"] is None
+
+    def mine(headers, channel):
+        rows = client.get(
+            f"/patients/{pat_id}/messages?channel_type={channel}", headers=headers
+        ).json()["messages"]
+        return {m["id"]: m for m in rows}
+
+    # The sender fetching their own message is not a delivery.
+    assert mine(pat, "doctor_patient")[sent["id"]]["deliveredAt"] is None
+    # The doctor's app fetched it: delivered, not read.
+    mine(doc, "doctor_patient")
+    seen = mine(pat, "doctor_patient")[sent["id"]]
+    assert seen["deliveredAt"] is not None and seen["readAt"] is None
+    assert seen["deliveredCount"] == 1
+    # The doctor opened the conversation: read.
+    client.post(
+        f"/patients/{pat_id}/messages/read",
+        headers=doc,
+        json={"channel_type": "doctor_patient"},
+    )
+    seen = mine(pat, "doctor_patient")[sent["id"]]
+    assert seen["readAt"] is not None and seen["readCount"] == 1
+
+    # Group channel: only the caregiver reads; the read count says 1, and the
+    # doctor's own receipt is unaffected.
+    group = client.post(
+        f"/patients/{pat_id}/messages",
+        headers=pat,
+        json={"channel_type": "care_team_triage", "content": "group"},
+    ).json()["message"]
+    mine(cg, "care_team_triage")
+    client.post(
+        f"/patients/{pat_id}/messages/read",
+        headers=cg,
+        json={"channel_type": "care_team_triage"},
+    )
+    g = mine(pat, "care_team_triage")[group["id"]]
+    assert g["readCount"] == 1 and g["deliveredCount"] == 1

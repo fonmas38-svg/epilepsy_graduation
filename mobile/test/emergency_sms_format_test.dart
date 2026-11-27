@@ -47,4 +47,33 @@ void main() {
       expect(body, contains('±9 متر'));
     },
   );
+
+  test('usual address goes in the SMS only when there is no location', () async {
+    final bodies = <String>[];
+    final service = EmergencySmsService(
+      canOpen: (_) async => true,
+      open: (uri) async {
+        bodies.add(Uri.decodeComponent(uri.toString()));
+        return true;
+      },
+    );
+    await service.composeEmergencySms(
+      phoneNumbers: ['+967771234567'],
+      patientName: 'مريض',
+      usualAddress: 'صنعاء، شارع حدة',
+    );
+    await service.composeEmergencySms(
+      phoneNumbers: ['+967771234567'],
+      patientName: 'مريض',
+      usualAddress: 'صنعاء، شارع حدة',
+      fix: const GpsFix(
+        latitude: 15.35,
+        longitude: 44.2,
+        accuracy: 9,
+        source: LocationSource.deviceGps,
+      ),
+    );
+    expect(bodies[0], contains('العنوان المعتاد: صنعاء، شارع حدة'));
+    expect(bodies[1], isNot(contains('العنوان المعتاد')));
+  });
 }

@@ -60,6 +60,9 @@ android {
                 keyPassword = keyPasswordVal
                 storeFile = kFile
                 storePassword = storePasswordVal
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             } else {
                 initWith(getByName("debug"))
             }

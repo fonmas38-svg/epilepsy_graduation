@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 from app import alert_outbox
 from app.schemas import AnalyzeResponse, RiskLabel, VitalWindow
-from app.auth import authorize_patient_access, get_optional_principal, require_role
+from app.auth import authorize_telemetry_write, authorize_patient_access, get_optional_principal, require_role
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -69,7 +69,9 @@ def fcm_stub(
     """
     if not alert.should_notify:
         raise HTTPException(status_code=400, detail="Alert is not marked for notification")
-    authorize_patient_access(alert.patient_id, principal)
+    # Paging the care circle is the patient's (or their device's) act: a
+    # linked doctor or caregiver may not push arbitrary text to everyone.
+    authorize_telemetry_write(alert.patient_id, principal)
     entry = alert_outbox.enqueue_standalone(alert.patient_id, alert.model_dump())
     return {
         # Unchanged for backwards compatibility with the Flutter client; the

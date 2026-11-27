@@ -27,6 +27,7 @@ class _PermissionsOnboardingScreenState
   bool _locationGranted = false;
 
   bool get _ar => Localizations.localeOf(context).languageCode == 'ar';
+  bool _hasGps = true;
 
   @override
   void initState() {
@@ -35,6 +36,9 @@ class _PermissionsOnboardingScreenState
   }
 
   Future<void> _checkPermissions() async {
+    final hasGps = await context.read<AppState>().background.hasGpsHardware();
+    if (mounted && !hasGps) setState(() => _hasGps = false);
+    if (!mounted) return;
     // The OS answer, not an assumed «enabled» (null where it cannot be read).
     final notif = await context
         .read<AppState>()
@@ -228,6 +232,11 @@ class _PermissionsOnboardingScreenState
                         subtitle: ar
                             ? 'لإرسال إحداثيات موقعك الجغرافي تلقائياً لأفراد أسرتك والإسعاف عند حدوث نوبة حادة أو طلب استغاثة SOS دون الحاجة للمس الهاتف.'
                             : 'To send your location to your family and responders automatically during a severe seizure or an SOS, without touching the phone.',
+                        warning: _hasGps
+                            ? null
+                            : (ar
+                                  ? 'هاتفك لا يحتوي شريحة GPS. دون إنترنت لن يُرسَل موقعك في الطوارئ؛ أضف «العنوان المعتاد» في البطاقة الطبية ليصل مع رسالة الاستغاثة.'
+                                  : 'This phone has no GPS receiver. Without internet your location cannot be sent in an emergency; add a «usual address» to the medical card so it goes with the SOS message.'),
                         granted: _locationGranted,
                         onAction: _requestLocation,
                         actionLabel: _locationGranted
@@ -353,8 +362,11 @@ class _PermissionCard extends StatelessWidget {
     required this.granted,
     required this.onAction,
     required this.actionLabel,
+    this.warning,
   });
 
+  /// Shown under the description when the phone lacks what this needs.
+  final String? warning;
   final IconData icon;
   final Color color;
   final String title;
@@ -427,6 +439,20 @@ class _PermissionCard extends StatelessWidget {
                     height: 1.4,
                   ),
                 ),
+                if (warning != null) ...[
+                  Gap.vSm,
+                  Text(
+                    warning!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: AppColors.accent(
+                        context,
+                        AccentTone.orange,
+                      ).foreground,
+                      fontWeight: FontWeight.w600,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
                 if (onAction != null && !granted) ...[
                   Gap.vSm,
                   // 48 dp minimum touch target (was 32 dp, below A11y floor).

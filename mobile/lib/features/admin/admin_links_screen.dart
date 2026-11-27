@@ -6,6 +6,7 @@ import '../../core/ui/common.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
+import 'admin_security_guard.dart';
 
 class AdminLinksScreen extends StatefulWidget {
   const AdminLinksScreen({super.key, this.initialDoctorId});
@@ -15,8 +16,10 @@ class AdminLinksScreen extends StatefulWidget {
 }
 
 class _AdminLinksScreenState extends State<AdminLinksScreen> {
+  final _linkSearch = TextEditingController();
   List<Map<String, dynamic>> _users = [], _doctors = [], _caregivers = [];
   String? _patient, _member;
+  String _linkStatus = '';
   bool _family = false, _loading = true, _busy = false, _loaded = false;
   int _loadRevision = 0;
   String? _error;
@@ -37,6 +40,12 @@ class _AdminLinksScreenState extends State<AdminLinksScreen> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _linkSearch.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -128,29 +137,12 @@ class _AdminLinksScreenState extends State<AdminLinksScreen> {
     final title = remove == null
         ? (ar ? 'تأكيد الربط' : 'Confirm link')
         : (ar ? 'إلغاء الربط' : 'Remove link');
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Text(
-          '${name(patient)} ↔ ${name(member)}\n${remove == null ? (ar ? 'سيتم منح الوصول وفق صلاحيات هذا الحساب.' : 'Access will follow this account’s permissions.') : (ar ? 'سيُزال هذا الرابط فقط؛ لن يُحذف الحساب أو سجل المريض. لا يمكن سحب بيانات سبق تسليمها.' : 'Only this link is removed. Accounts and patient records remain; previously delivered data cannot be recalled.')}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(ar ? 'رجوع' : 'Back'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(title),
-          ),
-        ],
-      ),
+    final accepted = await requireAdminVerification(
+      context,
+      '$title: ${name(patient)} ↔ ${name(member)}\n'
+      '${remove == null ? (ar ? 'سيتم منح الوصول وفق صلاحيات هذا الحساب.' : 'Access will follow this account’s permissions.') : (ar ? 'سيُزال هذا الرابط فقط؛ لن يُحذف الحساب أو سجل المريض.' : 'Only this link is removed. Accounts and patient records remain.')}',
     );
-    if (accepted != true ||
-        !current() ||
-        owner?.role != UserRole.admin ||
-        _busy) {
+    if (!accepted || !current() || owner?.role != UserRole.admin || _busy) {
       return;
     }
     setState(() {
@@ -192,9 +184,17 @@ class _AdminLinksScreenState extends State<AdminLinksScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final selectedLinks = links
-        .where((r) => _patient == null || r['patientId'] == _patient)
-        .toList();
+    final query = _linkSearch.text.trim().toLowerCase();
+    final selectedLinks = links.where((r) {
+      if (_patient != null && r['patientId'] != _patient) return false;
+      final isDisabled = r['disabled'] == true;
+      if (_linkStatus == 'active' && isDisabled) return false;
+      if (_linkStatus == 'disabled' && !isDisabled) return false;
+      if (query.isEmpty) return true;
+      final pName = name(r['patientId'] as String?).toLowerCase();
+      final mName = name(r[memberKey] as String?).toLowerCase();
+      return pName.contains(query) || mName.contains(query);
+    }).toList();
     final existing = links.any(
       (r) => r['patientId'] == _patient && r[memberKey] == _member,
     );
@@ -333,6 +333,34 @@ class _AdminLinksScreenState extends State<AdminLinksScreen> {
                 ar ? 'الروابط الحالية' : 'Current links',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _linkSearch,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: ar
+                      ? 'بحث في الروابط باسم المريض أو الطبيب/المرافق'
+                      : 'Filter links by patient or member name',
+                  prefixIcon: const Icon(Icons.search),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final entry in [
+                    ('', ar ? 'الكل' : 'All'),
+                    ('active', ar ? 'نشطة' : 'Active'),
+                    ('disabled', ar ? 'معطّلة' : 'Disabled'),
+                  ])
+                    ChoiceChip(
+                      label: Text(entry.$2),
+                      selected: _linkStatus == entry.$1,
+                      onSelected: (_) => setState(() => _linkStatus = entry.$1),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
               if (selectedLinks.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(16),

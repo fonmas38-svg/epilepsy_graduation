@@ -20,6 +20,11 @@ class TokenProvider {
   final SecureStore _store;
 
   int _revision = 0;
+
+  /// Called when the server explicitly rejects the refresh (session revoked,
+  /// account moved to another device, password changed, account disabled).
+  /// The app signs out instead of showing cached data with dead credentials.
+  void Function()? onSessionRevoked;
   int get revision => _revision;
   String get baseUrl => _baseUrl;
   String? get accessToken => _token;
@@ -163,6 +168,7 @@ class TokenProvider {
       } else if (r.statusCode == 401 || r.statusCode == 403) {
         // Explicit server rejection: session was revoked, expired, or account disabled
         await clear();
+        onSessionRevoked?.call();
         completer.complete(false);
         return false;
       }

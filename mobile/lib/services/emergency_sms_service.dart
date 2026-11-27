@@ -34,17 +34,23 @@ class EmergencySmsService {
     required List<String> phoneNumbers,
     required String patientName,
     GpsFix? fix,
+    // Kept for callers; an internal event id means nothing to the family and
+    // is no longer put in the message.
     String? eventId,
     DateTime? occurredAt,
+    String? usualAddress,
   }) async {
     final recipients = normalizeRecipients(phoneNumbers);
     if (recipients.isEmpty) return SmsOutcome.noRecipients;
     final quality = fix?.describe(arabic: true) ?? '';
     final location = fix != null && fix.valid
         ? 'الإحداثيات: $fix. الموقع: ${fix.mapsUrl}${quality.isEmpty ? '' : '. $quality'}'
-        : 'تعذر الحصول على موقع حديث؛ لا توجد إحداثيات مؤكدة.';
+        : 'تعذر الحصول على موقع حديث؛ لا توجد إحداثيات مؤكدة.'
+              // No fix (no internet, no GPS): the patient's usual address is
+              // the only lead the family gets, clearly marked as such.
+              '${(usualAddress ?? '').trim().isEmpty ? '' : ' العنوان المعتاد: ${usualAddress!.trim()}.'}';
     final text =
-        'طلب مساعدة — المريض ($patientName). الوقت: ${formatLocal12h(occurredAt ?? DateTime.now())}. $location${eventId == null ? '' : ' مرجع الحدث: $eventId'}';
+        'طلب مساعدة — المريض ($patientName). الوقت: ${formatLocal12h(occurredAt ?? DateTime.now())}. $location';
     final separator = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
         ? '&'
         : '?';

@@ -58,7 +58,7 @@ void main() {
       expect(rawDecoded, contains('15.354123, 44.201234'));
       expect(rawDecoded, contains('https://maps.google.com/?q=15.354123,44.201234'));
       expect(rawDecoded, contains('9 متر'));
-      expect(rawDecoded, contains('alert-sos-999'));
+      expect(rawDecoded, isNot(contains('alert-sos-999')));
     });
 
     test('composes emergency SMS gracefully without coordinates when GNSS is unavailable', () async {

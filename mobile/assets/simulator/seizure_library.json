@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "window": 262,
+  "fs": 256,
+  "scale": 1000,
+  "units": "normalized_demo (uV / 200)",
+  "source": "Bonn EEG (Andrzejak et al. 2001), recordings held out of BOTH the cloud CNN-LSTM and the EdgeSeizureNet training splits",
+  "held_out_recordings": 75,
+  "categories": {
+    "ictal": {
+      "offset": 0,
+      "count": 400,
+      "std_units": 1.4747
+    },
+    "interictal": {
+      "offset": 400,
+      "count": 400,
+      "std_units": 0.2872
+    },
+    "baseline": {
+      "offset": 800,
+      "count": 400,
+      "std_units": 0.2765
+    }
+  }
+}

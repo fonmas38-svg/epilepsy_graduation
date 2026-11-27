@@ -651,6 +651,16 @@ class _MedicalCardSection extends StatelessWidget {
                     icon: Icons.phone_outlined,
                   ),
                 ],
+                if (c.usualAddress.isNotEmpty) ...[
+                  Gap.vSm,
+                  LabeledValue(
+                    label: Localizations.localeOf(context).languageCode == 'ar'
+                        ? 'العنوان المعتاد'
+                        : 'Usual address',
+                    value: c.usualAddress,
+                    icon: Icons.home_outlined,
+                  ),
+                ],
                 if (c.notes.isNotEmpty) ...[
                   Gap.vSm,
                   LabeledValue(
@@ -708,6 +718,7 @@ class _MedicalCardSheetState extends State<_MedicalCardSheet> {
   late final TextEditingController _doctorName;
   late final TextEditingController _doctorPhone;
   late final TextEditingController _notes;
+  late final TextEditingController _address;
 
   @override
   void initState() {
@@ -719,6 +730,7 @@ class _MedicalCardSheetState extends State<_MedicalCardSheet> {
     _doctorName = TextEditingController(text: c.doctorName);
     _doctorPhone = TextEditingController(text: c.doctorPhone);
     _notes = TextEditingController(text: c.notes);
+    _address = TextEditingController(text: c.usualAddress);
   }
 
   @override
@@ -729,6 +741,7 @@ class _MedicalCardSheetState extends State<_MedicalCardSheet> {
     _doctorName.dispose();
     _doctorPhone.dispose();
     _notes.dispose();
+    _address.dispose();
     super.dispose();
   }
 
@@ -770,6 +783,15 @@ class _MedicalCardSheetState extends State<_MedicalCardSheet> {
                 keyboard: TextInputType.phone,
               ),
               Gap.vSm,
+              _field(
+                _address,
+                Localizations.localeOf(context).languageCode == 'ar'
+                    ? 'العنوان المعتاد (يُرسل إن تعذّر تحديد الموقع)'
+                    : 'Usual address (sent if location is unavailable)',
+                Icons.home_outlined,
+                lines: 2,
+              ),
+              Gap.vSm,
               _field(_notes, l.notesLabel, Icons.note_alt_outlined, lines: 3),
               Gap.vLg,
               SizedBox(
@@ -784,6 +806,7 @@ class _MedicalCardSheetState extends State<_MedicalCardSheet> {
                       doctorName: _doctorName.text.trim(),
                       doctorPhone: _doctorPhone.text.trim(),
                       notes: _notes.text.trim(),
+                      usualAddress: _address.text.trim(),
                     ),
                   ),
                   icon: const Icon(Icons.save_outlined),

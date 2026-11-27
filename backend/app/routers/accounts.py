@@ -43,11 +43,21 @@ from app.auth import (
 
 router = APIRouter(tags=["accounts"])
 
-# Anti-Brute-Force Rate Limiting & High-Security Surveillance
-_FAILED_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
+# Anti-brute-force limits.
+#
+# Locking a *username* after a few failures anywhere lets anyone lock a
+# patient out of their own monitoring app. So the tight limit is per
+# (username, client IP); a much higher per-username ceiling still stops a
+# distributed guessing campaign, and a per-IP limit stops password spraying.
+# Behind Render's proxy the real client IP comes from the trusted proxy
+# headers (see `--proxy-headers` in render.yaml).
+_FAILED_PAIR_ATTEMPTS: dict[tuple[str, str], list[float]] = defaultdict(list)
+_FAILED_USER_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
 _FAILED_IP_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
-_MAX_FAILED_ATTEMPTS = 5
-_MAX_ADMIN_FAILED_ATTEMPTS = 3  # High-security threshold for admin accounts
+_MAX_FAILED_ATTEMPTS = 5          # per username + IP
+_MAX_ADMIN_FAILED_ATTEMPTS = 3    # per username + IP, admin accounts
+_MAX_USER_FAILED_ATTEMPTS = 50    # per username, all IPs
+_MAX_IP_FAILED_ATTEMPTS = 30      # per IP, all usernames
 _LOCKOUT_WINDOW_SECONDS = 900
 
 
@@ -57,32 +67,30 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _check_rate_limit(username: str, ip: str) -> None:
-    now = time.time()
-    cutoff = now - _LOCKOUT_WINDOW_SECONDS
-    u_key = username.strip().lower()
+def _recent(store: dict, key, cutoff: float) -> list[float]:
+    attempts = [t for t in store[key] if t > cutoff]
+    store[key] = attempts
+    return attempts
 
-    # Username check
-    attempts = [t for t in _FAILED_ATTEMPTS[u_key] if t > cutoff]
-    _FAILED_ATTEMPTS[u_key] = attempts
+
+def _check_rate_limit(username: str, ip: str) -> None:
+    cutoff = time.time() - _LOCKOUT_WINDOW_SECONDS
+    u_key = username.strip().lower()
+    pair = _recent(_FAILED_PAIR_ATTEMPTS, (u_key, ip), cutoff)
     limit = _MAX_ADMIN_FAILED_ATTEMPTS if u_key == "admin" else _MAX_FAILED_ATTEMPTS
-    if len(attempts) >= limit:
+    if len(pair) >= limit or len(_recent(_FAILED_USER_ATTEMPTS, u_key, cutoff)) >= _MAX_USER_FAILED_ATTEMPTS:
         users_store.log(
             actor=username,
             actor_role="admin" if u_key == "admin" else "user",
             action="account_lockout_triggered",
             target=f"ip:{ip}",
-            detail={"reason": "rate_limit_exceeded", "attempts": len(attempts), "ip": ip},
+            detail={"reason": "rate_limit_exceeded", "attempts": len(pair), "ip": ip},
         )
         raise HTTPException(
             status_code=429,
-            detail=f"Too many failed login attempts ({len(attempts)}/{limit}). Account locked for 15 minutes.",
+            detail=f"Too many failed login attempts ({len(pair)}/{limit}). Try again in 15 minutes.",
         )
-
-    # IP check (prevents spray attacks)
-    ip_attempts = [t for t in _FAILED_IP_ATTEMPTS[ip] if t > cutoff]
-    _FAILED_IP_ATTEMPTS[ip] = ip_attempts
-    if len(ip_attempts) >= 15:
+    if len(_recent(_FAILED_IP_ATTEMPTS, ip, cutoff)) >= _MAX_IP_FAILED_ATTEMPTS:
         raise HTTPException(
             status_code=429,
             detail="Too many requests from this IP. Temporarily blocked for 15 minutes.",
@@ -91,12 +99,17 @@ def _check_rate_limit(username: str, ip: str) -> None:
 
 def _record_failed_attempt(username: str, ip: str) -> None:
     now = time.time()
-    _FAILED_ATTEMPTS[username.strip().lower()].append(now)
+    u_key = username.strip().lower()
+    _FAILED_PAIR_ATTEMPTS[(u_key, ip)].append(now)
+    _FAILED_USER_ATTEMPTS[u_key].append(now)
     _FAILED_IP_ATTEMPTS[ip].append(now)
 
 
-def _reset_attempts(username: str) -> None:
-    _FAILED_ATTEMPTS.pop(username.strip().lower(), None)
+def _reset_attempts(username: str, ip: str | None = None) -> None:
+    u_key = username.strip().lower()
+    _FAILED_USER_ATTEMPTS.pop(u_key, None)
+    for key in [k for k in _FAILED_PAIR_ATTEMPTS if k[0] == u_key and (ip is None or k[1] == ip)]:
+        _FAILED_PAIR_ATTEMPTS.pop(key, None)
 
 require_admin = require_role("admin")
 require_doctor = require_role("doctor", "admin")
@@ -248,6 +261,22 @@ class RotateDeviceSecretRequest(BaseModel):
     enrollment_secret: str | None = Field(default=None, min_length=12, max_length=128)
 
 
+class UpdateDeviceRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    patient_id: str | None = None
+
+
+class MohRegistryEntryRequest(BaseModel):
+    license_number: str = Field(..., min_length=2, max_length=64, pattern=r"\S")
+    national_id: str = Field(..., min_length=3, max_length=32, pattern=r"\S")
+    full_name_ar: str = Field(..., min_length=1, max_length=180, pattern=r"\S")
+    full_name_en: str = Field(..., min_length=1, max_length=180, pattern=r"\S")
+    specialization: str = Field(..., min_length=1, max_length=120, pattern=r"\S")
+    hospital_affiliation: str | None = Field(default=None, max_length=180)
+    status: Literal["active", "suspended", "expired"] = "active"
+    expiration_date: str = Field(..., min_length=4, max_length=32, pattern=r"\S")
+
+
 # ---------------------------------------------------------------------------- helpers
 
 
@@ -341,7 +370,8 @@ def login(body: LoginRequest, request: Request):
         )
         raise HTTPException(status_code=403, detail="account disabled")
 
-    _reset_attempts(body.username)
+    _reset_attempts(body.username, client_ip)
+    takeover_from: dict | None = None
     if user["role"] in ("patient", "caregiver"):
         if not body.device_id or not body.device_id.strip():
             raise HTTPException(status_code=422, detail="معرّف تثبيت الجهاز مطلوب لتسجيل الدخول")
@@ -349,21 +379,10 @@ def login(body: LoginRequest, request: Request):
             user["id"], body.device_id
         )
         if conflicting and body.take_over_device:
-            # Password already verified above: end the old device's sessions
-            # (and push routes) instead of locking the owner out of the account.
-            account_sessions_store.revoke(user["id"])
-            users_store.log(
-                actor=user["id"],
-                actor_role=user["role"],
-                action="login_device_takeover",
-                target=user["id"],
-                detail={
-                    "ip": client_ip,
-                    "device_id": body.device_id,
-                    "replaced_session_id": conflicting.get("id"),
-                    "replaced_device_id": conflicting.get("device_id"),
-                },
-            )
+            # Password already verified above. The old device's sessions end
+            # in the same transaction that creates the new one (below), so a
+            # failure can never leave the owner signed out everywhere.
+            takeover_from = conflicting
             conflicting = None
         if conflicting:
             users_store.log(
@@ -385,6 +404,20 @@ def login(body: LoginRequest, request: Request):
 
     is_admin = user["role"] == "admin"
     with transaction():
+        if takeover_from is not None:
+            account_sessions_store.revoke(user["id"])
+            users_store.log(
+                actor=user["id"],
+                actor_role=user["role"],
+                action="login_device_takeover",
+                target=user["id"],
+                detail={
+                    "ip": client_ip,
+                    "device_id": body.device_id,
+                    "replaced_session_id": takeover_from.get("id"),
+                    "replaced_device_id": takeover_from.get("device_id"),
+                },
+            )
         token = create_token(user["id"], user["role"], extra={"username": user["username"]},
             session_context={
                 "device_name": body.device_name,
@@ -548,8 +581,14 @@ def admin_list_users(
     role: Role | None = None,
     q: str | None = None,
     include_disabled: bool = True,
+    disabled_only: bool = False,
 ):
-    users = users_store.list_users(role=role, q=q, include_disabled=include_disabled)
+    users = users_store.list_users(
+        role=role,
+        q=q,
+        include_disabled=include_disabled,
+        disabled_only=disabled_only,
+    )
     return {"users": [users_store.public_user(u) for u in users]}
 
 
@@ -564,6 +603,7 @@ def admin_get_user(user_id: str, _: dict = Depends(require_admin)):
         out["caregiverIds"] = users_store.caregivers_for_patient(user_id)
     elif user.get("role") == "doctor":
         out["patientIds"] = users_store.patients_for_doctor(user_id)
+        out["doctorProfile"] = users_store.get_doctor_profile(user_id)
     elif user.get("role") == "caregiver":
         out["patientIds"] = users_store.patients_for_caregiver(user_id)
     return {"user": out}
@@ -826,8 +866,21 @@ def admin_unassign(body: AssignmentRequest, actor: dict = Depends(require_admin)
 
 
 @router.get("/admin/audit")
-def admin_audit(_: dict = Depends(require_admin), limit: int = Query(200, ge=1, le=1000)):
-    return {"audit": users_store.list_audit(limit=limit)}
+def admin_audit(
+    _: dict = Depends(require_admin),
+    limit: int = Query(200, ge=1, le=1000),
+    actor_role: str | None = None,
+    action: str | None = None,
+    q: str | None = None,
+):
+    return {
+        "audit": users_store.list_audit(
+            limit=limit,
+            actor_role=actor_role,
+            action=action,
+            q=q,
+        )
+    }
 
 
 @router.get("/admin/caregiver-links")
@@ -865,9 +918,140 @@ def _device_secret(explicit: str | None) -> tuple[str, str | None]:
 
 @router.get("/admin/devices")
 def admin_list_devices(
-    patient_id: str | None = None, _: dict = Depends(require_admin)
+    patient_id: str | None = None,
+    disabled: bool | None = None,
+    enrolled: bool | None = None,
+    q: str | None = None,
+    _: dict = Depends(require_admin),
 ):
-    return {"devices": device_store.list_devices(patient_id)}
+    return {
+        "devices": device_store.list_devices(
+            patient_id,
+            disabled=disabled,
+            enrolled=enrolled,
+            q=q,
+        )
+    }
+
+
+@router.patch("/admin/devices/{device_id}")
+def admin_update_device(
+    device_id: str,
+    body: UpdateDeviceRequest,
+    actor: dict = Depends(require_admin),
+):
+    if body.patient_id:
+        patient = users_store.get_user(body.patient_id)
+        if not patient or patient.get("role") != "patient":
+            raise HTTPException(status_code=404, detail="patient not found")
+    device = device_store.update_device(
+        device_id,
+        name=body.name,
+        patient_id=body.patient_id,
+    )
+    if not device:
+        raise HTTPException(status_code=404, detail="device not found")
+    users_store.log(
+        actor.get("sub"),
+        "admin",
+        "update_device",
+        device_id,
+        {"name": body.name, "patientId": body.patient_id},
+    )
+    return {"device": device}
+
+
+@router.delete("/admin/devices/{device_id}")
+def admin_delete_device(device_id: str, actor: dict = Depends(require_admin)):
+    if not device_store.delete_device(device_id):
+        raise HTTPException(status_code=404, detail="device not found")
+    users_store.log(actor.get("sub"), "admin", "delete_device", device_id)
+    return {"ok": True}
+
+
+@router.get("/admin/system-health")
+def admin_system_health(request: Request, _: dict = Depends(require_admin)):
+    from app import alert_outbox, notification_delivery
+    from app.database import database_url, is_sqlite_url
+    from app.settings import settings
+
+    classifier = getattr(request.app.state, "classifier", None)
+    engine_info = classifier.engine_info() if classifier else {}
+    return {
+        "ok": True,
+        "environment": settings.environment,
+        "database": {
+            "backend": "sqlite" if is_sqlite_url(database_url()) else "postgresql",
+        },
+        "notificationChannel": notification_delivery.channel(),
+        "ml": engine_info,
+        "outbox": alert_outbox.summary(),
+        "counts": users_store.counts(),
+    }
+
+
+@router.post("/admin/outbox/retry-failed")
+def admin_retry_outbox(actor: dict = Depends(require_admin)):
+    from app import alert_outbox
+
+    retried = alert_outbox.retry_failed()
+    users_store.log(
+        actor.get("sub"),
+        "admin",
+        "retry_failed_outbox",
+        detail={"retried": retried},
+    )
+    return {"ok": True, "retried": retried}
+
+
+@router.get("/admin/moh-registry")
+def admin_list_moh_registry(
+    status: Literal["active", "suspended", "expired"] | None = None,
+    q: str | None = None,
+    _: dict = Depends(require_admin),
+):
+    return {"records": users_store.list_moh_registry(status=status, q=q)}
+
+
+@router.post("/admin/moh-registry", status_code=201)
+def admin_upsert_moh_registry(
+    body: MohRegistryEntryRequest,
+    actor: dict = Depends(require_admin),
+):
+    record = {
+        "license_number": body.license_number.strip().upper(),
+        "national_id": body.national_id.strip(),
+        "full_name_ar": body.full_name_ar.strip(),
+        "full_name_en": body.full_name_en.strip(),
+        "specialization": body.specialization.strip(),
+        "hospital_affiliation": (body.hospital_affiliation or "").strip() or None,
+        "status": body.status,
+        "expiration_date": body.expiration_date.strip(),
+    }
+    saved = users_store.seed_moh_record(record)
+    users_store.log(
+        actor.get("sub"),
+        "admin",
+        "upsert_moh_registry",
+        target=saved["license_number"],
+        detail={"status": saved["status"]},
+    )
+    return {"record": saved}
+
+
+@router.post("/admin/doctors/{user_id}/reverify-moh")
+def admin_reverify_doctor_moh(user_id: str, actor: dict = Depends(require_admin)):
+    outcome = users_store.reverify_doctor_moh(user_id)
+    if not outcome:
+        raise HTTPException(status_code=404, detail="doctor profile not found")
+    users_store.log(
+        actor.get("sub"),
+        "admin",
+        "reverify_doctor_moh",
+        target=user_id,
+        detail={"verified": outcome["verification"]["verified"], "status": outcome["verification"]["status"]},
+    )
+    return outcome
 
 
 @router.post("/admin/devices", status_code=201)
@@ -951,11 +1135,13 @@ def doctor_dashboard_summary(actor: dict = Depends(require_doctor)):
             stable_count += 1
 
         try:
-            p_cloud = cloud_store.get_patient(pid) or {}
-            alerts = p_cloud.get("alerts") or []
-            outcomes = outcomes_store.list_for_patient(pid)
+            # Alerts live in their own table, and outcomes are keyed
+            # "alertId": the old lookups (patient profile "alerts" and a
+            # non-existent list_for_patient) always counted zero.
+            alerts = cloud_store.list_alerts(pid, limit=500)
+            outcomes = outcomes_store.list_outcomes(pid, limit=500)
             adjudicated_alert_ids = {
-                o.get("alert_id") for o in outcomes if o.get("alert_id")
+                o.get("alertId") for o in outcomes if o.get("alertId")
             }
             p_pending = 0
             p_critical = 0
@@ -1200,6 +1386,15 @@ def patient_update_caregiver(
         raise HTTPException(status_code=404, detail="لم يتم العثور على الفرد")
     if body.name is not None and not body.name.strip():
         raise HTTPException(status_code=422, detail="name must not be blank")
+    # The caregiver account is a real person's account. If it also cares for
+    # other patients, one patient must not rename it or change its phone for
+    # everyone; only the relation label stays editable.
+    shared = any(p != patient_id for p in users_store.patients_for_caregiver(caregiver_id))
+    if shared and (body.name is not None or "phone" in body.model_fields_set):
+        raise HTTPException(
+            status_code=409,
+            detail="هذا المرافق مرتبط بمرضى آخرين؛ يمكنه تعديل اسمه ورقمه من حسابه فقط.",
+        )
     from app.database import transaction
     patch = {}
     if body.name is not None:

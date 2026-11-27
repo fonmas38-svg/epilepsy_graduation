@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
+import '../../services/simulator/sim_types.dart';
 
 import '../../core/router/route_names.dart';
 import '../../core/theme/app_colors.dart';
@@ -1433,28 +1434,19 @@ class _DeviceSection extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final lastSeen = DateTime.tryParse(monitoring.lastDeviceSeen ?? '');
 
+    // Green only when fresh, valid readings are actually being analysed.
     final (RiskView view, String status) = !monitoring.running
         ? (
             RiskView.unknown,
             l.isArabic ? 'المراقبة متوقفة' : 'Monitoring stopped',
           )
-        : monitoring.source == SignalSource.simulator
-        ? (
-            RiskView.safe,
-            l.isArabic
-                ? 'المراقبة نشطة (محاكاة)'
-                : 'Monitoring Active (Simulation)',
-          )
-        : monitoring.source == SignalSource.dataset
-        ? (
-            RiskView.safe,
-            // Recorded data is replayed, not a live clinical stream.
-            l.isArabic
-                ? 'المراقبة نشطة (بيانات مسجّلة)'
-                : 'Monitoring active (recorded data)',
-          )
+        : monitoring.hasUsableAssessment
+        ? (RiskView.safe, l.isArabic ? 'الحساس يعمل' : 'Sensor working')
         : monitoring.deviceConnected
-        ? (RiskView.safe, l.deviceConnected)
+        ? (
+            RiskView.caution,
+            l.isArabic ? 'بانتظار قراءات صالحة' : 'Waiting for valid readings',
+          )
         : lastSeen != null
         ? (RiskView.caution, l.deviceWaiting)
         : (RiskView.caution, l.deviceDisconnected);
@@ -1466,17 +1458,6 @@ class _DeviceSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (monitoring.deviceId != null)
-            LabeledValue(
-              label: l.deviceSection,
-              value: monitoring.deviceId!,
-              icon: Icons.tag,
-            ),
-          LabeledValue(
-            label: l.bufferedSamples,
-            value: '${monitoring.deviceBuffered}',
-            icon: Icons.data_usage_outlined,
-          ),
           LabeledValue(
             label: l.lastUpdate,
             value: TimeAgo.since(lastSeen, l),
@@ -1511,14 +1492,6 @@ class _MonitoringEngineCard extends StatelessWidget {
 
   final AppState app;
 
-  static String _engineLabel(String? engine, AppLocalizations l) =>
-      switch (engine) {
-        'cnn_lstm_fusion' => l.engineDeep,
-        'sklearn' => l.engineSklearn,
-        null => l.engineDeep,
-        _ => l.engineRules,
-      };
-
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
@@ -1527,6 +1500,8 @@ class _MonitoringEngineCard extends StatelessWidget {
     final engineView = app.monitoring.hasUsableAssessment
         ? RiskView.safe
         : RiskView.unknown;
+    final engine = app.monitoring.latestAssessment?.features['engine'];
+    final onPhone = engine == 'edge_onnx' || engine == 'edge_multimodal';
     return SectionCard(
       title: ar
           ? 'محرك الذكاء الاصطناعي والمراقبة السريرية'
@@ -1553,32 +1528,24 @@ class _MonitoringEngineCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           LabeledValue(
-            label: l.engineLabel,
-            value: _engineLabel(app.activeEngine, l),
+            label: ar ? 'يحلّل الإشارات الآن' : 'Analysed by',
+            value: !app.monitoring.hasUsableAssessment
+                ? '—'
+                : onPhone
+                ? (ar ? 'هاتفك (دون إنترنت)' : 'Your phone (offline)')
+                : (ar ? 'الخدمة السحابية' : 'Cloud service'),
             icon: Icons.memory,
           ),
           LabeledValue(
-            label: ar ? 'مصدر الإشارات المعتمد' : 'Signal Source',
-            value: ar ? 'تشغيل بيانات EEG مسجلة' : 'Recorded EEG playback',
+            label: ar ? 'مصدر الإشارات' : 'Signal source',
+            value: switch (app.monitoring.source) {
+              SignalSource.simulator =>
+                ar ? 'حساس افتراضي (تجريبي)' : 'Virtual sensor (demo)',
+              SignalSource.dataset => ar ? 'تسجيلات EEG سابقة' : 'Recorded EEG',
+              SignalSource.headDevice => ar ? 'جهاز الرأس' : 'Headset',
+            },
             icon: Icons.analytics_outlined,
           ),
-          LabeledValue(
-            label: ar ? 'معدل التردد الحسابي' : 'Sampling Rate',
-            value: app.monitoring.signalSampleRate == null
-                ? l.notSet
-                : '${app.monitoring.signalSampleRate} Hz',
-            icon: Icons.speed,
-          ),
-          if (!app.apiOnline) ...[
-            Gap.vSm,
-            InfoNote(
-              text: ar
-                  ? 'الخادم غير متصل؛ يعتمد العرض على البيانات المحفوظة المتاحة. راجع مصدر الإشارة وحدود المراقبة.'
-                  : 'Server offline; playback depends on retained data. Check the signal source and monitoring limitations.',
-              icon: Icons.cloud_off_outlined,
-              view: RiskView.caution,
-            ),
-          ],
           Gap.vMd,
           FilledButton.icon(
             style: FilledButton.styleFrom(
@@ -1590,13 +1557,13 @@ class _MonitoringEngineCard extends StatelessWidget {
               ),
             ),
             onPressed: () async {
-              await app.forceHighRiskDemo();
+              await app.startSimulatedSeizure(SimSeizureType.tonicClonic);
               if (context.mounted) {
-                AppSnack.warn(
+                AppSnack.info(
                   context,
                   ar
-                      ? '⚡ تم تفعيل سيناريو رصد نوبة: تم رفع درجة الخطر وتفعيل التنبيه والموقع للمرافقين.'
-                      : '⚡ Seizure scenario triggered: Alert raised and location dispatched to caregivers.',
+                      ? 'بدأ الحساس الافتراضي نوبة كاملة. النموذج هو من يقرر إن كان سيصدر إنذارًا.'
+                      : 'The virtual sensor started a full seizure. The model decides whether to alert.',
                 );
               }
             },

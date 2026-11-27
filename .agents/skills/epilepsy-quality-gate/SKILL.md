@@ -17,10 +17,13 @@ Before claiming any tool result, verify what is actually installed and configure
 ## 2. Flutter / Dart Static Analysis & Theme/Safety Audit
 
 - Run `flutter analyze --no-pub` (in `mobile/`) or `dart analyze --fatal-infos mobile/lib/` (when `--fatal-infos` gate is targeted).
-- Audit for high-impact defects documented in the Master Implementation Plan:
+- Audit for high-impact defects documented in the Master Implementation Plan & latest user UX mandates:
   - **Pointer identity session checks**: Flag `identical(..., ...)` comparisons on `AppUser` (`main.dart`, `app_router.dart`, screens).
+  - **Auth/route transition races**: Flag any redirect or router evaluation that flashes Account Settings or a stale route during pending login.
   - **Hardcoded screen colors**: Flag `Colors.white`, `Colors.black`, `Color(0x...)` inside `mobile/lib/features/**` that break Light/Dark mode parity or risk WCAG 2.2 SC 2.3.1 (>3 flashes/sec / FOUC) photosensitivity hazards.
   - **24-hour clock literals**: Flag hardcoded `HH:mm` formatting instead of localized 12-hour `DateFormat.jm` (`ص`/`م`).
+  - **Exposed internal/technical UI copy**: Flag end-user banners exposing server wake-up jargon (e.g., `"جاري إيقاظ الخادم السحابي"`), server URLs, or raw chat status prose (`"قبل الخادم الرسالة"` instead of WhatsApp-style checkmarks).
+  - **Simulator / Virtual-Hardware continuity**: Flag patient monitoring paths that stall on `"لا توجد بيانات كافية"` when virtual hardware simulation is active, or fail to execute full severity-driven seizure escalation and local offline prediction parity.
   - **Unguarded secondary fetches**: Flag unguarded `await api.getList(...)` calls (e.g., `clinicalNotesFor`) or self-revocation `_load()` calls that crash screens on 404/401.
 
 ## 3. Backend, Supabase & Alembic Integrity Audit

@@ -1,19 +1,27 @@
-import 'dart:math' as math;
+import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/enums.dart';
 import '../../core/theme/app_colors.dart';
-import '../../core/theme/app_spacing.dart';
+import '../../core/theme/risk_view.dart';
 import '../../core/ui/common.dart';
 import '../../core/ui/risk_indicator.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/app_state.dart';
-import '../../services/eeg_hardware_device.dart';
+import '../../services/monitoring_service.dart';
+import '../../services/simulator/model_evaluation.dart';
+import '../../services/simulator/sim_types.dart';
+import '../../services/simulator/simulation_scheduler.dart';
 import '../../widgets/app_drawer.dart';
 
-/// Flagship Real-time Vital Telemetry Simulator & Interactive Alert Escalation Screen.
+/// Virtual-sensor control room: what the sensor is streaming now, demo
+/// controls, and how accurately the cloud and phone models are judging it.
+///
+/// The sensor runs by itself (calm for the chosen period, then a full
+/// seizure, and so on). The buttons only change what it streams; whether an
+/// alert is raised is always the model's decision.
 class PatientSimulatorScreen extends StatefulWidget {
   const PatientSimulatorScreen({super.key});
 
@@ -21,1191 +29,447 @@ class PatientSimulatorScreen extends StatefulWidget {
   State<PatientSimulatorScreen> createState() => _PatientSimulatorScreenState();
 }
 
-class _PatientSimulatorScreenState extends State<PatientSimulatorScreen>
-    with TickerProviderStateMixin {
-  late final AnimationController _pulseController;
-  late final Animation<double> _pulseScale;
-  late final AnimationController _waveController;
-  int _currentCyclePhaseIndex = -1;
+class _PatientSimulatorScreenState extends State<PatientSimulatorScreen> {
+  SimSeizureType _type = SimSeizureType.tonicClonic;
+  Timer? _tick;
 
   @override
   void initState() {
     super.initState();
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    )..repeat(reverse: true);
-
-    _pulseScale = Tween<double>(begin: 1.0, end: 1.25).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
-
-    _waveController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 3),
-    )..repeat();
-
-    // Disable automatic pre-alerts while the user is on this screen.
-    // The user has full manual control here; automatic alerts would be annoying.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        context.read<AppState>().monitoring.disableAutoAlerts();
-      }
+    // Countdown refresh.
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
     });
   }
 
   @override
   void dispose() {
-    _pulseController.dispose();
-    _waveController.dispose();
-    // Re-enable automatic alerts when the user leaves the simulator screen.
-    // Use a post-frame callback because dispose() is called after the widget
-    // is removed from the tree but the context may still be accessible.
-    try {
-      context.read<AppState>().monitoring.enableAutoAlerts();
-    } catch (_) {}
+    _tick?.cancel();
     super.dispose();
   }
 
-  void _adjustPulseSpeed(double hr) {
-    if (hr <= 0) return;
-    final beatsPerSec = hr / 60.0;
-    final ms = (1000 / beatsPerSec).clamp(300, 1200).toInt();
-    _pulseController.duration = Duration(milliseconds: ms ~/ 2);
-    // Speed up wave sweep proportionally when heart rate rises (simulating tachycardia)
-    final waveSec = hr > 115 ? 1.5 : (hr > 90 ? 2.2 : 3.0);
-    _waveController.duration = Duration(milliseconds: (waveSec * 1000).toInt());
+  static String _mmss(Duration d) {
+    final m = d.inMinutes.toString().padLeft(2, '0');
+    final s = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
 
-  Future<void> _escalate(AppState app, RiskLabel level) async {
-    await app.monitoring.tick(forcePattern: level);
-    if (!mounted) return;
-    final msg = switch (level) {
-      RiskLabel.stable => 'تم ضبط الحالة: مستقر / طبيعي (إشارات هادئة)',
-      RiskLabel.watch => 'تم رفع الحالة: تنبيه خفيف / متابعة نشاط الدماغ',
-      RiskLabel.highRisk =>
-        'تم تصعيد الحالة: إنذار حرج وتحديد الموقع للمرافقين',
-    };
-    AppSnack.success(context, msg);
-  }
-
-  /// Run a complete seizure cycle automatically using clinical EEG dataset & CNN-LSTM model:
-  /// Interictal → Pre-Ictal (with forecast & countdown) → Ictal (with alert & location) → Post-Ictal (recovery)
-  bool _cycleRunning = false;
-  Future<void> _runFullCycle(AppState app) async {
-    if (_cycleRunning) return;
-    setState(() {
-      _cycleRunning = true;
-      _currentCyclePhaseIndex = 0;
-    });
-
-    app.monitoring.enableAutoAlerts();
-
-    final phases = [
-      (
-        SeizurePhase.interictal,
-        RiskLabel.stable,
-        '1. مرحلة بين النوبات (Interictal) — إشارات طبيعية وهدوء سريري',
-        const Duration(seconds: 4),
-      ),
-      (
-        SeizurePhase.preIctal,
-        RiskLabel.watch,
-        '2. مرحلة ما قبل النوبة (Pre-Ictal) — توقع حدوث نوبة بالذكاء الاصطناعي وبدء الإنذار المبكر',
-        const Duration(seconds: 5),
-      ),
-      (
-        SeizurePhase.ictal,
-        RiskLabel.highRisk,
-        '3. مرحلة النوبة النشطة (Ictal) — شحنات صرعية حادة وتصعيد فوري وإرسال الموقع',
-        const Duration(seconds: 6),
-      ),
-      (
-        SeizurePhase.postIctal,
-        RiskLabel.stable,
-        '4. مرحلة ما بعد النوبة (Post-Ictal) — هدوء الشحنات وتعافي المريض التلقائي',
-        const Duration(seconds: 4),
-      ),
-    ];
-
-    for (var i = 0; i < phases.length; i++) {
-      if (!mounted) break;
-      setState(() => _currentCyclePhaseIndex = i);
-      final (phase, label, msg, duration) = phases[i];
-      app.monitoring.cycleController.forcePhase(phase);
-
-      if (phase == SeizurePhase.preIctal) {
-        await app.simulatePreIctalForecast();
-      } else {
-        await app.monitoring.tick(forcePattern: label);
-      }
-
-      if (mounted) AppSnack.info(context, msg);
-      await Future<void>.delayed(duration);
-    }
-
-    if (mounted) {
-      app.monitoring.disableAutoAlerts();
-      setState(() {
-        _cycleRunning = false;
-        _currentCyclePhaseIndex = -1;
-      });
-      AppSnack.success(context, 'اكتملت محاكاة دورة النوبة السريرية بالكامل ✓');
+  Future<void> _ensureVirtual(AppState app) async {
+    if (app.monitoring.source != SignalSource.simulator) {
+      await app.useSimulator();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final l = AppLocalizations.of(context);
     final app = context.watch<AppState>();
-    final reading = app.monitoring.latestReading;
-    final assessment = app.monitoring.latestAssessment;
-    final prediction = app.monitoring.latestPrediction;
-    final hr = reading?.hr ?? 72.0;
-    _adjustPulseSpeed(hr);
-
-    final riskTone = AppColors.of(context, app.riskView);
-
+    final ar = AppLocalizations.of(context).isArabic;
+    final m = app.monitoring;
+    final sim = m.simulation;
     return Scaffold(
       drawer: const AppDrawer(),
       appBar: AppBar(
-        title: const Text('محاكي الإشارات الحيوية والتصعيد'),
-        actions: [
-          IconButton(
-            tooltip: 'تحديث القياسات',
-            onPressed: () => app.monitoring.tick(),
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-        ],
+        title: Text(
+          ar ? 'الحساس الافتراضي والمحاكاة' : 'Virtual sensor & simulation',
+        ),
       ),
-      body: ListView(
-        padding: Insets.pageBottomSafe,
-        children: [
-          // 0. Live Pre-Alert Countdown Banner if active
-          if (app.preAlert != null) ...[
-            Container(
-              padding: Insets.card,
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.amber.shade900.withValues(alpha: 0.25)
-                    : Colors.amber.shade50,
-                borderRadius: Radii.rMd,
-                border: Border.all(
-                  color: isDark ? Colors.amber.shade700 : Colors.amber.shade600,
-                  width: 2,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.amber.withValues(alpha: isDark ? 0.3 : 0.15),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
+      body: ListenableBuilder(
+        listenable: Listenable.merge([sim, m.evaluation]),
+        builder: (context, _) {
+          final truth = sim.current;
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+            children: [
+              if (m.source != SignalSource.simulator)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: InfoNote(
+                    text: ar
+                        ? 'مصدر الإشارات الحالي ليس الحساس الافتراضي.'
+                        : 'The current signal source is not the virtual sensor.',
+                    view: RiskView.caution,
                   ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: Colors.amber.shade700,
-                      shape: BoxShape.circle,
+                ),
+              _StatusCard(sim: sim, truth: truth, ar: ar, mmss: _mmss),
+              const SizedBox(height: 12),
+              _ModelNow(app: app, ar: ar),
+              const SizedBox(height: 16),
+              SectionCard(
+                title: ar ? 'التحكم للعرض والمناقشة' : 'Demo controls',
+                icon: Icons.tune,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      ar ? 'نوع النوبة' : 'Seizure type',
+                      style: Theme.of(context).textTheme.labelLarge,
                     ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      '${app.preAlertSecondsLeft}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 22,
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final t in SimSeizureType.values)
+                          ChoiceChip(
+                            label: Text(t.label(ar)),
+                            selected: _type == t,
+                            onSelected: (_) => setState(() => _type = t),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.of(
+                          context,
+                          RiskView.danger,
+                        ).solid,
+                        foregroundColor: AppColors.of(
+                          context,
+                          RiskView.danger,
+                        ).onSolid,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      onPressed: () async {
+                        await _ensureVirtual(app);
+                        m.simulationControl((s) => s.startSeizure(_type));
+                        if (context.mounted) {
+                          AppSnack.info(
+                            context,
+                            ar
+                                ? 'بدأت نوبة «${_type.label(true)}» من بدايتها. النموذج هو من يقرر الإنذار.'
+                                : '«${_type.label(false)}» started from the beginning. The model decides on alerts.',
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.bolt),
+                      label: Text(
+                        sim.inEpisode
+                            ? (ar
+                                  ? 'ابدأ النوبة المختارة من جديد'
+                                  : 'Start the chosen seizure over')
+                            : (ar ? 'ابدأ نوبة الآن' : 'Start a seizure now'),
                       ),
                     ),
-                  ),
-                  Gap.hMd,
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    const SizedBox(height: 8),
+                    Row(
                       children: [
-                        const Text(
-                          'إنذار ما قبل النوبة نشط (Pre-Ictal)',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: sim.inEpisode
+                                ? () => m.simulationControl(
+                                    (s) => s.restartSeizure(),
+                                  )
+                                : null,
+                            icon: const Icon(Icons.replay),
+                            label: Text(ar ? 'أعد النوبة' : 'Restart'),
                           ),
                         ),
-                        Gap.vXs,
-                        Text(
-                          'سيتم التصعيد التلقائي للأسرة والطبيب خلال ${app.preAlertSecondsLeft} ثانية إذا لم يتم الإلغاء',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: isDark
-                                ? Colors.amber.shade200
-                                : Colors.amber.shade900,
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: sim.inEpisode
+                                ? () =>
+                                      m.simulationControl((s) => s.endSeizure())
+                                : null,
+                            icon: const Icon(Icons.stop_circle_outlined),
+                            label: Text(ar ? 'أنهِ النوبة' : 'End seizure'),
                           ),
                         ),
                       ],
                     ),
-                  ),
-                  Gap.hSm,
-                  FilledButton.tonal(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: isDark
-                          ? Colors.amber.shade800
-                          : Colors.amber.shade200,
-                    ),
-                    onPressed: () => app.cancelPreAlert(),
-                    child: const Text('إلغاء التنبيه'),
-                  ),
-                ],
-              ),
-            ),
-            Gap.vMd,
-          ],
-
-          // 1. Live Patient Status Header Card
-          Container(
-            padding: Insets.card,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [riskTone.container, theme.colorScheme.surface],
-                begin: Alignment.topRight,
-                end: Alignment.bottomLeft,
-              ),
-              borderRadius: Radii.rMd,
-              border: Border.all(
-                color: riskTone.solid.withValues(alpha: 0.5),
-                width: 1.5,
-              ),
-            ),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(Gap.sm),
-                            decoration: BoxDecoration(
-                              color: riskTone.solid,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              Icons.sensors,
-                              color: riskTone.onSolid,
-                              size: 20,
-                            ),
-                          ),
-                          Gap.hSm,
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'الحالة الفسيولوجية الحالية',
-                                  style: theme.textTheme.labelMedium?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                                Text(
-                                  RiskCopy.title(app.riskView, l),
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color: riskTone.foreground,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                    const Divider(height: 28),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: sim.autoCycle,
+                      onChanged: (v) =>
+                          m.simulationControl((s) => s.setAutoCycle(v)),
+                      title: Text(ar ? 'الدورة التلقائية' : 'Automatic cycle'),
+                      subtitle: Text(
+                        ar
+                            ? 'فترة مستقرة ثم نوبة كاملة، وهكذا باستمرار'
+                            : 'A calm period, then a full seizure, continuously',
                       ),
                     ),
-                    Gap.hSm,
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: Gap.sm,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.surface,
-                        borderRadius: BorderRadius.circular(Radii.pill),
-                        border: Border.all(
-                          color: theme.colorScheme.outlineVariant,
-                        ),
-                      ),
-                      child: Text(
-                        // No assessment -> no number (never a default 95 %).
-                        assessment == null
-                            ? 'ثقة النموذج: —'
-                            : 'ثقة النموذج: ${(assessment.confidence * 100).toInt()}%',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                    Text(
+                      ar ? 'مدة الفترة المستقرة' : 'Calm period length',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        for (final minutes in const [1, 3, 5, 10])
+                          ChoiceChip(
+                            label: Text(ar ? '$minutes د' : '$minutes min'),
+                            selected: sim.stableDuration.inMinutes == minutes,
+                            onSelected: (_) => m.simulationControl(
+                              (s) => s.setStableDuration(
+                                Duration(minutes: minutes),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ],
                 ),
-                if (prediction != null && prediction.predicted) ...[
-                  const Divider(height: Gap.lg),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.warning_amber_rounded,
-                        color: riskTone.solid,
-                        size: 20,
-                      ),
-                      Gap.hSm,
-                      Expanded(
-                        child: Text(
-                          'توقع اقتراب نوبة محتملة خلال ${prediction.leadTimeMin?.round() ?? 15} دقيقة',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: riskTone.foreground,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-          Gap.vMd,
-
-          // 2. Cardiac Telemetry (Heart Rate & ECG)
-          _TelemetryCard(
-            title: 'نبض القلب والنشاط القلبي (ECG)',
-            icon: Icons.favorite,
-            accentColor: Colors.redAccent,
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          ScaleTransition(
-                            scale: _pulseScale,
-                            child: const Icon(
-                              Icons.favorite,
-                              color: Colors.redAccent,
-                              size: 36,
-                            ),
-                          ),
-                          Gap.hMd,
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text.rich(
-                                  TextSpan(
-                                    text: '${hr.toInt()} ',
-                                    style: theme.textTheme.headlineMedium
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.bold,
-                                          color: theme.colorScheme.onSurface,
-                                        ),
-                                    children: [
-                                      TextSpan(
-                                        text: 'BPM (نبضة/دقيقة)',
-                                        style: theme.textTheme.bodySmall
-                                            ?.copyWith(
-                                              color: theme
-                                                  .colorScheme
-                                                  .onSurfaceVariant,
-                                            ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Text(
-                                  hr > 120
-                                      ? 'تسارع قلبي حاد (مصاحب للنوبة)'
-                                      : hr > 90
-                                      ? 'معدل متزايد (نشاط تنبيهي)'
-                                      : 'إيقاع جيبي طبيعي (منتظم)',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: hr > 100
-                                        ? Colors.redAccent
-                                        : Colors.green,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                Gap.vSm,
-                // Live moving ECG waveform graph
-                AnimatedBuilder(
-                  animation: _waveController,
-                  builder: (context, _) => _LiveOscilloscopeWave(
-                    data: reading?.ecg ?? const [],
-                    lineColor: Colors.redAccent,
-                    progress: _waveController.value,
-                    height: 75,
-                    label: 'ECG LEAD II (mV)',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Gap.vMd,
-
-          // 3. Neurological Telemetry (EEG Brain Waves)
-          _TelemetryCard(
-            title: 'النشاط الكهربائي للدماغ (EEG Brain Waves)',
-            icon: Icons.psychology_outlined,
-            accentColor: Colors.blueAccent,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Live moving EEG waveform graph
-                AnimatedBuilder(
-                  animation: _waveController,
-                  builder: (context, _) => _LiveOscilloscopeWave(
-                    data: reading?.eeg ?? const [],
-                    lineColor: const Color(0xFF00E5FF),
-                    progress: _waveController.value,
-                    height: 95,
-                    label: 'EEG FP1-F3 (µV)',
-                  ),
-                ),
-                Gap.vSm,
-                // Brain wave breakdown chips. These are a teaching aid driven
-                // by the simulated heart rate, not a spectral EEG analysis —
-                // say so instead of implying measured band activity.
-                Text(
-                  'توضيحي للمحاكاة: مُشتق من نبض المحاكاة، وليس تحليلاً طيفياً لإشارة EEG.',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                Gap.vXs,
-                Wrap(
-                  spacing: Gap.sm,
-                  runSpacing: Gap.xs,
-                  children: [
-                    _FrequencyBadge(
-                      label: 'Alpha (8-13 Hz)',
-                      active: hr < 90,
-                      color: Colors.green,
-                    ),
-                    _FrequencyBadge(
-                      label: 'Beta (13-30 Hz)',
-                      active: hr >= 90 && hr <= 110,
-                      color: Colors.amber,
-                    ),
-                    _FrequencyBadge(
-                      label: 'Theta (4-8 Hz)',
-                      active: hr >= 85,
-                      color: Colors.blue,
-                    ),
-                    _FrequencyBadge(
-                      label: 'Spikes (شحنات صرعية)',
-                      active: hr > 115,
-                      color: Colors.redAccent,
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Gap.vMd,
-
-          // 4. Motion & Tremor Telemetry
-          _TelemetryCard(
-            title: 'مستشعر الحركة والتشنج العضلي (Motion & Tremors)',
-            icon: Icons.directions_run_outlined,
-            accentColor: Colors.teal,
-            child: Column(
-              children: [
-                // Live moving Motion waveform graph
-                AnimatedBuilder(
-                  animation: _waveController,
-                  builder: (context, _) => _LiveOscilloscopeWave(
-                    data: reading?.motion ?? const [],
-                    lineColor: const Color(0xFF00E676),
-                    progress: _waveController.value,
-                    height: 60,
-                    label: 'ACCELEROMETER (g)',
-                  ),
-                ),
-                Gap.vXs,
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    reading != null &&
-                            reading.motion.isNotEmpty &&
-                            reading.motion.any((m) => m.abs() > 0.8)
-                        ? '⚠️ رصد اهتزازات وتشنجات حركية شديدة'
-                        : 'الحركة ضمن الحدود الطبيعية المستقرة',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color:
-                          reading != null &&
-                              reading.motion.any((m) => m.abs() > 0.8)
-                          ? Colors.deepOrange
-                          : Colors.teal,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Gap.vLg,
-
-          // 5. Interactive Multi-Tier Escalation Panel
-          Text(
-            'لوحة التحكم وتصعيد حالة المريض',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          Gap.vXs,
-          Text(
-            'حدد درجة خطورة الحالة لمحاكاة الاستجابة وتوليد التنبيهات اللازمة فوراً:',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          Gap.vMd,
-
-          // Tier 1: Stable
-          _EscalateButton(
-            title: 'المستوى 1: مستقر / طبيعي (Stable Baseline)',
-            subtitle:
-                'نبض 70-75 BPM، إشارات دماغ هادئة (ألفا)، لا توجد تنبيهات',
-            color: Colors.green,
-            icon: Icons.check_circle_outline,
-            onPressed: () => _escalate(app, RiskLabel.stable),
-          ),
-          Gap.vSm,
-
-          // Tier 2: Watch / Mild Alert
-          _EscalateButton(
-            title: 'المستوى 2: تنبيه خفيف / مراقبة (Watch / Mild)',
-            subtitle: 'نبض 90-95 BPM، نشاط إشارات غير معتاد للمتابعة',
-            color: Colors.amber.shade700,
-            icon: Icons.visibility_outlined,
-            onPressed: () => _escalate(app, RiskLabel.watch),
-          ),
-          Gap.vSm,
-
-          // Tier 3: Moderate / Pre-Ictal Warning
-          _EscalateButton(
-            title: 'المستوى 3: إنذار استباقي / ما قبل النوبة (Pre-Ictal)',
-            subtitle:
-                'نبض 110+ BPM، تفريغات استباقية، ونافذة عد تنازلي 30 ثانية حية',
-            color: Colors.deepOrange,
-            icon: Icons.timer,
-            onPressed: () async {
-              await app.simulatePreIctalForecast();
-              if (context.mounted) {
-                AppSnack.warn(
-                  context,
-                  'تم تفعيل إنذار ما قبل النوبة وبدء عداد الـ 30 ثانية!',
-                );
-              }
-            },
-          ),
-          Gap.vSm,
-
-          // Tier 4: Critical / Active Seizure Alert
-          _EscalateButton(
-            title: 'المستوى 4: إنذار حرج / نوبة صرع نشطة (Critical)',
-            subtitle:
-                'نبض 130+ BPM، تفريغات حادة، تشنجات، إشعار فوري للأسرة والطبيب',
-            color: Colors.red.shade700,
-            icon: Icons.notification_important,
-            isCritical: true,
-            onPressed: () => _escalate(app, RiskLabel.highRisk),
-          ),
-          Gap.vLg,
-
-          // ── Full Seizure Cycle ─────────────────────────────────────────
-          const Divider(),
-          Gap.vSm,
-          _SeizurePhaseIndicator(
-            phase: app.monitoring.cycleController.currentPhase,
-            activeCycleIndex: _currentCyclePhaseIndex,
-          ),
-          Gap.vMd,
-
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: _cycleRunning
-                    ? theme.colorScheme.surfaceContainerHighest
-                    : const Color(0xFF6C3483),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(Radii.md),
-                ),
               ),
-              icon: _cycleRunning
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.auto_mode_rounded),
-              label: Text(
-                _cycleRunning
-                    ? 'جاري محاكاة الدورة السريرية بالذكاء الاصطناعي...'
-                    : 'محاكاة دورة نوبة كاملة (4 مراحل سريرية)',
-                style: const TextStyle(fontWeight: FontWeight.bold),
+              const SizedBox(height: 16),
+              _AccuracyPanel(evaluation: m.evaluation, ar: ar),
+              const SizedBox(height: 12),
+              Text(
+                sim.generator.library.isReal
+                    ? (ar
+                          ? 'الإشارات من تسجيلات EEG حقيقية (Bonn) لم تُستخدم في تدريب النماذج، مع تنويع لكل نوبة.'
+                          : 'Signals come from real EEG recordings (Bonn) never used to train the models, varied per seizure.')
+                    : (ar
+                          ? 'مكتبة الإشارات الحقيقية غير متاحة؛ تُستخدم إشارات بديلة.'
+                          : 'Real signal library unavailable; using fallback signals.'),
+                style: Theme.of(context).textTheme.bodySmall,
               ),
-              onPressed: _cycleRunning ? null : () => _runFullCycle(app),
-            ),
-          ),
-          Gap.vXs,
-          Text(
-            'بين النوبات ← ما قبل النوبة (إنذار مبكر) ← أثناء النوبة (تحديد الموقع) ← التعافي',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
 }
 
-class _SeizurePhaseIndicator extends StatelessWidget {
-  const _SeizurePhaseIndicator({
-    required this.phase,
-    this.activeCycleIndex = -1,
+class _StatusCard extends StatelessWidget {
+  const _StatusCard({
+    required this.sim,
+    required this.truth,
+    required this.ar,
+    required this.mmss,
   });
 
-  final SeizurePhase phase;
-  final int activeCycleIndex;
+  final SimulationScheduler sim;
+  final SimTruth truth;
+  final bool ar;
+  final String Function(Duration) mmss;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final (color, icon, label) = switch (phase) {
-      SeizurePhase.interictal => (
-        Colors.green,
-        Icons.check_circle_outline,
-        'المرحلة: بين النوبات (Interictal — إشارات مستقرة)',
-      ),
-      SeizurePhase.preIctal => (
-        Colors.orange,
-        Icons.warning_amber_rounded,
-        'المرحلة: ما قبل النوبة (Pre-Ictal — تنبؤ الذكاء الاصطناعي)',
-      ),
-      SeizurePhase.ictal => (
-        Colors.red,
-        Icons.notification_important,
-        'المرحلة: أثناء النوبة (Ictal — شحنات صرعية وتنبيه طوارئ)',
-      ),
-      SeizurePhase.postIctal => (
-        Colors.blue,
-        Icons.bedtime_rounded,
-        'المرحلة: ما بعد النوبة (Post-Ictal — تعافٍ فسيولوجي)',
-      ),
-    };
-
-    final stages = [
-      ('1. هدوء', Colors.green),
-      ('2. ما قبل النوبة', Colors.orange),
-      ('3. نوبة نشطة', Colors.red),
-      ('4. تعافٍ', Colors.blue),
-    ];
-
+    final view = truth.phase == SimPhase.stable
+        ? RiskView.safe
+        : truth.phase.isSeizure
+        ? RiskView.danger
+        : RiskView.caution;
+    final tone = AppColors.of(context, view);
+    final ep = sim.episode;
+    final remaining = sim.remaining;
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(Radii.md),
-        border: Border.all(color: color.withValues(alpha: 0.4), width: 1.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: color, size: 22),
-              Gap.hMd,
-              Expanded(
-                child: Text(
-                  label,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              ),
-            ],
-          ),
-          Gap.vSm,
-          // 4-Phase Stepper Tracker
-          Row(
-            children: [
-              for (var i = 0; i < stages.length; i++) ...[
-                if (i > 0)
-                  Expanded(
-                    child: Container(
-                      height: 2,
-                      color: activeCycleIndex >= i
-                          ? stages[i].$2
-                          : theme.colorScheme.outlineVariant,
-                    ),
-                  ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: activeCycleIndex == i
-                        ? stages[i].$2
-                        : (activeCycleIndex > i
-                              ? stages[i].$2.withValues(alpha: 0.25)
-                              : theme.colorScheme.surface),
-                    borderRadius: BorderRadius.circular(Radii.pill),
-                    border: Border.all(
-                      color: activeCycleIndex >= i
-                          ? stages[i].$2
-                          : theme.colorScheme.outlineVariant,
-                      width: activeCycleIndex == i ? 1.5 : 1,
-                    ),
-                  ),
-                  child: Text(
-                    stages[i].$1,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: activeCycleIndex == i
-                          ? FontWeight.bold
-                          : FontWeight.normal,
-                      color: activeCycleIndex == i
-                          ? Colors.white
-                          : (activeCycleIndex > i
-                                ? stages[i].$2
-                                : theme.colorScheme.onSurfaceVariant),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TelemetryCard extends StatelessWidget {
-  const _TelemetryCard({
-    required this.title,
-    required this.icon,
-    required this.accentColor,
-    required this.child,
-  });
-
-  final String title;
-  final IconData icon;
-  final Color accentColor;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: Insets.card,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: Radii.rMd,
-        border: Border.all(
-          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.6),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: tone.container,
+        borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(icon, size: 20, color: accentColor),
-              Gap.hSm,
-              // Expanded: long bilingual titles wrap instead of overflowing
-              // narrow phones (was 32 px over at 390 dp).
-              Expanded(
-                child: Text(
-                  title,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
+          Text(
+            ar ? 'الحساس يبث الآن' : 'Sensor is streaming',
+            style: TextStyle(color: tone.foreground, fontSize: 12),
           ),
-          const Divider(height: Gap.md),
-          child,
+          const SizedBox(height: 4),
+          Text(
+            truth.phase.label(ar),
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              color: tone.foreground,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          if (ep != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${ep.type.label(ar)} · ${ar ? 'النوبة رقم' : 'Seizure #'}${ep.number}',
+              style: TextStyle(color: tone.foreground),
+            ),
+          ],
+          const SizedBox(height: 10),
+          LinearProgressIndicator(
+            value: truth.progress.clamp(0.0, 1.0),
+            color: tone.solid,
+            backgroundColor: tone.solid.withValues(alpha: .2),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            ep == null
+                ? (sim.autoCycle
+                      ? (ar
+                            ? 'النوبة التالية بعد ${mmss(remaining)}'
+                            : 'Next seizure in ${mmss(remaining)}')
+                      : (ar
+                            ? 'الدورة التلقائية متوقفة'
+                            : 'Automatic cycle is off'))
+                : (ar
+                      ? 'متبقٍ في هذه المرحلة ${mmss(remaining)}'
+                      : '${mmss(remaining)} left in this phase'),
+            style: TextStyle(
+              color: tone.foreground,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-class _FrequencyBadge extends StatelessWidget {
-  const _FrequencyBadge({
-    required this.label,
-    required this.active,
-    required this.color,
-  });
+/// What the model is deciding right now (never the simulator's truth).
+class _ModelNow extends StatelessWidget {
+  const _ModelNow({required this.app, required this.ar});
 
-  final String label;
-  final bool active;
-  final Color color;
+  final AppState app;
+  final bool ar;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: 3),
-      decoration: BoxDecoration(
-        color: active
-            ? color.withValues(alpha: 0.15)
-            : theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(Radii.pill),
-        border: Border.all(
-          color: active ? color : theme.colorScheme.outlineVariant,
-        ),
-      ),
-      child: Text(
-        label,
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: active ? color : theme.colorScheme.onSurfaceVariant,
-          fontWeight: active ? FontWeight.bold : FontWeight.normal,
-        ),
+    final a = app.monitoring.latestAssessment;
+    final engine = a?.features['engine'];
+    final onPhone = engine == 'edge_onnx' || engine == 'edge_multimodal';
+    final forecast = (a?.features['preictal_prob'] as num?)?.toDouble();
+    return SectionCard(
+      title: ar ? 'قرار النموذج الآن' : 'Model decision now',
+      icon: Icons.psychology_outlined,
+      trailing: RiskBadge(view: app.riskView, dense: true),
+      child: Column(
+        children: [
+          LabeledValue(
+            label: ar ? 'النموذج' : 'Model',
+            value: a == null
+                ? '—'
+                : onPhone
+                ? (ar ? 'المحلي (على الهاتف)' : 'Phone (local)')
+                : (ar ? 'السحابي' : 'Cloud'),
+          ),
+          LabeledValue(
+            label: ar ? 'احتمال النوبة القادمة' : 'Seizure forecast',
+            value: forecast == null ? '—' : '${(forecast * 100).round()}%',
+          ),
+          LabeledValue(
+            label: ar ? 'نبض القلب' : 'Heart rate',
+            value: app.monitoring.latestReading == null
+                ? '—'
+                : '${app.monitoring.latestReading!.hr.round()}',
+          ),
+        ],
       ),
     );
   }
 }
 
-class _EscalateButton extends StatelessWidget {
-  const _EscalateButton({
-    required this.title,
-    required this.subtitle,
-    required this.color,
-    required this.icon,
-    required this.onPressed,
-    this.isCritical = false,
-  });
+class _AccuracyPanel extends StatelessWidget {
+  const _AccuracyPanel({required this.evaluation, required this.ar});
 
-  final String title;
-  final String subtitle;
-  final Color color;
-  final IconData icon;
-  final VoidCallback onPressed;
-  final bool isCritical;
+  final ModelEvaluation evaluation;
+  final bool ar;
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(Radii.md),
-      child: Container(
-        padding: const EdgeInsets.all(Gap.md),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: isCritical ? 0.12 : 0.06),
-          borderRadius: BorderRadius.circular(Radii.md),
-          border: Border.all(
-            color: color.withValues(alpha: isCritical ? 0.8 : 0.4),
-            width: isCritical ? 2 : 1,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(Gap.sm),
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              child: Icon(icon, color: Colors.white, size: 22),
-            ),
-            Gap.hMd,
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+  String _pct(double? v) => v == null ? '—' : '${(v * 100).round()}%';
+
+  Widget _column(BuildContext context, String title, EngineMetrics m) {
+    final rows = <(String, String)>[
+      (ar ? 'النوافذ المقيّمة' : 'Windows scored', '${m.windows}'),
+      (ar ? 'النوبات' : 'Seizures', '${m.seizureEpisodes}'),
+      (ar ? 'نسبة الاكتشاف' : 'Detected', _pct(m.sensitivity)),
+      (
+        ar ? 'زمن الاكتشاف' : 'Time to detect',
+        m.meanDetectionSeconds == null
+            ? '—'
+            : '${m.meanDetectionSeconds!.toStringAsFixed(0)} ${ar ? 'ث' : 's'}',
+      ),
+      (ar ? 'تنبأ قبل النوبة' : 'Warned before', _pct(m.forecastRate)),
+      (
+        ar ? 'إنذارات كاذبة/ساعة' : 'False alarms/hour',
+        m.falseAlarmsPerHour == null
+            ? '—'
+            : m.falseAlarmsPerHour!.toStringAsFixed(1),
+      ),
+    ];
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          for (final (k, v) in rows)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
                 children: [
-                  Text(
-                    title,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: color,
+                  Expanded(
+                    child: Text(
+                      k,
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
-                  Gap.vXs,
-                  Text(
-                    subtitle,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
+                  Text(v, style: const TextStyle(fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
-            Icon(Icons.arrow_forward_ios_rounded, size: 14, color: color),
-          ],
-        ),
+        ],
       ),
     );
   }
-}
-
-class _LiveOscilloscopeWave extends StatelessWidget {
-  const _LiveOscilloscopeWave({
-    required this.data,
-    required this.lineColor,
-    required this.progress,
-    required this.height,
-    this.label,
-  });
-
-  final List<double> data;
-  final Color lineColor;
-  final double progress;
-  final double height;
-  final String? label;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: height,
-      width: double.infinity,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D1520), // Clinical dark monitor display
-        borderRadius: BorderRadius.circular(Radii.sm),
-        border: Border.all(
-          color: lineColor.withValues(alpha: 0.35),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.18),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Stack(
+    final cloud = evaluation.metricsFor(EvalEngine.cloud);
+    final phone = evaluation.metricsFor(EvalEngine.phone);
+    return SectionCard(
+      title: ar ? 'دقة النموذجين' : 'Model accuracy',
+      icon: Icons.analytics_outlined,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 1. Grid Background & Moving Oscilloscope Waveform
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _OscilloscopeWavePainter(
-                data: data,
-                lineColor: lineColor,
-                progress: progress,
-              ),
-            ),
+          Text(
+            ar
+                ? 'مقارنة ما بثّه الحساس فعلًا بما قرره كل نموذج على الإشارة نفسها.'
+                : 'What the sensor really streamed vs what each model decided on the same signal.',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
-          // 2. Clinical Monitor Overlay Tag
-          if (label != null)
-            Positioned(
-              top: 5,
-              left: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-                child: Text(
-                  label!,
-                  style: TextStyle(
-                    color: lineColor.withValues(alpha: 0.85),
-                    fontSize: 9.0,
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
-                  ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _column(context, ar ? '☁️ السحابي' : '☁️ Cloud', cloud),
+              const SizedBox(width: 16),
+              _column(context, ar ? '📱 المحلي' : '📱 Phone', phone),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: evaluation.records.isEmpty
+                      ? null
+                      : () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: evaluation.toCsv()),
+                          );
+                          if (context.mounted) {
+                            AppSnack.success(
+                              context,
+                              ar
+                                  ? 'نُسخت النتائج (CSV) — الصقها في Excel أو التقرير.'
+                                  : 'Results copied as CSV — paste into Excel or your report.',
+                            );
+                          }
+                        },
+                  icon: const Icon(Icons.copy_all_outlined),
+                  label: Text(ar ? 'نسخ النتائج CSV' : 'Copy results CSV'),
                 ),
               ),
-            ),
-          // 3. Live 256Hz Pill Indicator
-          Positioned(
-            top: 5,
-            right: 8,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: lineColor,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: lineColor,
-                        blurRadius: 4,
-                        spreadRadius: 1,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  'LIVE 256Hz',
-                  style: TextStyle(
-                    color: lineColor.withValues(alpha: 0.75),
-                    fontSize: 8.5,
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: evaluation.records.isEmpty ? null : evaluation.clear,
+                child: Text(ar ? 'تصفير' : 'Reset'),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
-}
-
-class _OscilloscopeWavePainter extends CustomPainter {
-  _OscilloscopeWavePainter({
-    required this.data,
-    required this.lineColor,
-    required this.progress,
-  });
-
-  final List<double> data;
-  final Color lineColor;
-  final double progress; // 0.0 to 1.0 (continuous sweep)
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final width = size.width;
-    final height = size.height;
-    final midY = height / 2;
-
-    // 1. Draw subtle clinical grid lines (16px spacing)
-    final gridPaint = Paint()
-      ..color = const Color(0xFF1E2D40).withValues(alpha: 0.45)
-      ..strokeWidth = 0.5;
-
-    const gridSize = 16.0;
-    for (double x = 0; x < width; x += gridSize) {
-      canvas.drawLine(Offset(x, 0), Offset(x, height), gridPaint);
-    }
-    for (double y = 0; y < height; y += gridSize) {
-      canvas.drawLine(Offset(0, y), Offset(width, y), gridPaint);
-    }
-
-    // Baseline center axis
-    final centerAxisPaint = Paint()
-      ..color = lineColor.withValues(alpha: 0.15)
-      ..strokeWidth = 0.8;
-    canvas.drawLine(Offset(0, midY), Offset(width, midY), centerAxisPaint);
-
-    // If data is empty, synthesize a baseline waveform
-    final samples = data.isNotEmpty
-        ? data
-        : List<double>.generate(128, (i) => 0.1 * math.sin(i * 0.1));
-
-    final count = samples.length;
-    final sweepX = progress * width;
-
-    // 2. Prepare glowing & solid trace paints
-    final glowPaint = Paint()
-      ..color = lineColor.withValues(alpha: 0.35)
-      ..strokeWidth = 3.5
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    final tracePaint = Paint()
-      ..color = lineColor
-      ..strokeWidth = 1.8
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    // Sample cyclically based on progress so the waveform fluidly flows horizontally:
-    final int offset = (progress * count).floor();
-    final path = Path();
-    final dx = width / (count - 1);
-
-    double? lastY;
-    double? headY;
-
-    for (var i = 0; i < count; i++) {
-      final sampleIdx = (i + offset) % count;
-      final rawVal = samples[sampleIdx];
-      final y = (midY - rawVal * (height * 0.38)).clamp(3.0, height - 3.0);
-      final x = i * dx;
-
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
-      lastY = y;
-      if (headY == null && x >= sweepX) {
-        headY = y;
-      }
-    }
-
-    // Draw glow and primary trace
-    canvas.drawPath(path, glowPaint);
-    canvas.drawPath(path, tracePaint);
-
-    // 3. Draw moving oscilloscope scan beam & glowing leading head
-    headY ??= lastY ?? midY;
-
-    // Vertical sweeping scan bar (faint vertical beam)
-    final scanBarPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          lineColor.withValues(alpha: 0.0),
-          lineColor.withValues(alpha: 0.22),
-          lineColor.withValues(alpha: 0.0),
-        ],
-      ).createShader(Rect.fromLTWH(sweepX - 8, 0, 16, height));
-    canvas.drawRect(Rect.fromLTWH(sweepX - 8, 0, 16, height), scanBarPaint);
-
-    // Glowing leading head dot
-    final dotGlow = Paint()
-      ..color = Colors.white
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
-    canvas.drawCircle(Offset(sweepX, headY), 4.0, dotGlow);
-
-    final dotSolid = Paint()..color = Colors.white;
-    canvas.drawCircle(Offset(sweepX, headY), 2.2, dotSolid);
-  }
-
-  @override
-  bool shouldRepaint(covariant _OscilloscopeWavePainter oldDelegate) =>
-      oldDelegate.progress != progress || oldDelegate.data != data;
 }

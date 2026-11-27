@@ -6,6 +6,7 @@ import '../../core/ui/common.dart';
 import '../../models/models.dart';
 import '../../providers/app_state.dart';
 import '../../widgets/care_sync_status_card.dart';
+import '../admin/admin_security_guard.dart';
 
 class PrivacyRequestsScreen extends StatefulWidget {
   const PrivacyRequestsScreen({super.key});
@@ -132,6 +133,11 @@ class _PrivacyRequestsScreenState extends State<PrivacyRequestsScreen> {
 
   Future<void> _review(Map<String, dynamic> row) async {
     if (!_current || !_admin || _busy) return;
+    final verified = await requireAdminVerification(
+      context,
+      _ar ? 'مراجعة طلب حذف الحساب' : 'Review account erasure request',
+    );
+    if (!verified || !mounted || !_current) return;
     setState(() => _busy = true);
     await showDialog<bool>(
       context: context,
@@ -163,7 +169,7 @@ class _PrivacyRequestsScreenState extends State<PrivacyRequestsScreen> {
   }
 
   String _status(String value) => switch (value) {
-    'received' => _ar ? 'استلمه الخادم' : 'Received by server',
+    'received' => _ar ? 'تم الاستلام' : 'Received',
     'under_review' => _ar ? 'قيد مراجعة الإدارة' : 'Under administrator review',
     'rejected' =>
       _ar ? 'يتعذر تنفيذه؛ راجع السبب' : 'Cannot proceed; see the reason',
@@ -222,8 +228,8 @@ class _PrivacyRequestsScreenState extends State<PrivacyRequestsScreen> {
             if (_queued)
               Text(
                 _ar
-                    ? 'حُفظ طلبك محليًا. حدّث القائمة بعد إرساله لتأكيد استلام الخادم.'
-                    : 'Saved locally. Refresh after delivery to confirm server receipt.',
+                    ? 'حُفظ طلبك وسيُرسل تلقائيًا عند توفر الاتصال.'
+                    : 'Your request is saved and will be sent automatically when you are online.',
               ),
             if (_loading) const LinearProgressIndicator(),
             if (_failure != null)
@@ -244,11 +250,7 @@ class _PrivacyRequestsScreenState extends State<PrivacyRequestsScreen> {
                 ),
               ),
             if (_loaded && _rows.isEmpty)
-              Text(
-                _ar
-                    ? 'لا توجد طلبات مستلمة على الخادم.'
-                    : 'No requests received by the server.',
-              ),
+              Text(_ar ? 'لا توجد طلبات حتى الآن.' : 'No requests yet.'),
             if (_more)
               Text(
                 _ar

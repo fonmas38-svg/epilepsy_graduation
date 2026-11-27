@@ -1,7 +1,7 @@
 name: epilepsy_monitor
 description: Smart epileptic patient monitoring and early seizure prediction
 publish_to: "none"
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ^3.10.4
@@ -62,3 +62,4 @@ flutter:
   assets:
     - assets/images/
     - assets/models/
+    - assets/simulator/

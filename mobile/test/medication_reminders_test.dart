@@ -218,6 +218,7 @@ void main() {
 
       // Patient sign-in: even with monitoring stopped, reminders are scheduled.
       await state.signInWithPassword(username: 'pat-1', password: 'pw');
+      await state.backgroundWorkDone;
       await state.setMonitoringEnabled(false);
       expect(state.monitoring.running, isFalse);
       expect(gateway.scheduled, isNotEmpty);
@@ -231,6 +232,7 @@ void main() {
       currentRole = 'doctor';
       currentId = 'doc-1';
       await state.signInWithPassword(username: 'doc-1', password: 'pw');
+      await state.backgroundWorkDone;
       expect(gateway.scheduled, isEmpty);
       await state.signOut();
 
@@ -238,6 +240,7 @@ void main() {
       currentRole = 'caregiver';
       currentId = 'cg-1';
       await state.signInWithPassword(username: 'cg-1', password: 'pw');
+      await state.backgroundWorkDone;
       expect(gateway.scheduled, isEmpty);
 
       state.dispose();

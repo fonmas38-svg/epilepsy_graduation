@@ -6,7 +6,7 @@ services:
     name: epilepsy-backend
     runtime: python
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: cd backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: cd backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'
     envVars:
       - key: APP_ENV
         value: production
@@ -23,7 +23,8 @@ services:
       - key: JWT_EXPIRE_MINUTES
         value: "60"
       - key: SESSION_LIFETIME_SECONDS
-        value: "31536000"
+        # 30 days, renewed while the app is in use (sliding expiry).
+        value: "2592000"
       - key: RUN_MIGRATIONS_ON_STARTUP
         value: "0"
       - key: NOTIFICATION_CHANNEL

@@ -1,5 +1,23 @@
 import '../core/enums.dart';
 
+/// Delivery state of an outgoing message, WhatsApp style.
+enum MessageStatus {
+  /// Saved on this phone, waiting to be sent (offline or queued).
+  pending,
+
+  /// The server refused it; the sender can retry.
+  failed,
+
+  /// Accepted by the server.
+  sent,
+
+  /// A recipient's app has received it.
+  delivered,
+
+  /// A recipient opened the conversation.
+  read,
+}
+
 /// Represents a chat/consultation message in either the private doctor-patient
 /// channel or the family care circle channel.
 class ChatMessage {
@@ -17,6 +35,7 @@ class ChatMessage {
     this.readAt,
     this.synced = true,
     this.serverOrigin = '',
+    this.readCount = 0,
   });
 
   final String id;
@@ -33,6 +52,9 @@ class ChatMessage {
   final bool synced;
   final String serverOrigin;
 
+  /// In group channels: how many recipients have read it (server receipts).
+  final int readCount;
+
   bool get isDoctorPatient => channelType == 'doctor_patient';
   bool get isFamilyPatient => channelType == 'family_patient';
   bool get isPatientCaregiver => channelType == 'patient_caregiver';
@@ -40,6 +62,15 @@ class ChatMessage {
   bool get isCareTeamTriage =>
       channelType == 'care_team_triage' || channelType == 'family_patient';
   bool get isRead => readAt != null;
+
+  /// [failed] is decided by the service (it is not stored on the message).
+  MessageStatus statusFor({bool failed = false}) {
+    if (failed && !synced) return MessageStatus.failed;
+    if (!synced) return MessageStatus.pending;
+    if (readAt != null) return MessageStatus.read;
+    if (deliveredAt != null) return MessageStatus.delivered;
+    return MessageStatus.sent;
+  }
 
   ChatMessage copyWith({
     String? id,
@@ -55,6 +86,7 @@ class ChatMessage {
     DateTime? readAt,
     bool? synced,
     String? serverOrigin,
+    int? readCount,
   }) => ChatMessage(
     id: id ?? this.id,
     patientId: patientId ?? this.patientId,
@@ -69,6 +101,7 @@ class ChatMessage {
     readAt: readAt ?? this.readAt,
     synced: synced ?? this.synced,
     serverOrigin: serverOrigin ?? this.serverOrigin,
+    readCount: readCount ?? this.readCount,
   );
 
   Map<String, dynamic> toMap() => {
@@ -80,7 +113,7 @@ class ChatMessage {
     'channelType': channelType,
     if (peerUserId != null) 'peerUserId': peerUserId,
     'content': content,
-    'createdAt': createdAt.toIso8601String(),
+    'createdAt': createdAt.toUtc().toIso8601String(),
     if (deliveredAt != null) 'deliveredAt': deliveredAt!.toIso8601String(),
     'readAt': readAt?.toIso8601String(),
     'synced': synced ? 1 : 0,
@@ -138,6 +171,7 @@ class ChatMessage {
           map['synced'] == 1 ||
           map['synced'] == true,
       serverOrigin: map['serverOrigin'] as String? ?? '',
+      readCount: (map['readCount'] as num?)?.toInt() ?? 0,
     );
   }
 }

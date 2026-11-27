@@ -383,6 +383,41 @@ class LocationService {
   Future<GpsFix?> currentFix({Duration? timeout}) async =>
       (await currentResult(timeout: timeout)).fix;
 
+  /// The phone's last remembered satellite fix, instantly: no permission
+  /// prompt and no wait. Used so an emergency SMS can open at once while a
+  /// live GNSS fix is still being acquired. Null when nothing recent and
+  /// reasonably precise is cached.
+  Future<GpsFix?> lastKnownFix({
+    Duration maxAge = const Duration(minutes: 30),
+  }) async {
+    try {
+      final permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return null;
+      }
+      final last = await Geolocator.getLastKnownPosition(
+        forceAndroidLocationManager:
+            defaultTargetPlatform == TargetPlatform.android,
+      ).timeout(const Duration(seconds: 2));
+      if (last == null ||
+          last.accuracy > 500 ||
+          DateTime.now().difference(last.timestamp) > maxAge) {
+        return null;
+      }
+      return GpsFix(
+        latitude: last.latitude,
+        longitude: last.longitude,
+        accuracy: last.accuracy,
+        capturedAt: last.timestamp,
+        source: LocationSource.cachedFix,
+        isMocked: last.isMocked,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// After an SOS/alert went out with no fix or an imprecise one, keep trying
   /// device GPS quietly for up to [window] (e.g. the patient walks out of a
   /// building). Returns a fix only when it is meaningfully better than

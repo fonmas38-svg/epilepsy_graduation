@@ -157,16 +157,17 @@ void main() {
     },
   );
   test(
-    'real offline session reports unavailable, retains both rows then synchronizes',
+    'real offline session is analysed on the phone, retains both rows then synchronizes',
     () async {
       final store = Store();
       final cloud = Cloud();
       final session = Session();
       final sync = Sync(store, cloud, session)..online = false;
       final assessment = await sync.analyzeAndStore(reading());
-      expect(assessment.confidence, 0);
-      expect(assessment.features['assessment_valid'], isFalse);
-      expect(assessment.features['model_executed'], isFalse);
+      expect(assessment.confidence, greaterThan(0));
+      expect(assessment.features['assessment_valid'], isTrue);
+      expect(assessment.features['offline'], isTrue);
+      expect(assessment.features['prediction_source'], 'edge_forecast');
       expect(store.queue, hasLength(1));
       expect(cloud.analyses, 0);
       sync.online = true;

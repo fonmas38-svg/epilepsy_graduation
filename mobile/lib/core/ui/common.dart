@@ -276,6 +276,11 @@ class OfflineBanner extends StatelessWidget {
             ? AppOperatingMode.offlineLocal
             : AppOperatingMode.onlineFull);
     final online = effective == AppOperatingMode.onlineFull;
+    // Connecting to the cloud is an internal detail: the patient sees nothing
+    // until the app is either online or clearly working in local mode.
+    if (effective == AppOperatingMode.wakingServer) {
+      return const SizedBox.shrink();
+    }
     if (online && (pendingCount == 0 || onSyncNow == null)) {
       return const SizedBox.shrink();
     }
@@ -369,10 +374,12 @@ class OfflineBanner extends StatelessWidget {
   }
 }
 
-/// The «أحتاج مساعدة» control (§3.1: «كبير، ظاهر دائمًا»).
+/// The «أحتاج مساعدة» control: a compact, always-visible pill.
 ///
-/// [A11y.emergencyTouchTarget] tall rather than the 48 dp floor: the person
-/// pressing it may have an aura, blurred vision, or shaking hands.
+/// 56 dp tall (above the 48 dp floor) and centred at most 320 dp wide, so it
+/// stays easy to hit with shaking hands without dominating the screen. It
+/// keeps a strong danger gradient, an icon and a text label (never colour
+/// alone).
 class EmergencyButton extends StatelessWidget {
   const EmergencyButton({
     super.key,
@@ -385,45 +392,96 @@ class EmergencyButton extends StatelessWidget {
   final bool busy;
   final String? label;
 
+  static const double height = 56;
+
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final tone = AppColors.of(context, RiskView.danger);
     final text = label ?? l.needHelp;
+    final enabled = onPressed != null && !busy;
+    final base = tone.solid;
+    final deep = Color.lerp(base, Colors.black, 0.22)!;
+    final radius = BorderRadius.circular(height / 2);
     return Semantics(
       button: true,
-      enabled: onPressed != null && !busy,
+      enabled: enabled,
       label: text,
       child: ExcludeSemantics(
-        child: SizedBox(
-          width: double.infinity,
-          height: A11y.emergencyTouchTarget,
-          child: FilledButton.icon(
-            onPressed: busy ? null : onPressed,
-            style: FilledButton.styleFrom(
-              backgroundColor: tone.solid,
-              foregroundColor: tone.onSolid,
-              disabledBackgroundColor: tone.solid.withValues(alpha: 0.6),
-              disabledForegroundColor: tone.onSolid,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              textStyle: const TextStyle(
-                fontSize: 19,
-                fontWeight: FontWeight.w800,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minWidth: 200,
+              maxWidth: 320,
+              minHeight: height,
+              maxHeight: height,
+            ),
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 150),
+              opacity: enabled || busy ? 1 : 0.6,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: radius,
+                  gradient: LinearGradient(
+                    begin: AlignmentDirectional.centerStart,
+                    end: AlignmentDirectional.centerEnd,
+                    colors: [base, deep],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: base.withValues(alpha: 0.35),
+                      blurRadius: 14,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: InkWell(
+                    borderRadius: radius,
+                    onTap: enabled ? onPressed : null,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (busy)
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.4,
+                                color: tone.onSolid,
+                              ),
+                            )
+                          else
+                            Icon(
+                              Icons.sos_rounded,
+                              size: 22,
+                              color: tone.onSolid,
+                            ),
+                          const SizedBox(width: 10),
+                          Flexible(
+                            child: Text(
+                              text,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: tone.onSolid,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
-            icon: busy
-                ? SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      color: tone.onSolid,
-                    ),
-                  )
-                : const Icon(Icons.emergency_share_outlined, size: 26),
-            label: Text(text),
           ),
         ),
       ),

@@ -106,6 +106,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final p = overridePass ?? _passwordCtrl.text;
     if (u.isEmpty || p.isEmpty) return;
 
+    context.read<AppState>().sessionRevokedNotice = false;
     setState(() {
       _loading = true;
       _failure = null;
@@ -682,6 +683,17 @@ class _LoginScreenState extends State<LoginScreen> {
                         : (value) =>
                               setState(() => _rememberMe = value ?? false),
                   ),
+                  if (_failure == null &&
+                      context.watch<AppState>().sessionRevokedNotice)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Text(
+                        ar
+                            ? 'انتهت جلستك على هذا الجهاز (ربما سُجّل الدخول من جهاز آخر أو تغيّرت كلمة المرور). سجّل الدخول مجددًا.'
+                            : 'Your session on this device ended (perhaps you signed in on another device or changed your password). Please sign in again.',
+                        style: TextStyle(color: theme.colorScheme.error),
+                      ),
+                    ),
                   if (_failure != null)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 16),

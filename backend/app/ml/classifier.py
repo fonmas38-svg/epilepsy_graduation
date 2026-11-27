@@ -44,6 +44,14 @@ USE_PREICTAL = os.getenv("USE_PREICTAL_MODEL", "1") == "1"
 HORIZON_MIN = float(os.getenv("PREICTAL_HORIZON_MIN", "15"))
 # Preictal probability at/above which we raise an early pre-alert.
 PREICTAL_PREALERT_THR = float(os.getenv("PREICTAL_PREALERT_THRESHOLD", "0.6"))
+# Detection: a high-risk label needs some physiological support (multimodal
+# score) unless the EEG net is near-certain on its own. Set the first to 0 to
+# disable the gate (e.g. for EEG-only recordings).
+DETECTION_CORROBORATION_MIN = float(os.getenv("DETECTION_CORROBORATION_MIN", "0.10"))
+DETECTION_DEEP_ALONE_MIN = float(os.getenv("DETECTION_DEEP_ALONE_MIN", "0.97"))
+# Minimum physiological evidence (EEG/HR/motion drivers, ECG excluded) that a
+# model forecast needs before it may count as a prediction / pre-alert.
+PREICTAL_CORROBORATION_MIN = float(os.getenv("PREICTAL_CORROBORATION_MIN", "0.10"))
 
 
 def _ramp(x: float, lo: float, hi: float) -> float:
@@ -146,6 +154,16 @@ class RiskClassifier:
             mm = self._multimodal_score(features)  # 0..1 from HR/motion/ECG
             fused = DEEP_WEIGHT * deep_prob + (1.0 - DEEP_WEIGHT) * mm
             label = self._score_to_label(fused)
+            # A critical alert notifies the whole care circle, so the EEG net
+            # alone may not raise one unless it is near-certain: without any
+            # physiological sign (HR / motion / ECG) a borderline deep score
+            # is shown as "watch" instead of "high_risk".
+            corroborated = (
+                mm >= DETECTION_CORROBORATION_MIN
+                or deep_prob >= DETECTION_DEEP_ALONE_MIN
+            )
+            if label == "high_risk" and not corroborated:
+                label = "watch"
             confidence = fused if label != "stable" else 1.0 - fused
             result = RiskResult(
                 label=label,
@@ -155,7 +173,8 @@ class RiskClassifier:
                 deep_prob=round(float(deep_prob), 4),
                 components={"deep_prob": round(float(deep_prob), 4),
                             "multimodal_score": round(float(mm), 4),
-                            "fused": round(float(fused), 4)},
+                            "fused": round(float(fused), 4),
+                            "detection_corroborated": bool(corroborated)},
             )
             return self._attach_prediction(result, window, features)
 
@@ -216,12 +235,34 @@ class RiskClassifier:
         result.components["score_interpretation"] = "uncalibrated_research_score"
         result.components["lead_time_status"] = "not_estimated"
         result.horizon_min = horizon
-        result.predicted = preictal_prob >= thr
+        drivers = self._preictal_breakdown(features)
+        # The trained forecast net is an uncalibrated research score and is
+        # out of distribution on signals unlike its training EEG (it scores a
+        # calm baseline ~0.7). A pre-alert asks the patient to act and, if
+        # unanswered, notifies their contacts, so the model alone may never
+        # raise one: the physiological drivers must corroborate a change.
+        corroboration = float(
+            sum(v for k, v in drivers.items() if k != "ecg")
+        )
+        corroborated = (
+            source == "simulated_heuristic"
+            or corroboration >= PREICTAL_CORROBORATION_MIN
+        )
+        result.predicted = bool(preictal_prob >= thr and corroborated)
         result.prediction_source = source
+        # The headline forecast is the model score weighted by physiological
+        # evidence, so a calm patient never sees a high "forecast" number.
+        # The raw model score stays auditable in components.
+        result.components["preictal_prob_raw"] = round(preictal_prob, 4)
+        if source != "simulated_heuristic" and PREICTAL_CORROBORATION_MIN > 0:
+            weight = min(1.0, corroboration / PREICTAL_CORROBORATION_MIN)
+            result.preictal_prob = round(preictal_prob * weight, 4)
+        result.components["forecast_corroboration"] = round(corroboration, 4)
+        result.components["forecast_corroborated"] = corroborated
         # Surface the auditable drivers of the forecast (never overwrites the
         # detection components already set by the fusion engine).
-        result.components.setdefault("preictal_prob", round(preictal_prob, 4))
-        result.components.setdefault("preictal_drivers", self._preictal_breakdown(features))
+        result.components.setdefault("preictal_prob", result.preictal_prob)
+        result.components.setdefault("preictal_drivers", drivers)
         return result
 
     def _preictal_score(self, f: FeatureVector) -> float:

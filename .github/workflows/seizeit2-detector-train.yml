@@ -1,0 +1,48 @@
+name: seizeit2-detector-train
+
+# Re-trains the SeizeIT2 detector on the v2 features already extracted by a
+# previous seizeit2-detector run (no new download). Research only.
+on:
+  push:
+    branches: [research/detector-train]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        smooth: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q numpy "scipy<1.15" scikit-learn
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: v2-features-*
+          path: work/seizeit2_v2
+          merge-multiple: true
+          run-id: 46083389412
+          github-token: ${{ github.token }}
+      - name: Train and evaluate (smoothing ${{ matrix.smooth }})
+        env:
+          SMOOTH: ${{ matrix.smooth }}
+          MAX_NEG: "12000"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          ls work/seizeit2_v2 | wc -l
+          python research/train_detector_seizeit2.py work/seizeit2_v2 work/detector_outputs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: detector-results-smooth${{ matrix.smooth }}
+          path: work/detector_outputs
+          retention-days: 90

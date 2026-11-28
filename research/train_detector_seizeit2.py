@@ -37,9 +37,10 @@ EEG1, EEG2 = list(range(0, 17)), list(range(17, 34))
 ECG, MOV = list(range(34, 38)), list(range(38, 44))
 K = 44
 VARIANTS = {
-    'eeg1': EEG1, 'eeg2': EEG1 + EEG2, 'ecg': ECG, 'mov': MOV, 'ecg+mov': ECG + MOV,
     'app (eeg1+ecg+mov)': EEG1 + ECG + MOV, 'all (eeg2+ecg+mov)': EEG1 + EEG2 + ECG + MOV,
 }
+SMOOTH = int(__import__('os').environ.get('SMOOTH', '2'))     # decision on mean prob of last N epochs
+MAX_NEG = int(__import__('os').environ.get('MAX_NEG', '12000'))
 
 
 def kind(t):
@@ -60,20 +61,24 @@ def build(X, run, base):
     R = ((X - med) / sc).astype(np.float32)
     n = len(X)
     prev_mean = np.full((n, K), np.nan, np.float32); prev1 = np.full((n, K), np.nan, np.float32)
-    max3 = np.full((n, K), np.nan, np.float32)
+    max3 = np.full((n, K), np.nan, np.float32); max6 = np.full((n, K), np.nan, np.float32)
+    mean3 = np.full((n, K), np.nan, np.float32)
     for r in np.unique(run):
         idx = np.flatnonzero(run == r); Y = R[idx]
         if len(Y) > 1:
             prev1[idx[1:]] = Y[:-1]
         if len(Y) >= 3:
-            max3[idx[2:]] = np.nanmax(np.lib.stride_tricks.sliding_window_view(Y, 3, axis=0), 2)
+            W3 = np.lib.stride_tricks.sliding_window_view(Y, 3, axis=0)
+            max3[idx[2:]] = np.nanmax(W3, 2); mean3[idx[2:]] = np.nanmean(W3, 2)
+        if len(Y) >= 6:
+            max6[idx[5:]] = np.nanmax(np.lib.stride_tricks.sliding_window_view(Y, 6, axis=0), 2)
         if len(Y) > CTX:
             prev_mean[idx[CTX:]] = np.nanmean(np.lib.stride_tricks.sliding_window_view(Y[:-1], CTX, axis=0), 2)
-    return np.concatenate([R, R - prev_mean, R - prev1, max3], 1)
+    return np.concatenate([R, R - prev_mean, R - prev1, max3, mean3, max6], 1)
 
 
 def cols(c):
-    return [b * K + j for b in range(4) for j in c]
+    return [b * K + j for b in range(6) for j in c]
 
 
 P = {}
@@ -115,6 +120,18 @@ def alarms(p, run, thr):
     return np.array(on, int)
 
 
+def smooth(p, run):
+    if SMOOTH <= 1:
+        return p
+    out = p.copy()
+    for r in np.unique(run):
+        idx = np.flatnonzero(run == r)
+        c = np.cumsum(np.r_[0, p[idx]])
+        k = np.minimum(np.arange(1, len(idx) + 1), SMOOTH)
+        out[idx] = (c[1:] - c[np.maximum(np.arange(1, len(idx) + 1) - SMOOTH, 0)]) / k
+    return out
+
+
 def events(p, d, thr):
     on = alarms(p, d['run'], thr)
     det = []
@@ -126,7 +143,8 @@ def events(p, d, thr):
     return det, false, hours
 
 
-def train(pp, c, max_neg=4000):
+def train(pp, c, max_neg=None):
+    max_neg = max_neg or MAX_NEG
     Xs, ys = [], []
     for p in pp:
         d = P[p]; pos = np.flatnonzero(d['pos']); neg = np.flatnonzero(d['neg'])
@@ -141,7 +159,7 @@ GRID = np.r_[np.arange(0.995, 0.9, -0.005), np.arange(0.9, 0.3, -0.02)]
 
 
 def thresholds(m, val, c):
-    probs = {p: m.predict_proba(P[p]['F'][:, c])[:, 1] for p in val}
+    probs = {p: smooth(m.predict_proba(P[p]['F'][:, c])[:, 1], P[p]['run']) for p in val}
     out = {}
     for t in FA_DAY:
         chosen = 0.999
@@ -167,7 +185,7 @@ for name, c0 in VARIANTS.items():
         thr = thresholds(train(fit, c), val, c)
         m = train(tr, c)
         for p in test:
-            d = P[p]; prob = m.predict_proba(d['F'][:, c])[:, 1]
+            d = P[p]; prob = smooth(m.predict_proba(d['F'][:, c])[:, 1], d['run'])
             sel = d['pos'] | d['neg']; ys.append(d['pos'][sel]); ps.append(prob[sel])
             for t in FA_DAY:
                 det, f_, h_ = events(prob, d, thr[t])
